@@ -14,6 +14,9 @@
 #include "command_handler_internal.h"   /* heavy_or_claimed */
 #include "esp_rom_flash.h"
 #include "esp_dut_flash.h"
+#if defined(BENCHPOD_USB_HOST)
+#include "usb_flash.h"
+#endif
 #include "c3_update.h"
 #if defined(BENCHPOD_WIFI_BRIDGE)
 #include "wifi_bridge_net.h"
@@ -427,6 +430,9 @@ static void worker_task(void *arg) {
         c3_update_poll();         /* an esp update: start writing it into the C3 when due */
         esp_rom_flash_poll();     /* a C3 flash: one step, never a wait */
         esp_dut_flash_poll();     /* an ESP32 DUT flash (esp_flash): one step, never a wait */
+#if defined(BENCHPOD_USB_HOST)
+        usb_flash_poll();         /* a USB drive flash (usb_flash): one step of a few sectors */
+#endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
         wifi_bridge_ota_poll();   /* a Wi-Fi bridge update: one step, never a wait */
 #endif

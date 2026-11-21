@@ -30,6 +30,7 @@
 #include "xfer.h"        /* XFER_OK */
 #include "dma_wait.h"    /* GPDMA completion for the read data phase */
 #include "bus_owner.h"   /* owner token + depth for the shared bus */
+#include "xspi_guard.h"  /* indirect commands while the W25Q is memory-mapped */
 #include "psram_regions.h"   /* an STM32 write may land on the last capture */
 #include "FreeRTOS.h"
 #include "task.h"
@@ -259,6 +260,9 @@ static int xspi_xfer(uint8_t instr, uint32_t inst_mode, uint32_t addr_mode,
        scheduler is held off from CS-low until the data phase is either done (blocking) or
        running on DMA, whose completion ISR raises CS itself (psram_dma_done). Interrupts still
        run; they are microseconds. */
+    /* Leave memory-mapped mode first when the W25Q is mapped for XIP (xspi_guard.h). */
+    const xspi_guard_tok_t g = xspi_guard_enter();
+    if (!g.ok) { xspi_guard_exit(g); return -1; }
     const bool sched = dma_sched_ready();
     const bool use_dma = is_read && s_psram_dma_ok && len >= PSRAM_DMA_MIN && sched;
     if (use_dma) dma_wait_arm(&s_psram_waiter);
@@ -283,6 +287,7 @@ static int xspi_xfer(uint8_t instr, uint32_t inst_mode, uint32_t addr_mode,
         s = HAL_ERROR;
     }
     CS_HIGH();   /* already high after DMA (the ISR raised it); covers the abort path */
+    xspi_guard_exit(g);
     return (s == HAL_OK) ? 0 : -1;
 }
 

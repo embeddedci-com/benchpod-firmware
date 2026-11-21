@@ -54,6 +54,10 @@ MEMORY
 {
   RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K
   FLASH       (rx)    : ORIGIN = 0x08000000,   LENGTH = 896K
+  /* Code that runs straight from the W25Q (src/xip_image.h): the "xip" blob slot's data, W25Q
+     0x201000 to 0x240000, memory-mapped through OCTOSPI1 at 0x90000000. Not in the firmware .bin:
+     tools/xip_finish.py writes it to build/blobs/blob-xip.bin. */
+  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K
 }
 
 /* main.c icache_init() makes 0x080E0000 and up non-cacheable (the persistence records and
@@ -81,6 +85,27 @@ SECTIONS
   ASSERT(SIZEOF(.fw_info) == 16, "fw_info block missing or resized")
 
   /* The program code and other data into "FLASH" Rom type memory */
+  /* The W25Q image (src/xip_image.h): the table first, then every src/xip_mod_*.c object's code
+     and constants. Their .data/.bss would land in RAM below; tools/check_xip_refs.py forbids them. */
+  .xip :
+  {
+    __xip_start = .;
+    KEEP(*(.xip.table))
+    *xip_mod_*.o(.text .text* .rodata .rodata*)
+    *(.xip.text*)
+    *(.xip.rodata*)
+    . = ALIGN(4);
+    __xip_end = .;
+  } >XIP
+  __xip_region_end = ORIGIN(XIP) + LENGTH(XIP);
+
+  /* What the post-link step found in .xip (src/xip_image.c, patched by tools/xip_finish.py). */
+  .xip_hash :
+  {
+    . = ALIGN(4);
+    KEEP(*(.xip_hash))
+  } >FLASH
+
   .text :
   {
     . = ALIGN(4);

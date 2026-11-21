@@ -74,11 +74,13 @@ uint32_t ota_max_size(void) {
     return flash_layout_store_off(FLASH_LAYOUT_STORE_BASE);
 }
 
-static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2" };
+static const char *const k_target_names[] = { "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2",
+                                               "-", "xip" };
 
 /* Targets this build takes: the Wi-Fi bridge's image only with BENCHPOD_WIFI_BRIDGE. */
 static bool target_known(ota_target_t t) {
     if (t == OTA_TARGET_GW2) return true;
+    if (t == OTA_TARGET_XIP) return blob_listed(BLOB_XIP);
 #if defined(BENCHPOD_WIFI_BRIDGE)
     return (unsigned)t <= OTA_TARGET_BRIDGE;
 #else
@@ -103,6 +105,7 @@ ota_target_t ota_target(void) { return s_target; }
 static blob_id_t target_blob(ota_target_t t) {
     if (t == OTA_TARGET_BRIDGE) return BLOB_BRIDGE;
     if (t == OTA_TARGET_GW2) return BLOB_GW2;
+    if (t == OTA_TARGET_XIP) return BLOB_XIP;
     return t == OTA_TARGET_CA ? BLOB_CA : (blob_id_t)(t - OTA_TARGET_GW0);
 }
 
@@ -260,6 +263,14 @@ static int begin_signed(uint32_t size, const char *sha256_hex, ota_target_t targ
     if (size == 0 || size > target_max_size(target)) { set_err("bad size"); return -1; }
     uint8_t expect[32];
     if (parse_sha256_hex(sha256_hex, expect) != 0) { set_err("bad sha256"); return -1; }
+    if (target == OTA_TARGET_XIP) {
+        /* The code in the slot runs against this firmware's addresses: only its own image fits. */
+        const blob_manifest_t *want = blob_manifest(BLOB_XIP);
+        if (!want || want->len == 0 || want->len != size || memcmp(want->sha256, expect, 32) != 0) {
+            set_err("this xip image was not built with this firmware");
+            return -1;
+        }
+    }
     s_size = size;
     /* Signatures cover code (firmware, gateware, the C3 image); the company CA is configuration
        an admin installs, so it is neither checked nor refused by the signature policy. */

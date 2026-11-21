@@ -135,6 +135,22 @@ jobs:
             exit 1
           fi
 
+      # W25Q code test builds (XIP_RAM=1: the image copied to RAM; XIP_BODGE_PB6=1: memory-mapped
+      # with the W25Q chip-select on PB6), development only: keep them compiling, warning-free.
+      - name: XIP test builds, no compiler warnings
+        run: |
+          set -o pipefail
+          # USB_HOST=1 XIP_RAM=1: the USB drive flash (usb_flash) runs its W25Q code from RAM.
+          for v in "XIP_RAM=1" "XIP_BODGE_PB6=1" "USB_HOST=1 XIP_RAM=1"; do
+            log="build-$(echo "$v" | tr ' =' '__').log"
+            make -C stm32h563 -j"$(nproc)" $v 2>&1 | tee "$log"
+            if grep 'warning:' "$log" | grep -v 'is not implemented and will always fail' > "$log.warnings"; then
+              echo "::error title=Compiler warnings::$(wc -l < "$log.warnings") warning(s) in the $v build"
+              cat "$log.warnings"
+              exit 1
+            fi
+          done
+
       - name: Host tests (with mbedTLS, so the OTA and blob store suites run)
         run: |
           set -o pipefail

@@ -656,6 +656,52 @@ static void test_staging_makes_a_kept_capture_stale(void) {
     ota_abort();
 }
 
+/* The xip blob: only where its slot is listed, and only the image this firmware was linked with. */
+static void test_xip_target(void) {
+    enum { N = 3000 };
+    static uint8_t img[N];
+    char hex[65];
+    fill_image(img, N, 9);
+    sha256_hex(img, N, hex);
+    mock_ota_psram_reset();
+    mock_w25q_reset();
+    ota_abort();
+
+    blob_store_set_esp_listed(false);
+    blob_store_set_xip_listed(false);
+    CHECK(ota_target_from_name("xip") == -1, "xip known where its slot is not listed");
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP, 0) != 0, "xip accepted where its slot is not listed");
+    ota_abort();
+    CHECK(ota_target_from_name("-") == -1, "the unused signing target 8 is an update target");
+
+    blob_store_set_xip_listed(true);
+    CHECK(ota_target_from_name("xip") == OTA_TARGET_XIP, "xip not known where its slot is listed");
+    memset(&mock_xip_manifest, 0, sizeof(mock_xip_manifest));
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP, 0) != 0, "xip accepted from a firmware without an image");
+    ota_abort();
+    mock_xip_manifest.len = N;
+    memset(mock_xip_manifest.sha256, 0xA5, 32);
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP, 0) != 0, "an xip image of another build was accepted");
+    ota_abort();
+    for (int i = 0; i < 32; i++) {
+        unsigned v;
+        sscanf(hex + 2 * i, "%2x", &v);
+        mock_xip_manifest.sha256[i] = (uint8_t)v;
+    }
+    mock_xip_manifest.len = N + 1;
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP, 0) != 0, "an xip image of the wrong length was accepted");
+    ota_abort();
+    mock_xip_manifest.len = N;
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP, 0) == 0, "this firmware's xip image was refused");
+    ota_abort();
+
+    /* The esp blob shares the sectors: with it listed, xip is not. */
+    blob_store_set_esp_listed(true);
+    CHECK(ota_target_from_name("xip") == -1, "xip listed next to the esp blob");
+    blob_store_set_xip_listed(false);
+    memset(&mock_xip_manifest, 0, sizeof(mock_xip_manifest));
+}
+
 static void test_blob_targets(void) {
     enum { N = 6000 };
     static uint8_t img[N];
@@ -1025,6 +1071,7 @@ int main(void) {
     test_signed_begin();
     test_lan_signed_only_and_floor();
     test_esp_written_into_the_c3();
+    test_xip_target();
     test_sig_decode();
     test_begin_owned_b64();
 

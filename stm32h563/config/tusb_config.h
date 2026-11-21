@@ -48,6 +48,7 @@
 #define CFG_TUH_DEVICE_MAX       1
 #define CFG_TUH_HUB              0
 #define CFG_TUH_ENDPOINT_MAX     4
+#define CFG_TUH_MSC              1   /* a USB drive to flash (usb_msc.h, usb_flash.h) */
 #endif
 
 #endif /* TUSB_CONFIG_H */

@@ -322,6 +322,8 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
+| `usb_flash` | T1 | Development builds only. Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy | object | no |
+| `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
 | `wiring_put` | T1 | Store a wiring profile, up to 600 bytes a call | object | no |
@@ -4500,7 +4502,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `esp`, `bridge`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4537,7 +4539,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the release slots: `gw0`, `gw1`, `esp` and `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version); the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` (that code: its `state` is `ok` only for the image built with the running firmware); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
@@ -4548,6 +4550,87 @@ slot: it describes the image the C3 runs, as recorded when the pod last wrote on
 updated from firmware that kept a copy in the W25Q, that copy is reported until the first `esp`
 update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
 the C3 does not start and the pod has no copy to reinstall it from.
+
+### `usb_flash` — flash a board over USB
+
+**Development builds only** (`make USB_HOST=1`, not in releases yet). The pod flashes a board on its
+USB host port (`usb_host`) from a file uploaded with `load_bin` and `"psram": true`, the way a
+computer would:
+
+- `uf2`: UF2 bootloaders (Raspberry Pi Pico and Pico 2, Adafruit and Seeed boards, tinyuf2) take
+  the UF2 file's blocks on the drive they show.
+- `file`: drag-and-drop loaders such as DAPLink (NUCLEO, nRF DK, micro:bit) take a file copied onto
+  their drive.
+- `dfu`: USB DFU loaders, and ST's DfuSe in every STM32's ROM bootloader (BOOT0 high at reset) and
+  boards such as the Black Pill. For DfuSe the pod reads the flash layout from the loader, erases
+  the sectors the image covers and writes it at `address`.
+- `teensy`: the Teensy loader (Teensy 3.x, 4.0, 4.1, MicroMod; press the button or use the 1200
+  baud touch to start it). Blocks of 0xFF are skipped.
+
+The image for `dfu` and `teensy` is a binary with its start `address` (the SDK converts `.hex` and
+`.dfu` files). The flash runs in the background; poll `usb_flash` for its state.
+
+```json
+{"cmd": "usb_host", "enabled": true, "port": "usb_a", "timeout_s": 120}
+{"cmd": "usb_flash", "mode": "uf2", "len": 204800}
+{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440}
+{"cmd": "usb_flash", "mode": "dfu", "address": "0x08000000", "len": 131072}
+{"cmd": "usb_flash", "mode": "teensy", "address": 0, "len": 262144}
+{"cmd": "usb_flash"}
+{"status": "ok", "data": {"running": false, "have_result": true, "mode": "file", "name": "FIRMWARE.BIN",
+  "len": 61440, "address": 0, "phase": "done", "done": 120, "total": 120, "result": "ok", "ok": true,
+  "ms": 1840}}
+{"cmd": "usb_flash", "abort": true}
+```
+
+| Argument | Description |
+|---|---|
+| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12 or FAT16 file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. Without `mode` the command reads the state. |
+| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). A number or a `0x` string. |
+| `block` | `teensy`: the loader's block size, 1024 (default) or 512 (Teensy LC). |
+| `leave` | `dfu`, `teensy`: `false` keeps the board in its loader at the end; by default it starts the new firmware. |
+| `name` | With `mode` `file`: the file name, an 8.3 name such as `FIRMWARE.BIN`. A file of the same name is replaced. |
+| `len` | Bytes of the uploaded file to write. |
+| `abort` | `true` stops a running flash. |
+
+| Field | Description |
+|---|---|
+| `running` | A flash is in progress. While it runs, captures, DAC playback, uploads and updates are refused with BP0048. |
+| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done`. `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. |
+| `done`, `total` | Sectors (`uf2`, `file`) or blocks (`dfu`, `teensy`) written, of all. |
+| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12/FAT16 file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error, the board is not a Teensy in its loader, ...). |
+
+The pod keeps `usb_host` on while a flash runs. The flash logic runs from the pod's W25Q (`xip`),
+so it needs the `xip` blob of the running firmware. Refusals: BP0084 (`usb_flash_refused`, arg
+`why`: host mode off, no drive mounted or device attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
+code), BP0048 (the storage bus is busy).
+
+### `xip` — code that runs from the W25Q
+
+Some rarely used code (the USB flash protocols, coming) runs straight from the pod's W25Q flash
+instead of the MCU's own flash. It is the `xip` blob (`blob-xip.bin`), made by the same build as the
+firmware and installed with the other blobs; the pod runs only the one built with its firmware.
+While it runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
+are refused with BP0048 until it ends.
+
+```json
+{"cmd": "xip"}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"}}}
+{"cmd": "xip", "selftest": true}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "selftest": {"ok": true, "result": 2871906233, "expected": 2871906233, "begin_us": 412, "call_us": 38}}}
+```
+
+| Field | Description |
+|---|---|
+| `supported` | This pod can run code from its W25Q (boards whose W25Q chip-select can be memory-mapped). |
+| `mode` | `mapped` (the CPU runs it in place), `ram` (development builds that copy it to RAM first) or `none`. |
+| `image.size` | Bytes of W25Q code this firmware was built with. |
+| `image.slot` | The `xip` blob slot against that image: `ok`, `outdated`, `missing` or `unknown` (as `blob_status`). |
+| `selftest` | With `"selftest": true`: runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
+
+Refusals: BP0083 (`xip_unavailable`, arg `why`) when the board or the slot cannot run the image,
+BP0048 while something else holds the storage bus.
 
 ### Wiring profiles: `wiring_list`, `wiring_get`, `wiring_put`, `wiring_delete`, `wiring_default`
 

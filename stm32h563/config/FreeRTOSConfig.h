@@ -38,7 +38,12 @@
    on a busy pod was ~159 KB free of 256 KB, and 138.8 KB free of 248 KB after a full SDK e2e run
    with the cloud connected (2026-11-12, status heap_min). 243 KB: 1 KB to the pod lease
    (lease_local.c) and RAM headroom (the EMI_TEST=1 build was at 100.00% of RAM). */
-#define configTOTAL_HEAP_SIZE                   (259U * 1024U) /* heap_4 bytes; +16 KB from lwIP MEM_SIZE (4.0.1) */
+/* BENCHPOD_HEAP_KB: a dev build that needs RAM elsewhere (XIP_RAM=1 runs W25Q code from RAM) takes
+   it from here. Releases keep the default. */
+#ifndef BENCHPOD_HEAP_KB
+#define BENCHPOD_HEAP_KB 259U
+#endif
+#define configTOTAL_HEAP_SIZE                   (BENCHPOD_HEAP_KB * 1024U) /* heap_4 bytes; +16 KB from lwIP MEM_SIZE (4.0.1) */
 #define configMAX_TASK_NAME_LEN                 (16)
 #define configUSE_16_BIT_TICKS                  0
 #define configIDLE_SHOULD_YIELD                 1

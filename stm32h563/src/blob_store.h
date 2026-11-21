@@ -17,6 +17,9 @@
  *             loss during a save keeps the previous ones (wiring_store.h)        2 x 32 KB
  *   0x1F0000  free
  *   0x200000  slot ESP: ESP32-C3 esp-hosted image          4 MB (the C3's own flash size)
+ *   0x200000  slot XIP, inside the old ESP slot: code that runs straight from the W25Q
+ *             (xip_image.h), 256 KB. Only on boards that can map the W25Q and have no C3
+ *             (blob_store_set_xip_listed), so it never shares the sectors with an esp image.
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
  *             listings (blob_status, the console, the manifest) stop at BLOB_COUNT. Only on a
@@ -58,6 +61,9 @@ typedef enum {
                                same reason as BLOB_BRIDGE */
     BLOB_WIRING_A,          /* internal: the wiring profiles, copy A (wiring_store.h) */
     BLOB_WIRING_B,          /* internal: the wiring profiles, copy B (wiring_store.h) */
+    BLOB_XIP,               /* code that runs from the W25Q (xip_image.h): a release blob on boards
+                               that list it (blob_store_set_xip_listed), at the start of the old ESP
+                               slot */
     BLOB_SLOT_COUNT
 } blob_id_t;
 
@@ -98,6 +104,9 @@ bool        blob_listed(blob_id_t id);
 /* Whether this board has the ESP32-C3, so lists and accepts the esp blob (default true; set at
    boot from board_has_wifi_module). */
 void        blob_store_set_esp_listed(bool listed);
+/* Whether this board lists and accepts the xip blob (default false; set at boot from
+   xip_supported(), and never while the esp blob is listed: the two share sectors). */
+void        blob_store_set_xip_listed(bool listed);
 
 /* Read the headers into the cache. Bus held by the caller. Returns the number of slots present,
    or -1 when no usable W25Q answers (then every slot reads as empty). */

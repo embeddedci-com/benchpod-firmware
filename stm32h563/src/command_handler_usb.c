@@ -107,6 +107,65 @@ void handle_usb_host(int conn_id, const char *json)
         return;
     }
 }
+
+/* ---- usb_flash: flash a board over the pod's USB host port (usb_flash.h) ----------------------
+ *   {"cmd":"usb_flash","mode":"uf2","len":N}                       UF2 bootloaders
+ *   {"cmd":"usb_flash","mode":"file","name":"FIRMWARE.BIN","len":N}  drag-and-drop (DAPLink, ...)
+ *   {"cmd":"usb_flash","mode":"dfu","address":"0x08000000","len":N} USB DFU / ST DfuSe
+ *   {"cmd":"usb_flash","mode":"teensy","address":0,"len":N[,"block":512]}  Teensy HalfKay
+ *   optional "leave":false (dfu, teensy): stay in the loader
+ *   {"cmd":"usb_flash"}                                            the state
+ *   {"cmd":"usb_flash","abort":true}
+ * The file is the first len bytes a load_bin with "psram" staged; usb_host must be on with a
+ * drive mounted. Refusals: BP0084 (usb_flash_refused), BP0083 (the W25Q code), BP0048 (bus busy).
+ */
+#include "usb_flash.h"
+#include "msc_flash.h"
+
+static void usb_flash_reply(int conn_id)
+{
+    usb_flash_status_t st;
+    usb_flash_status(&st);
+    char data[320];
+    snprintf(data, sizeof(data),
+             "{\"running\":%s,\"have_result\":%s,\"mode\":\"%s\",\"name\":\"%s\",\"len\":%lu,"
+             "\"address\":%lu,\"phase\":\"%s\",\"done\":%lu,\"total\":%lu,\"result\":\"%s\",\"ok\":%s,"
+             "\"ms\":%lu}",
+             st.running ? "true" : "false", st.have_result ? "true" : "false", st.mode, st.name,
+             (unsigned long)st.len, (unsigned long)st.address, st.phase, (unsigned long)st.done,
+             (unsigned long)st.total, st.result,
+             (!st.running && st.have_result && st.rc == 0) ? "true" : "false", (unsigned long)st.ms);
+    send_ok_str(conn_id, data);
+}
+
+void handle_usb_flash(int conn_id, const char *json)
+{
+    if (bp_json_flag(json, "abort")) { usb_flash_abort(); usb_flash_reply(conn_id); return; }
+    char mode[8] = {0};
+    if (!bp_json_get(json, "mode", mode, sizeof(mode))) { usb_flash_reply(conn_id); return; }
+    usb_flash_params_t p = {0};
+    int m = usb_flash_mode_from_name(mode);
+    if (m < 0) { bp_err_usb_flash_refused(conn_id, "mode must be uf2, file, dfu or teensy"); return; }
+    p.mode = (uint8_t)m;
+    (void)bp_json_get(json, "name", p.name, sizeof(p.name));
+    char v[16] = {0};
+    if (bp_json_get(json, "address", v, sizeof(v))) p.address = (uint32_t)strtoul(v, NULL, 0);
+    if (bp_json_get(json, "block", v, sizeof(v))) p.block = (uint16_t)strtoul(v, NULL, 10);
+    p.leave = !(bp_json_get(json, "leave", v, sizeof(v)) && !strcmp(v, "false"));
+    char n[16] = {0};
+    if (!bp_json_get(json, "len", n, sizeof(n))) { bp_err_missing_argument(conn_id, "len"); return; }
+    p.len = (uint32_t)strtoul(n, NULL, 10);
+    if (!usb_flash_busy()) {
+        const char *busy = bus_busy_reason();
+        if (busy) { send_error(conn_id, busy); return; }
+    }
+    const char *why = NULL;
+    int rc = usb_flash_start(&p, &why);
+    if (rc == -2) { bp_err_xip_unavailable(conn_id, why); return; }
+    if (rc != 0) { bp_err_usb_flash_refused(conn_id, why ? why : "refused"); return; }
+    usb_flash_reply(conn_id);
+}
+
 #else /* !BENCHPOD_USB_HOST */
 
 void handle_usb_host(int conn_id, const char *json)
@@ -115,4 +174,10 @@ void handle_usb_host(int conn_id, const char *json)
     bp_err_unknown_command(conn_id, "usb_host");
 }
 
+
+void handle_usb_flash(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, "usb_flash");
+}
 #endif /* BENCHPOD_USB_HOST */

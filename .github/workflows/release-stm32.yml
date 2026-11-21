@@ -190,7 +190,7 @@ jobs:
         run: |
           sha256sum bench_pod_stm32.bin | tee bench_pod_stm32.bin.sha256
           # the blobs installers put in the pod's W25Q slots, under their release asset names
-          cp blobs/blob-gw0.bin blobs/blob-gw1.bin blobs/blob-gw2.bin blobs/blob-esp.bin blobs/blob-bridge.bin blobs/blobs-manifest.json .
+          cp blobs/blob-gw0.bin blobs/blob-gw1.bin blobs/blob-gw2.bin blobs/blob-esp.bin blobs/blob-bridge.bin blobs/blob-xip.bin blobs/blobs-manifest.json .
           # which gateware goes with this firmware, and what hardware test it passed
           cp ../../ice40/release/MANIFEST ice40-gateware-MANIFEST.txt
 
@@ -227,11 +227,12 @@ jobs:
           # the key must be one the firmware trusts
           $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target firmware bench_pod_stm32.bin
           # blob-bridge.bin: the pod checks it when it is installed in its "bridge" slot, the bridge
-          # checks it again.
-          for b in gw0 gw1 gw2 esp bridge; do
+          # checks it again. blob-xip.bin: the code that runs from the W25Q (made by the firmware's
+          # own link, so only that firmware takes it).
+          for b in gw0 gw1 gw2 esp bridge xip; do
             $FWSIGN verify --pub ../keys/release-1.pub --pub ../keys/release-2.pub --target $b blob-$b.bin
           done
-          echo "assets=bench_pod_stm32.bin.sig blob-gw0.bin.sig blob-gw1.bin.sig blob-gw2.bin.sig blob-esp.bin.sig blob-bridge.bin.sig" >> "$GITHUB_OUTPUT"
+          echo "assets=bench_pod_stm32.bin.sig blob-gw0.bin.sig blob-gw1.bin.sig blob-gw2.bin.sig blob-esp.bin.sig blob-bridge.bin.sig blob-xip.bin.sig" >> "$GITHUB_OUTPUT"
 
       # Plain bridge factory set (no secure boot, no flash encryption): the bootloader, partition
       # table and otadata of the RELEASE=1 build above, for flashing a bridge over its TC2030 pads
@@ -297,7 +298,7 @@ jobs:
           TAG: ${{ steps.rel.outputs.tag }}
         working-directory: stm32h563/build
         run: |
-          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-gw2.bin blob-esp.bin blob-bridge.bin blobs-manifest.json ${{ steps.sign.outputs.assets }} ${{ steps.bridge_plain.outputs.assets }} ${{ steps.bridge_factory.outputs.assets }}"
+          ASSETS="bench_pod_stm32.bin bench_pod_stm32.bin.sha256 bench_pod_stm32.elf bench_pod_stm32.syms ice40-gateware-MANIFEST.txt blob-gw0.bin blob-gw1.bin blob-gw2.bin blob-esp.bin blob-bridge.bin blob-xip.bin blobs-manifest.json ${{ steps.sign.outputs.assets }} ${{ steps.bridge_plain.outputs.assets }} ${{ steps.bridge_factory.outputs.assets }}"
           if gh release view "$TAG" --repo "$TARGET_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" --repo "$TARGET_REPO" --clobber $ASSETS
           else

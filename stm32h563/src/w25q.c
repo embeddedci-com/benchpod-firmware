@@ -6,6 +6,7 @@
  */
 #include "w25q.h"
 #include "psram.h"
+#include "xspi_guard.h"   /* indirect commands while the W25Q is memory-mapped */
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for a session */
 #include "board_pins.h"
 #include "pico_compat.h"
@@ -33,6 +34,8 @@ static int fxfer(uint8_t instr, int has_addr, uint32_t addr,
     c.DataLength = len;
     c.DummyCycles = 0;
 
+    const xspi_guard_tok_t g = xspi_guard_enter();   /* out of memory-mapped mode (xspi_guard.h) */
+    if (!g.ok) { xspi_guard_exit(g); return -1; }
     FCS_LOW();
     HAL_StatusTypeDef s = HAL_XSPI_Command(h, &c, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
     if (s == HAL_OK && len) {
@@ -40,6 +43,7 @@ static int fxfer(uint8_t instr, int has_addr, uint32_t addr,
                     : HAL_XSPI_Transmit(h, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
     }
     FCS_HIGH();
+    xspi_guard_exit(g);
     return (s == HAL_OK) ? 0 : -1;
 }
 
