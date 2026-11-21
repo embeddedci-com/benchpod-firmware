@@ -8,7 +8,8 @@
  * The server sends lease.state frames: held (with a holder label and seconds left) on acquire and
  * every renew, not held on release. The pod keeps its own deadline, so a vanished server cannot
  * lock the LAN out for longer than the lease it last announced, and a dropped cloud link ends it
- * at once. While held, LAN connections may only run light reads (cmd_tier_light()).
+ * at once. While held, LAN connections may only run light reads and pod administration
+ * (cmd_passes_lease_of(), cmd_table.h).
  *
  * Times are milliseconds from a caller-supplied clock, so this file builds on the host.
  */

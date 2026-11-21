@@ -7,7 +7,8 @@
  *
  * One lease: an id (the token a client shares with its child processes), a holder label, a
  * purpose and a deadline. Every connection that sent lease_acquire with the held id is an owner.
- * While the lease is held, driving commands (anything but cmd_tier_light()) from any other
+ * While the lease is held, driving commands (anything but cmd_passes_lease_of(): light reads and
+ * pod administration such as unpairing a computer) from any other
  * connection are refused as busy (BP0025); the lease_* verbs themselves always reach their
  * handler. An owner's connection closing drops its owner flag, not the lease: the lease ends at
  * its deadline, on lease_release, or on a lease.break frame from the server, after which every
@@ -98,7 +99,8 @@ typedef enum {
 } lease_local_gate_t;
 
 /* The gate dispatch_line runs for every command: `lease_verb` (a lease_* command) is never
-   refused as busy, `light` (cmd_tier_light) is never refused as busy. `cmd_id` is the command's
+   refused as busy, `light` (cmd_passes_lease_of: a light read or pod
+   administration, CMD_F_ADMIN) is never refused as busy. `cmd_id` is the command's
    "lease" field (NULL or "" = none): the held id passes and makes `conn` an owner. "Lease lost"
    comes first: once per owner connection after a break, and for every command carrying the
    broken id (lease verbs included; their own id is checked by acquire/renew). */

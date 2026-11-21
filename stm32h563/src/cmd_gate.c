@@ -59,8 +59,9 @@ const char *cmd_gate_check(const cmd_desc_t *d, const char *cmd, const char *jso
         ctx->lan_policy != POD_LAN_OPEN) {
         return bp_note_lan_locked(why, why_cap, cmd);
     }
-    /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). */
-    if (ctx->src == POLICY_SRC_LAN && ctx->lease_active && !cmd_tier_light_of(d, json) &&
+    /* A cloud job holds the pod: the LAN may look, not touch (lease_gate.h). Pod administration
+       (CMD_F_ADMIN) passes; the gates above and the handlers' source checks still apply. */
+    if (ctx->src == POLICY_SRC_LAN && ctx->lease_active && !cmd_passes_lease_of(d, json) &&
         !cmd_has(d, CMD_F_LEASE)) {   /* lease_acquire answers busy with the holder */
         return bp_note_lease_busy(why, why_cap, CMD_GATE_CLOUD_LEASE_HOLDER,
                                   ctx->lease_holder && ctx->lease_holder[0] ? ctx->lease_holder : "cloud",

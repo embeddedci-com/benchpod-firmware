@@ -9,6 +9,8 @@
                                       and its Tier column is the row tier, "Tn/T2" for a verb
                                       whose tier depends on its arguments (a row with a write
                                       test). check_docs_coverage.py checks only the first half.
+                                      Its "Commands that pass a lease:" line names exactly the
+                                      rows with CMD_F_ADMIN.
   features/features.toml              with --features: every `docs` anchor resolves to a heading
                                       or an explicit anchor in its file. Not run by `make test`.
 
@@ -32,6 +34,9 @@ API = os.path.join(ROOT, "docs", "API.md")
 FEATURES = os.path.join(ROOT, "features", "features.toml")
 
 ROW = re.compile(r'\{ \{ "([a-z0-9_]+)", CMD_TIER_(T\d) \}, [^\n]*?, (NULL|\w+) \},')
+# A row's verb and its flags (the field after the {verb, tier} pair).
+ROW_FLAGS = re.compile(r'\{ \{ "([a-z0-9_]+)", CMD_TIER_T\d \}, ([^,]+),')
+LEASE_LINE = "Commands that pass a lease:"
 # Rows only some builds have (the EMI test build's emi_log): not in the vectors, which are the
 # normal build's table.
 BUILD_ONLY = re.compile(r"^#if defined\(BENCHPOD_EMI_TEST\)\n.*?^#endif\n", re.S | re.M)
@@ -105,6 +110,23 @@ def check_api():
     return out
 
 
+def check_admin():
+    """API.md's "Commands that pass a lease:" line lists the CMD_F_ADMIN rows, no more, no less."""
+    want = {v for v, f in ROW_FLAGS.findall(read(TABLE_SRC)) if "CMD_F_ADMIN" in f}
+    lines = [l for l in read(API).split("\n") if l.startswith(LEASE_LINE)]
+    if len(lines) != 1:
+        return [f"API.md: expected one line starting with `{LEASE_LINE}`, found {len(lines)}"]
+    have = set(re.findall(r"`([a-z0-9_]+)`", lines[0]))
+    out = []
+    for v in sorted(want - have):
+        out.append(f"API.md: `{v}` has CMD_F_ADMIN but is not on the `{LEASE_LINE}` line")
+    for v in sorted(have - want):
+        out.append(f"API.md: `{v}` is on the `{LEASE_LINE}` line but has no CMD_F_ADMIN")
+    if not want:
+        out.append("cmd_tier.c: no row has CMD_F_ADMIN; did the table format change?")
+    return out
+
+
 def slugs(text):
     """GitHub's heading anchors in a markdown file, plus explicit <a id/name> anchors."""
     out, seen = set(), {}
@@ -142,7 +164,7 @@ def check_features():
 
 def main():
     write = "--write" in sys.argv[1:]
-    failures = check_vectors(write) + check_api()
+    failures = check_vectors(write) + check_api() + check_admin()
     if "--features" in sys.argv[1:]:
         failures += check_features()
     if failures:
@@ -150,7 +172,7 @@ def main():
         for f in failures:
             print("  " + f)
         return 1
-    print(f"cmd table: PASS ({len(table_rows(False))} verbs: vectors table, API.md index and tiers)")
+    print(f"cmd table: PASS ({len(table_rows(False))} verbs: vectors table, API.md index, tiers and lease-free commands)")
     return 0
 
 

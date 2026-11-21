@@ -195,6 +195,52 @@ static void test_lease(void) {
     CHECK(code_is(gate("{\"cmd\":\"cloud_set\"}", &c), BP_E_LAN_LOCKED), "order: %s", s_why);
 }
 
+/* Pod administration (CMD_F_ADMIN: lan_clients, lan_policy, lan_tls) passes a cloud job's lease;
+   pairing, the LAN policy tier gate and the tunnel max tier still apply. */
+static void test_admin_lease(void) {
+    static const char rm[] = "{\"cmd\":\"lan_clients\",\"remove\":\"3fa2c19e\"}";
+    static const char add[] = "{\"cmd\":\"lan_clients\",\"add\":\"x\",\"spki_sha256\":\"00\"}";
+    /* the USB link while a cloud job runs: unpair and pair, but not drive the hardware */
+    cmd_gate_ctx_t u = open_ctx(POLICY_SRC_LAN);
+    u.usb_link = true;
+    u.lan_pairing = true;
+    u.lease_active = true;
+    u.lease_left_s = 30;
+    CHECK(gate(rm, &u) == NULL, "USB link remove: %s", s_why);
+    CHECK(gate(add, &u) == NULL, "USB link add: %s", s_why);
+    CHECK(gate("{\"cmd\":\"lan_policy\",\"pairing\":false}", &u) == NULL, "USB link pairing: %s", s_why);
+    CHECK(gate("{\"cmd\":\"lan_tls\",\"https_only\":true}", &u) == NULL, "USB link lan_tls: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"generate\"}", &u), BP_E_LEASE_BUSY), "USB link generate: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"sig_policy\",\"clear_floor\":true}", &u), BP_E_LEASE_BUSY),
+          "USB link sig_policy: %s", s_why);
+    CHECK(code_is(gate("{\"cmd\":\"wifi_set\"}", &u), BP_E_LEASE_BUSY), "USB link wifi_set: %s", s_why);
+    /* an unpaired LAN computer still has to pair first */
+    cmd_gate_ctx_t n = open_ctx(POLICY_SRC_LAN);
+    n.lan_pairing = true;
+    n.lease_active = true;
+    CHECK(code_is(gate(add, &n), BP_E_LAN_NOT_PAIRED), "unpaired add: %s", s_why);
+    CHECK(code_is(gate(rm, &n), BP_E_LAN_NOT_PAIRED), "unpaired remove: %s", s_why);
+    n.lease_active = false;
+    CHECK(code_is(gate(add, &n), BP_E_LAN_NOT_PAIRED), "unpaired add, no lease: %s", s_why);
+    /* a paired computer on a locked LAN still gets no T2 */
+    cmd_gate_ctx_t l = open_ctx(POLICY_SRC_LAN);
+    l.lan_pairing = true;
+    l.lan_paired = true;
+    l.lan_policy = POD_LAN_LOCKED;
+    l.lease_active = true;
+    CHECK(code_is(gate("{\"cmd\":\"lan_policy\",\"set\":\"open\"}", &l), BP_E_LAN_LOCKED),
+          "locked LAN lan_policy: %s", s_why);
+    CHECK(code_is(gate(rm, &l), BP_E_LAN_LOCKED), "locked LAN remove: %s", s_why);
+    /* the read forms stay light reads, as before */
+    CHECK(gate("{\"cmd\":\"lan_clients\"}", &l) == NULL, "locked LAN list: %s", s_why);
+    /* a cloud tunnel never goes above its user's tier */
+    cmd_gate_ctx_t t = open_ctx(POLICY_SRC_CLOUD);
+    t.tunnel_max_tier = 1;
+    CHECK(code_is(gate(rm, &t), BP_E_ROLE_REQUIRED), "T1 tunnel remove: %s", s_why);
+    t.tunnel_max_tier = 2;
+    CHECK(gate(rm, &t) == NULL, "T2 tunnel remove: %s", s_why);
+}
+
 static void test_tunnel_max_tier(void) {
     cmd_gate_ctx_t c = open_ctx(POLICY_SRC_CLOUD);
     c.tunnel_max_tier = 1;                        /* an org member: T0 + T1 */
@@ -383,6 +429,7 @@ int main(void) {
     test_locked_lan();
     test_pairing();
     test_lease();
+    test_admin_lease();
     test_tunnel_max_tier();
     test_device_gate();
     test_safe_mode();

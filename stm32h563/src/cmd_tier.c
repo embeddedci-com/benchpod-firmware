@@ -118,15 +118,15 @@ static const cmd_desc_t k_tiers[] = {
     { { "calibrate", CMD_TIER_T0 }, CMD_F_ANALOG, CMD_FN(handle_calibrate), writes_calibrate },
     { { "eth", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_eth), writes_eth },
     { { "sig_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_sig_policy), writes_sig_policy },
-    { { "lan_policy", CMD_TIER_T0 }, 0, CMD_FN(handle_lan_policy), writes_set },
+    { { "lan_policy", CMD_TIER_T0 }, CMD_F_ADMIN, CMD_FN(handle_lan_policy), writes_set },
     { { "usb_network", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_network), writes_enabled },
     /* read and set T0: it only changes what the pod prints on its own console */
     { { "log_level", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_log_level), NULL },
     { { "module", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_module), writes_module },
     { { "cloud_ca", CMD_TIER_T0 }, 0, CMD_FN(handle_cloud_ca), writes_set_or_clear },
     { { "cloud_proxy", CMD_TIER_T0 }, 0, CMD_FN(handle_cloud_proxy), writes_set_or_clear },
-    { { "lan_tls", CMD_TIER_T0 }, CMD_F_UNPAIRED, CMD_FN(handle_lan_tls), writes_lan_tls },
-    { { "lan_clients", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_lan_clients), writes_lan_clients },
+    { { "lan_tls", CMD_TIER_T0 }, CMD_F_UNPAIRED | CMD_F_ADMIN, CMD_FN(handle_lan_tls), writes_lan_tls },
+    { { "lan_clients", CMD_TIER_T0 }, CMD_F_NO_HW | CMD_F_ADMIN, CMD_FN(handle_lan_clients), writes_lan_clients },
     /* T1: instrument control */
     { { "generate", CMD_TIER_T1 }, CMD_F_ANALOG, CMD_FN(handle_generate), NULL },
     { { "measure", CMD_TIER_T1 }, CMD_F_ANALOG | CMD_F_STREAM, CMD_FN(handle_measure), NULL },
@@ -232,6 +232,12 @@ int cmd_tier_light_of(const cmd_desc_t *d, const char *json) {
 }
 
 int cmd_tier_light(const char *cmd, const char *json) { return cmd_tier_light_of(cmd_find(cmd), json); }
+
+int cmd_passes_lease_of(const cmd_desc_t *d, const char *json) {
+    return cmd_tier_light_of(d, json) || cmd_has(d, CMD_F_ADMIN);
+}
+
+int cmd_passes_lease(const char *cmd, const char *json) { return cmd_passes_lease_of(cmd_find(cmd), json); }
 
 const char *cmd_tier_name(cmd_tier_t t) {
     static const char *const names[] = { "T0", "T1", "T2", "T3" };
