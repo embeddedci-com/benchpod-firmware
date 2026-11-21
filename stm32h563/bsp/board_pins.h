@@ -262,7 +262,7 @@
  *   port an input, every pull off) until firmware drives it high.  pull_exp.c.  [MCU pin 92]
  * USB switch (digital v3r4 only: board_caps()->usb_sel)
  *   PC9 USB_SEL -> U64 S, R202 10 k to GND: low = USB-C (the default), high = the USB-A host
- *   port.  Nothing drives it yet (the USB host work).  [MCU pin 99]
+ *   port.  Driven only by the USB host role (usb_device.c, USB_HOST=1).  [MCU pin 99]
  * ------------------------------------------------------------------------- */
 #define PULL_RST_PORT                GPIOG
 #define PULL_RST_PIN                 GPIO_PIN_7

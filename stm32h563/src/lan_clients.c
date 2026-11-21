@@ -2,6 +2,7 @@
  * lan_clients.c — the list of paired computers (see lan_clients.h). Pure and host-tested.
  */
 #include "lan_clients.h"
+#include "bp_json.h"   /* bp_hex_nibble */
 
 #include <string.h>
 
@@ -27,22 +28,15 @@ bool lan_clients_name_ok(const char *name) {
     return true;
 }
 
-static int hexval(char ch) {
-    if (ch >= '0' && ch <= '9') return ch - '0';
-    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
-    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
-    return -1;
-}
-
 static bool is_hex(const char *s, size_t n) {
-    for (size_t i = 0; i < n; i++) if (hexval(s[i]) < 0) return false;
+    for (size_t i = 0; i < n; i++) if (bp_hex_nibble(s[i]) < 0) return false;
     return true;
 }
 
 bool lan_clients_fp_from_hex(const char *hex, uint8_t fp[LAN_CLIENT_FP_LEN]) {
     if (!hex || strlen(hex) != 2 * LAN_CLIENT_FP_LEN || !is_hex(hex, 2 * LAN_CLIENT_FP_LEN)) return false;
     for (int i = 0; i < LAN_CLIENT_FP_LEN; i++)
-        fp[i] = (uint8_t)(hexval(hex[2 * i]) << 4 | hexval(hex[2 * i + 1]));
+        fp[i] = (uint8_t)(bp_hex_nibble(hex[2 * i]) << 4 | bp_hex_nibble(hex[2 * i + 1]));
     return true;
 }
 

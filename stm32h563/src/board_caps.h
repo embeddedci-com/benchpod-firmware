@@ -86,8 +86,8 @@ typedef struct {
        backend, la_pull.h) and pull_exp_init(). */
     bool pull_expanders;
     /* PC9 USB_SEL: the USB switch between USB-C and the USB-A host port (low = USB-C, the
-       board's default on its pull-down).  Nothing drives it yet: kept for the planned USB
-       host support, which switches it on demand only. */
+       board's default on its pull-down).  Only the USB host role moves it (usb_device.c,
+       development builds with USB_HOST=1): high while the host role is on USB-A. */
     bool usb_sel;
     /* The DAC clock is on the module flat cable's pin 7 and its data on pin 8 (dac_link.h); older
        digital boards have them the other way round.  Only matters on a two-board pod. */
