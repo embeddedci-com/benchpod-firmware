@@ -210,6 +210,7 @@ C_SOURCES := \
   src/command_handler_lease.c \
   src/rng.c \
   src/psram.c \
+  src/xspi_guard.c \
   src/ice40_flash.c \
   src/w25q.c \
   src/blob_store.c \
