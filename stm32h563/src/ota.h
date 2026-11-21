@@ -58,10 +58,13 @@ typedef enum {
                            relayed to the bridge by wifi_bridge_ota.c. BENCHPOD_WIFI_BRIDGE builds only;
                            always needs a good signature (the bridge checks it again). */
     OTA_TARGET_GW2,     /* gateware image 2 (sensor emulation, v54+) -> W25Q slot "gw2" */
+    OTA_TARGET_BRIDGE_ID_UNUSED, /* signing target 8 is the bridge's identity: never an update */
+    OTA_TARGET_XIP,     /* the code that runs from the W25Q (xip_image.h) -> W25Q slot "xip", only the
+                           image this firmware was linked with, only where the slot is listed */
 } ota_target_t;
 
-/* "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2" (NULL or "" = firmware; "bridge" only with
-   BENCHPOD_WIFI_BRIDGE). -1 if unknown. */
+/* "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2", "xip" (NULL or "" = firmware; "bridge"
+   only with BENCHPOD_WIFI_BRIDGE, "xip" only where its slot is listed). -1 if unknown. */
 int         ota_target_from_name(const char *name);
 const char *ota_target_name(ota_target_t t);
 ota_target_t ota_target(void);

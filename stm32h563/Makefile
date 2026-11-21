@@ -37,8 +37,8 @@ AS      := $(PREFIX)gcc -x assembler-with-cpp
 CP      := $(PREFIX)objcopy
 SZ      := $(PREFIX)size
 NM      := $(PREFIX)nm
-HEX     := $(CP) -O ihex
-BIN     := $(CP) -O binary -S
+HEX     := $(CP) -O ihex -R .xip
+BIN     := $(CP) -O binary -S -R .xip
 
 #######################################
 # SDK / library paths
@@ -216,6 +216,8 @@ C_SOURCES := \
   src/blob_store.c \
   src/blob_hooks.c \
   src/blob_manifest.c \
+  src/xip_image.c \
+  src/xip_mod_core.c \
   src/spi_flash.c \
   src/spi_stream.c \
   src/command_handler_spi.c \
@@ -585,6 +587,8 @@ $(OBJECTS): $(DEFS_STAMP)
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	@NM=$(PREFIX)nm OBJDUMP=$(PREFIX)objdump OBJCOPY=$(CP) SIZE=$(SZ) python3 tools/check_xip_refs.py $@ $(BUILD_DIR) || { rm -f $@; exit 1; }
+	@OBJCOPY=$(CP) python3 tools/xip_finish.py $@ $(BLOB_DIR) || { rm -f $@; exit 1; }
 	$(SZ) $@
 	@OBJDUMP=$(PREFIX)objdump sh tools/check_ramfunc_calls.sh $@ || { rm -f $@; exit 1; }
 	@READELF=$(PREFIX)readelf sh tools/flash_left.sh $@ $(LDSCRIPT) $(FLASH_FLOOR_KB) || { rm -f $@; exit 1; }

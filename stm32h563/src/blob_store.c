@@ -26,6 +26,7 @@ static const struct {
     [BLOB_GW2] = { "gw2", 0x1A0000u, 0x040000u },
     [BLOB_WIRING_A] = { "wiring-a", 0x1E0000u, 0x008000u },
     [BLOB_WIRING_B] = { "wiring-b", 0x1E8000u, 0x008000u },
+    [BLOB_XIP] = { "xip", 0x200000u, 0x040000u },
 };
 
 static blob_info_t s_info[BLOB_SLOT_COUNT];
@@ -47,12 +48,18 @@ static bool s_esp_listed = true;
 
 void blob_store_set_esp_listed(bool listed) { s_esp_listed = listed; }
 
+/* The xip slot shares its sectors with the old esp slot: listed only without the esp blob. */
+static bool s_xip_listed;
+
+void blob_store_set_xip_listed(bool listed) { s_xip_listed = listed; }
+
 bool blob_listed(blob_id_t id)
 {
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (id == BLOB_BRIDGE) return true;
 #endif
     if (id == BLOB_ESP) return s_esp_listed;
+    if (id == BLOB_XIP) return s_xip_listed && !s_esp_listed;
     return id < BLOB_COUNT || id == BLOB_GW2;
 }
 

@@ -1,0 +1,26 @@
+/* xip_mod_core.c — runs from the W25Q (xip_image.h): the table and the self-test.
+ *
+ * The self-test proves a session end to end: the table is read from the mapped image, the code
+ * runs from it, its constants are read from it, and it calls back into internal flash (a long
+ * branch through a linker veneer). */
+#include "xip_image.h"
+
+#include <stdint.h>
+
+static const char k_probe[] = "BenchPod XIP self-test: code and constants from the W25Q";
+
+/* Internal flash (the veneer test): FNV-1a over a byte. */
+uint32_t xip_core_fnv_step(uint32_t h, uint8_t b);
+
+static uint32_t selftest(uint32_t seed)
+{
+    uint32_t h = 2166136261u ^ seed;
+    for (unsigned i = 0; i < sizeof(k_probe) - 1u; i++) h = xip_core_fnv_step(h, (uint8_t)k_probe[i]);
+    return h;
+}
+
+__attribute__((section(".xip.table"), used))
+const xip_table_t xip_table = {
+    XIP_TABLE_MAGIC, XIP_ABI, XIP_FN_COUNT,
+    { [XIP_FN_SELFTEST] = (const void *)selftest },
+};
