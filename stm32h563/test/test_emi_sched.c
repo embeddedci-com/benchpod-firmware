@@ -58,9 +58,10 @@ static void test_ci_is_small(void) {
    unpaced, 20 Mbit/s. */
 static void test_stress_is_old_loop(void) {
     const emi_mode_desc_t *d = emi_mode_desc(EMI_MODE_STRESS);
-    CHECK(d->n_caps == 2);
+    CHECK(d->n_caps == 3);
     CHECK(max_samples(d->caps[0].json) == 200000);
     CHECK(max_samples(d->caps[1].json) == 1000000);
+    CHECK(d->caps[2].kind == EMI_CAPK_ADC && strstr(d->caps[2].json, "\"la_samples\":0"));
     CHECK(d->period_ms == 0u && d->gap_ms == 200u);
     CHECK(d->readback_bps == 0u && d->net_mbit == 20u);
     CHECK(emi_sched_next_start(d, 1000u, 3000u) == 3200u);
@@ -81,18 +82,50 @@ static void test_next_start(void) {
 
 static void test_next_cap(void) {
     const emi_mode_desc_t *d = emi_mode_desc(EMI_MODE_CI);
-    unsigned k = emi_sched_next_cap(d, d->n_caps, true);
-    CHECK(k == 0u);
-    unsigned k2 = emi_sched_next_cap(d, k, true);
-    CHECK(k2 == 1u);
-    CHECK(emi_sched_next_cap(d, k2, true) == 0u);   /* in turn */
-    /* a digital-only board: only those without the ADC */
+    /* both: the LA capture and the ADC + LA capture in turn, never the ADC-only one */
+    unsigned k = emi_sched_next_cap(d, d->n_caps, EMI_CAPSEL_BOTH, true);
+    CHECK(d->caps[k].kind == EMI_CAPK_LA);
+    unsigned k2 = emi_sched_next_cap(d, k, EMI_CAPSEL_BOTH, true);
+    CHECK(d->caps[k2].kind == EMI_CAPK_DUAL);
+    CHECK(emi_sched_next_cap(d, k2, EMI_CAPSEL_BOTH, true) == k);
+    /* la, adc: only their own kind */
     for (unsigned n = 0, c = d->n_caps; n < 5; n++) {
-        c = emi_sched_next_cap(d, c, false);
-        CHECK(c < d->n_caps && !d->caps[c].needs_adc);
+        c = emi_sched_next_cap(d, c, EMI_CAPSEL_LA, true);
+        CHECK(c < d->n_caps && d->caps[c].kind == EMI_CAPK_LA);
+    }
+    for (unsigned n = 0, c = d->n_caps; n < 5; n++) {
+        c = emi_sched_next_cap(d, c, EMI_CAPSEL_ADC, true);
+        CHECK(c < d->n_caps && d->caps[c].kind == EMI_CAPK_ADC);
+        CHECK(strstr(d->caps[c].json, "\"la_samples\":0") != NULL);
+    }
+    /* off, and the ADC kinds without an ADC (digital-only board, or the ADC clock held slow) */
+    CHECK(emi_sched_next_cap(d, d->n_caps, EMI_CAPSEL_OFF, true) == d->n_caps);
+    CHECK(emi_sched_next_cap(d, d->n_caps, EMI_CAPSEL_ADC, false) == d->n_caps);
+    for (unsigned n = 0, c = d->n_caps; n < 5; n++) {
+        c = emi_sched_next_cap(d, c, EMI_CAPSEL_BOTH, false);
+        CHECK(c < d->n_caps && d->caps[c].kind == EMI_CAPK_LA);
     }
     const emi_mode_desc_t *s = emi_mode_desc(EMI_MODE_STRESS);
-    CHECK(emi_sched_next_cap(s, s->n_caps, false) == 1u);   /* the LA-only deep capture */
+    CHECK(emi_sched_next_cap(s, s->n_caps, EMI_CAPSEL_BOTH, false) == 1u);   /* the LA-only deep capture */
+    CHECK(emi_sched_next_cap(s, s->n_caps, EMI_CAPSEL_BOTH, true) == 0u);
+    CHECK(emi_sched_next_cap(s, 0u, EMI_CAPSEL_BOTH, true) == 1u);
+    CHECK(emi_sched_next_cap(s, 1u, EMI_CAPSEL_BOTH, true) == 0u);   /* never the ADC-only one */
+}
+
+static void test_sel_names(void) {
+    CHECK(emi_cap_sel_from_name("both") == EMI_CAPSEL_BOTH);
+    CHECK(emi_cap_sel_from_name("on") == EMI_CAPSEL_BOTH);
+    CHECK(emi_cap_sel_from_name("la") == EMI_CAPSEL_LA);
+    CHECK(emi_cap_sel_from_name("adc") == EMI_CAPSEL_ADC);
+    CHECK(emi_cap_sel_from_name("off") == EMI_CAPSEL_OFF);
+    CHECK(emi_cap_sel_from_name("dual") == -1);
+    CHECK(!strcmp(emi_cap_sel_name(EMI_CAPSEL_LA), "la"));
+    CHECK(!strcmp(emi_cap_sel_name((emi_cap_sel_t)9), "?"));
+    /* the ADC clock captures: a few ADC samples, no LA, at 400 S/s and 400 kS/s */
+    CHECK(max_samples(EMI_SCHED_ADCCLK_SLOW_JSON) == 4);
+    CHECK(strstr(EMI_SCHED_ADCCLK_SLOW_JSON, "\"adc_sample_rate_hz\":400}") != NULL);
+    CHECK(strstr(EMI_SCHED_ADCCLK_FAST_JSON, "\"adc_sample_rate_hz\":400000}") != NULL);
+    CHECK(strstr(EMI_SCHED_ADCCLK_SLOW_JSON, "\"la_samples\":0") != NULL);
 }
 
 static void test_overdue(void) {
@@ -136,18 +169,18 @@ static void test_busy(void) {
 static void test_ci_minute(void) {
     const emi_mode_desc_t *d = emi_mode_desc(EMI_MODE_CI);
     uint32_t next = 0, started = 0, end = 0;
-    unsigned k = d->n_caps, n[2] = {0, 0}, total = 0;
+    unsigned k = d->n_caps, n[3] = {0, 0, 0}, total = 0;
     bool busy = false;
     for (uint32_t now = 0; now < 60000u; now++) {
         if (busy && now >= end) { busy = false; next = emi_sched_next_start(d, started, now); }
         if (!busy && (int32_t)(now - next) >= 0) {
-            k = emi_sched_next_cap(d, k, true);
+            k = emi_sched_next_cap(d, k, EMI_CAPSEL_BOTH, true);
             n[k]++; total++;
             started = now; end = now + 15u; busy = true;
         }
     }
     CHECK(total == 120u);
-    CHECK(n[0] == 60u && n[1] == 60u);
+    CHECK(n[0] == 60u && n[1] == 60u && n[2] == 0u);
 }
 
 int main(void) {
@@ -156,6 +189,7 @@ int main(void) {
     test_stress_is_old_loop();
     test_next_start();
     test_next_cap();
+    test_sel_names();
     test_overdue();
     test_budget();
     test_busy();

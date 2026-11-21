@@ -83,10 +83,18 @@ static struct {
     uint32_t       t_next_cap;
     emi_mode_t     mode;          /* emi_sched.h */
     unsigned       next_kind;     /* index into the mode's caps */
-    bool           user_uart;     /* `emi uart` chose the NMEA pin: a mode change keeps it */
-    bool           user_net;      /* `emi net` chose the rate: a mode change keeps it */
+    /* The A/B switches (`emi uart|net|dac|cap|readback|adcclk|power|period`): each one a mode
+       change keeps, until `emi defaults` gives the mode's back. */
+    bool           user_uart;     /* `emi uart` chose the NMEA pin */
+    bool           user_net;      /* `emi net` chose the rate */
+    bool           user_dac;      /* `emi dac` chose the DAC */
     bool           mode_applied;  /* the mode's outputs were taken at the first start */
-    bool           caps_off;      /* `emi cap off`: no captures (bench diagnosis) */
+    emi_cap_sel_t  cap_sel;       /* `emi cap`: which captures run */
+    bool           no_readback;   /* `emi readback off`: captures stay in the PSRAM, not read back */
+    bool           adc_slow;      /* `emi adcclk slow`: the ADC converts at 400 S/s, not 400 kS/s */
+    bool           adc_clk_pending;  /* the ADC clock still has to be set (a capture that sets it) */
+    bool           adc_clk_slow_now; /* what the gateware's ADC clock is now, as far as we know */
+    bool           power_off;     /* `emi power off`: target power off at both eFuses */
     uint32_t       period_ms;     /* `emi period`: the capture period instead of the mode's, 0 = the mode's */
     uint32_t       t_budget;      /* the read-back budget was last topped up then */
     uint32_t       overdue;       /* captures that went out EMI_SCHED_OVERDUE_MS late, this run */
@@ -159,7 +167,7 @@ static struct {
    the loop runs, and as a BPMON frame on the Ethernet port from boot on (emi_test_net_poll, net
    task). Two buffers: the worker writes the one the net task is not reading, then flips `cur`. */
 typedef struct {
-    char              buf[2][384];
+    char              buf[2][480];
     volatile uint8_t  cur;
     volatile uint32_t gen;
 } emi_mon_t;
@@ -778,7 +786,7 @@ static void handle_emi_log_with(int conn_id, uint32_t offset, uint32_t count, ui
             (unsigned long)offset,
             (unsigned long)count);
     if (!count) {   /* the loop's whole state, with the log's (no room beside records) */
-        char st[448];
+        char st[512];
         if (emi_test_json(st, sizeof(st))) bp_emit(&e, ",\"emi_test\":%s", st);
         bp_emit_raw(&e, ",\"last_error\":");
         bp_emit_jstr(&e, s.last_err);
@@ -806,6 +814,8 @@ static void recovery_take(recovery_action_t a, uint32_t now) {
         printf("[emi] recovery: captures failing for %lu s, reloading the iCE40 from its flash\n",
                (unsigned long)((now - s.fail_since) / 1000u));
         const int rc = ice40_reload();   /* reset + configure from the flash: no erase, no write */
+        s.adc_clk_slow_now = false;      /* a reset gateware converts at 400 kS/s again */
+        s.adc_clk_pending = s.adc_slow;
         if (s_keep.fault_stuck) ice40_hold_off_bus();   /* `emi fault ice40-stuck`: it stays down */
         const bool alive = rc == 0 && signal_engine_refresh_version();
         snprintf(text, sizeof(text), "iCE40 reload %s v%u", alive ? "ok" : "FAILED",
@@ -941,6 +951,17 @@ static void restart_outputs(void) {
     if (analog) apply_dac(s.dac);
 }
 
+/* Target power at both eFuses: on, unless `emi power off`. */
+static void apply_power(void) {
+    if (s.power_off) {
+        run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":false}");
+        run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":false}");
+    } else {
+        run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":true}");
+        run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":true}");
+    }
+}
+
 static void health_run_reset(void);   /* below, with the health state */
 
 void emi_test_start(void) {
@@ -969,9 +990,10 @@ void emi_test_start(void) {
     choose_default_dac();
     printf("[emi] starting the EMI test activity, mode %s\n", emi_mode_name(s.mode));
     run("la_voltage", "{\"cmd\":\"la_voltage\",\"mv\":3300}");
-    run("target_power 1", "{\"cmd\":\"target_power\",\"efuse\":1,\"enabled\":true}");
-    run("target_power 2", "{\"cmd\":\"target_power\",\"efuse\":2,\"enabled\":true}");
+    apply_power();
     restart_outputs();
+    s.adc_clk_slow_now = false;           /* from a reset (or the emulation image just loaded) */
+    s.adc_clk_pending = s.adc_slow;
     log_event(EMI_EV_STARTED, 0, 0);
     log_mode();
 }
@@ -998,38 +1020,66 @@ bool emi_test_running(void) { return s.running; }
 
 emi_mode_t emi_test_mode(void) { return s.mode; }
 
-void emi_test_set_mode(emi_mode_t mode) {
-    if (!emi_mode_desc(mode)) return;
-    const emi_dac_mode_t from = s.dac;
-    s.mode = mode;
-    s.user_uart = false;
-    s.user_net = false;
-    s.period_ms = 0;
-    s.caps_off = false;
-    s.booted_mode = false;   /* the mode's DAC, or the board's default */
-    s.mode_applied = true;
+/* The mode's DAC (or the board's default) unless `emi dac` chose one. */
+static void take_mode_dac(void) {
+    if (s.user_dac) return;
+    s.booted_mode = false;
     take_mode_settings();
     if (!s.booted_mode) {    /* the board's default DAC: what choose_default_dac picks */
         s.dac = EMI_DAC_SINE;
         choose_default_dac();
     }
+}
+
+/* Apply the outputs after a change of mode or of the switches: NMEA, DAC, target power. */
+static void apply_outputs_from(emi_dac_mode_t from) {
+    if (!s.running) return;
+    const emi_dac_mode_t to = s.dac;
+    s.dac = from;   /* apply_dac parks what plays now, then starts `to` */
+    if (board_caps()->analog.present && s.uart_la > 0) run("dac_stop", "{\"cmd\":\"dac_stop\"}");
+    apply_uart(s.uart_la);
+    if (board_caps()->analog.present) apply_dac(to);
+    s.dac = to;
+    apply_power();
+    if (s.uart_la > 0) {   /* a UART sensor may have loaded the emulation image: a reset ADC clock */
+        s.adc_clk_slow_now = false;
+        s.adc_clk_pending = s.adc_slow;
+    }
+}
+
+void emi_test_set_mode(emi_mode_t mode) {
+    if (!emi_mode_desc(mode)) return;
+    const emi_dac_mode_t from = s.dac;
+    s.mode = mode;
+    s.mode_applied = true;
+    take_mode_settings();   /* NMEA pin and stream rate, unless chosen */
+    take_mode_dac();
     s.next_kind = mode_desc()->n_caps;
     if (s.running) {
-        const emi_dac_mode_t to = s.dac;
-        s.dac = from;   /* apply_dac parks what plays now, then starts `to` */
-        if (board_caps()->analog.present && s.uart_la > 0) run("dac_stop", "{\"cmd\":\"dac_stop\"}");
-        apply_uart(s.uart_la);
-        if (board_caps()->analog.present) apply_dac(to);
-        s.dac = to;
+        apply_outputs_from(from);
         s.t_next_cap = HAL_GetTick();
         log_mode();
     }
+}
+
+void emi_test_defaults(void) {
+    const emi_dac_mode_t from = s.dac;
+    s.user_uart = s.user_net = s.user_dac = false;
+    s.period_ms = 0;
+    s.cap_sel = EMI_CAPSEL_BOTH;
+    s.no_readback = false;
+    s.power_off = false;
+    if (s.adc_slow) { s.adc_slow = false; s.adc_clk_pending = true; }
+    take_mode_settings();
+    take_mode_dac();
+    apply_outputs_from(from);
 }
 
 bool emi_test_set_dac(emi_dac_mode_t mode) {
     if (mode == EMI_DAC_ALL && !dac_quad_present()) return false;
     if (mode != EMI_DAC_OFF && !board_caps()->analog.present) return false;
     s.booted_mode = true;   /* a choice before the boot start sticks */
+    s.user_dac = true;
     if (s.running) apply_dac(mode);
     s.dac = mode;
     return true;
@@ -1039,7 +1089,7 @@ void emi_test_set_uart(int la) {
     if (la < 0 || la > 14) return;
     s.user_uart = true;
     s.uart_la = la;
-    if (s.running) restart_outputs();
+    if (s.running) apply_outputs_from(s.dac);
 }
 
 bool emi_test_set_net_rate(unsigned mbit) {
@@ -1049,7 +1099,28 @@ bool emi_test_set_net_rate(unsigned mbit) {
     return true;
 }
 
-void emi_test_set_captures(bool on) { s.caps_off = !on; }
+bool emi_test_set_captures(emi_cap_sel_t sel) {
+    if ((unsigned)sel > EMI_CAPSEL_OFF) return false;
+    if (sel != EMI_CAPSEL_LA && sel != EMI_CAPSEL_OFF && !board_caps()->analog.present) return false;
+    s.cap_sel = sel;
+    s.next_kind = mode_desc()->n_caps;
+    return true;
+}
+
+void emi_test_set_readback(bool on) { s.no_readback = !on; }
+bool emi_test_readback_on(void) { return !s.no_readback; }
+
+bool emi_test_set_adc_clock(bool slow) {
+    if (!board_caps()->analog.present) return false;
+    if (s.adc_slow != slow || s.adc_clk_slow_now != slow) s.adc_clk_pending = true;
+    s.adc_slow = slow;
+    return true;
+}
+
+void emi_test_set_power(bool on) {
+    s.power_off = !on;
+    if (s.running) apply_power();
+}
 
 bool emi_test_set_period(uint32_t ms) {
     if (ms && (ms < 100u || ms > 600000u)) return false;
@@ -1237,16 +1308,18 @@ size_t emi_test_describe(char *buf, size_t cap) {
     if (esp_wifi_ctrl_module_present())
         snprintf(c3, sizeof(c3), ", c3 restarts %lu", (unsigned long)s.c3_restarts);
     char busy[24] = "";
-    if (s.caps_off) snprintf(busy, sizeof(busy), ", captures off");
-    else if (s.busy.have)
+    if (s.busy.have)
         snprintf(busy, sizeof(busy), ", busy %u.%u%%", (unsigned)(s.busy.last_permille / 10u),
                  (unsigned)(s.busy.last_permille % 10u));
     int len = snprintf(buf, cap,
-                       "emi: %s, mode %s, led %s, dac %s, uart %s, net %s, core %lu MHz, %lus, captures %lu%s, "
-                       "errors %lu%s%s%s",
+                       "emi: %s, mode %s, led %s, dac %s, uart %s, net %s, cap %s, readback %s, adcclk %s%s, "
+                       "power %s, core %lu MHz, %lus, captures %lu%s, errors %lu%s%s%s",
                        s.running ? "running" : (s.booted ? "stopped" : "waiting for boot start"),
                        emi_mode_name(s.mode),
-                       led_name(emi_test_led_state()), k_dac_names[s.dac], uart, net, (unsigned long)(SystemCoreClock / 1000000u),
+                       led_name(emi_test_led_state()), k_dac_names[s.dac], uart, net,
+                       emi_cap_sel_name(s.cap_sel), s.no_readback ? "off" : "on",
+                       s.adc_slow ? "slow" : "fast", s.adc_clk_pending ? " (setting)" : "",
+                       s.power_off ? "off" : "on", (unsigned long)(SystemCoreClock / 1000000u),
                        (unsigned long)up, (unsigned long)s.captures, busy, (unsigned long)s.errors, c3,
                        s.last_err[0] ? ", last: " : "", s.last_err);
     if (len < 0) return 0;
@@ -1272,7 +1345,8 @@ size_t emi_test_json(char *buf, size_t cap) {
                        "\"captures\":%lu,\"errors\":%lu,\"net_mbit\":%lu,"
                        "\"net_sent\":%lu,\"net_drops\":%lu,\"net_link\":%s,\"net_link_losses\":%lu,"
                        "\"led\":\"%s\",\"failed_since_power_on\":%s,\"reset_cause\":\"%s\","
-                       "\"c3_restarts\":%lu,\"captures_on\":%s,\"busy_permille\":%d,\"overdue\":%lu}",
+                       "\"c3_restarts\":%lu,\"cap\":\"%s\",\"readback\":%s,\"adc_clock\":\"%s\","
+                       "\"adc_clock_set\":%s,\"power\":%s,\"busy_permille\":%d,\"overdue\":%lu}",
                        s.running ? "true" : "false", emi_mode_name(s.mode), k_dac_names[s.dac], s.uart_la,
                        (unsigned long)(SystemCoreClock / 1000000u), (unsigned long)up,
                        (unsigned long)s.captures, (unsigned long)s.errors, (unsigned long)ns.mbit,
@@ -1280,7 +1354,9 @@ size_t emi_test_json(char *buf, size_t cap) {
                        ns.link ? "true" : "false", (unsigned long)ns.link_losses,
                        led_name(emi_test_led_state()), s_failed_before ? "true" : "false",
                        fault_last_reset_str() ? fault_last_reset_str() : "unknown",
-                       (unsigned long)s.c3_restarts, s.caps_off ? "false" : "true",
+                       (unsigned long)s.c3_restarts, emi_cap_sel_name(s.cap_sel),
+                       s.no_readback ? "false" : "true", s.adc_slow ? "slow" : "fast",
+                       s.adc_clk_pending ? "false" : "true", s.power_off ? "false" : "true",
                        s.busy.have ? (int)s.busy.last_permille : -1, (unsigned long)s.overdue);
     if (len < 0 || (size_t)len >= cap) { if (cap) buf[0] = '\0'; return 0; }
     return (size_t)len;
@@ -1289,7 +1365,7 @@ size_t emi_test_json(char *buf, size_t cap) {
 static void publish_monitor(uint32_t now) {
     if (now - s.t_report < EMI_TEST_REPORT_MS) return;
     s.t_report = now;
-    char line[320];
+    char line[400];
     emi_test_describe(line, sizeof(line));
     if (s.running) printf("[emi] %s\n", line);
     if (!s_mon) {
@@ -1615,15 +1691,35 @@ void emi_test_poll(void) {
     power_poll_emi(now);
     publish_monitor(now);
     if (!s.running) return;
-    if (s.caps_off) { s.overdue_now = false; return; }
+    const bool adc_ok = board_caps()->analog.present && !s.adc_slow;
+    /* The ADC clock first: a capture of a few ADC samples sets the free-running rate. */
+    if (s.adc_clk_pending && board_caps()->analog.present && !s.cap_issued &&
+        (int32_t)(now - s.hold_until) >= 0) {
+        s.adc_clk_pending = false;
+        s.cap_errors = s.errors;
+        run(s.adc_slow ? "adcclk slow" : "adcclk fast",
+            s.adc_slow ? EMI_SCHED_ADCCLK_SLOW_JSON : EMI_SCHED_ADCCLK_FAST_JSON);
+        if (s.errors == s.cap_errors) {
+            s.cap_issued = true;
+            s.cap_issued_at = now;
+            s.adc_clk_slow_now = s.adc_slow;
+        } else {
+            s.adc_clk_pending = true;
+            s.hold_until = now + 1000u;   /* refused: again in a second */
+        }
+        return;
+    }
+    if (emi_sched_next_cap(mode_desc(), s.next_kind, s.cap_sel, adc_ok) >= mode_desc()->n_caps) {
+        s.overdue_now = false;   /* no capture to take (`emi cap off`, or none this board can) */
+        return;
+    }
     const bool due = !s.cap_issued && (int32_t)(now - s.t_next_cap) >= 0;
     /* A capture that cannot go out (a run-log read holds the bus, a client's command has the pod)
        goes late; this late, it counts as failing, so a stalled loop never shows green. */
     s.overdue_now = due && emi_sched_overdue(s.t_next_cap, now);
     if (due && (int32_t)(now - s.hold_until) >= 0) {
         const emi_mode_desc_t *d = mode_desc();
-        const unsigned k = emi_sched_next_cap(d, s.next_kind, board_caps()->analog.present);
-        if (k >= d->n_caps) return;   /* nothing this board can take */
+        const unsigned k = emi_sched_next_cap(d, s.next_kind, s.cap_sel, adc_ok);
         s.next_kind = k;
         if (s.overdue_now) s.overdue++;
         s.overdue_now = false;

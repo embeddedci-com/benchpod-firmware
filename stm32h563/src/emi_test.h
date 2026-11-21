@@ -25,7 +25,10 @@
  *     in `ci` a small one every 500 ms (4,096 samples: LA only at 12 MS/s, then ADC + LA), read
  *     back at a LAN client's pace (4 MB/s); every 10 s in `interactive` and `sensor`; in `stress`
  *     deep ones back to back (200k ADC + LA, then 1 M LA), as fast as the worker allows.
- *     `emi cap off|on` turns them off and on, `emi period <ms>` changes the period (bench only)
+ *     `emi period <ms>` changes the period. A/B switches (bench only) pick the blocks:
+ *     `emi cap both|la|adc|off`, `emi readback on|off`, `emi adcclk fast|slow` (the ADC's
+ *     free-running conversions), `emi power on|off`, with `emi dac/uart/net`; `emi defaults`
+ *     drops them. `emi dac off` leaves the DAC's SPI idle (the engine sends no frames)
  *   - NMEA at 115200 baud out of LA8 (an emulated GPS, two sentences every 100 ms) in `ci` and
  *     `sensor`; `emi uart <la>|off` picks another pin or none. It drives a pin of the I/O header.
  *     The first start loads the emulation image (a UART sensor needs it), about 2 s, once: the
@@ -104,13 +107,29 @@ void emi_test_reply(const uint8_t *buf, size_t len);
    budget per pass, so a deep read-back is spread over passes like a real socket's. */
 size_t emi_test_avail(void);
 
-/* Console `emi mode <name>`: switch the mode (emi_sched.h), applied at once when running; it
-   takes the mode's DAC, NMEA pin, stream rate and period and turns captures back on, dropping
-   earlier `emi dac/uart/net/period/cap` choices. */
+/* Console `emi mode <name>`: switch the mode (emi_sched.h), applied at once when running: its
+   captures, and its DAC, NMEA pin and stream rate where no switch below chose them. The switches
+   (A/B tests of which block emits) all survive a mode change; `emi defaults` drops them. */
 void emi_test_set_mode(emi_mode_t mode);
 emi_mode_t emi_test_mode(void);
-/* Console `emi cap off|on`: no captures / captures again (bench diagnosis: the other blocks alone). */
-void emi_test_set_captures(bool on);
+/* Console `emi defaults`: every switch back to the mode's (captures both, read-back on, ADC clock
+   fast, power on, the mode's DAC, NMEA, rate and period). */
+void emi_test_defaults(void);
+/* Console `emi cap both|la|adc|off` (`on` = both): the mode's pair (LA only, then ADC + LA), LA
+   only (PSRAM writes, the ADC's clock untouched), ADC only (ADC + PSRAM writes), or none. False for
+   an ADC kind on a board without the ADC. */
+bool emi_test_set_captures(emi_cap_sel_t sel);
+/* Console `emi readback on|off`: off leaves each capture in the PSRAM (the STM32's 50 MHz bus
+   read-back skipped); the capture still runs. command_handler_capture asks emi_test_readback_on. */
+void emi_test_set_readback(bool on);
+bool emi_test_readback_on(void);
+/* Console `emi adcclk fast|slow`: the ADC's free-running conversions (12 MHz SCLK frames on the
+   analog module's cable, all the time) at 400 kS/s (fast, the gateware's reset rate) or 400 S/s
+   (slow), set by a capture of 4 ADC samples at that rate. While slow, no ADC capture runs (it
+   would set the rate back). False on a board without the ADC. */
+bool emi_test_set_adc_clock(bool slow);
+/* Console `emi power on|off`: target power at both eFuses. */
+void emi_test_set_power(bool on);
 /* Console `emi period <ms>|0`: the capture period instead of the mode's (100 ms to 10 min; 0 = the
    mode's). False outside that range. */
 bool emi_test_set_period(uint32_t ms);

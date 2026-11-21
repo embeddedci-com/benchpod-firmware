@@ -8,17 +8,21 @@
 /* The small captures: what the SDK and MCP take by default (4,096 samples at the top rate), the
    LA at its top dense rate, then the ADC with the LA beside it at the web Analyzer's default rate. */
 static const emi_cap_t k_small[] = {
-    { "la_capture", "{\"cmd\":\"la_capture\",\"samples\":4096,\"sample_rate_hz\":12000000}", false },
+    { "la_capture", "{\"cmd\":\"la_capture\",\"samples\":4096,\"sample_rate_hz\":12000000}", EMI_CAPK_LA },
     { "capture_dual", "{\"cmd\":\"capture_dual\",\"adc_samples\":4096,\"la_samples\":4096,"
-                      "\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":1000000}", true },
+                      "\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":1000000}", EMI_CAPK_DUAL },
+    { "capture_dual adc", "{\"cmd\":\"capture_dual\",\"adc_samples\":4096,\"la_samples\":0,"
+                          "\"adc_sample_rate_hz\":400000}", EMI_CAPK_ADC },
 };
 
 /* The deep captures of the stress mode (the loop before the modes): ADC + LA, the ADC at its full
    rate and the LA beside it, then a deep LA-only capture at the LA's top rate. */
 static const emi_cap_t k_deep[] = {
     { "capture_dual", "{\"cmd\":\"capture_dual\",\"adc_samples\":200000,\"la_samples\":200000,"
-                      "\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":2000000}", true },
-    { "la_capture", "{\"cmd\":\"la_capture\",\"samples\":1000000}", false },
+                      "\"adc_sample_rate_hz\":400000,\"la_sample_rate_hz\":2000000}", EMI_CAPK_DUAL },
+    { "la_capture", "{\"cmd\":\"la_capture\",\"samples\":1000000}", EMI_CAPK_LA },
+    { "capture_dual adc", "{\"cmd\":\"capture_dual\",\"adc_samples\":200000,\"la_samples\":0,"
+                          "\"adc_sample_rate_hz\":400000}", EMI_CAPK_ADC },
 };
 
 #define N(a) ((uint8_t)(sizeof(a) / sizeof((a)[0])))
@@ -71,14 +75,37 @@ uint32_t emi_sched_next_start(const emi_mode_desc_t *d, uint32_t started_at, uin
     return (int32_t)(due - after_gap) >= 0 ? due : after_gap;
 }
 
-unsigned emi_sched_next_cap(const emi_mode_desc_t *d, unsigned cur, bool has_adc) {
+bool emi_sched_cap_allowed(emi_cap_kind_t kind, emi_cap_sel_t sel, bool adc_ok) {
+    if (kind != EMI_CAPK_LA && !adc_ok) return false;
+    switch (sel) {
+    case EMI_CAPSEL_BOTH: return kind == EMI_CAPK_LA || kind == EMI_CAPK_DUAL;
+    case EMI_CAPSEL_LA:   return kind == EMI_CAPK_LA;
+    case EMI_CAPSEL_ADC:  return kind == EMI_CAPK_ADC;
+    default:              return false;
+    }
+}
+
+unsigned emi_sched_next_cap(const emi_mode_desc_t *d, unsigned cur, emi_cap_sel_t sel, bool adc_ok) {
     if (!d->n_caps) return d->n_caps;
     if (cur >= d->n_caps) cur = d->n_caps - 1u;   /* the first: start at index 0 */
     for (unsigned k = 1; k <= d->n_caps; k++) {
         const unsigned i = (cur + k) % d->n_caps;
-        if (has_adc || !d->caps[i].needs_adc) return i;
+        if (emi_sched_cap_allowed(d->caps[i].kind, sel, adc_ok)) return i;
     }
     return d->n_caps;
+}
+
+static const char *const k_sel_names[] = { "both", "la", "adc", "off" };
+
+const char *emi_cap_sel_name(emi_cap_sel_t sel) {
+    return (unsigned)sel < 4u ? k_sel_names[sel] : "?";
+}
+
+int emi_cap_sel_from_name(const char *name) {
+    if (!name) return -1;
+    if (!strcmp(name, "on")) return EMI_CAPSEL_BOTH;
+    for (int i = 0; i < 4; i++) if (!strcmp(name, k_sel_names[i])) return i;
+    return -1;
 }
 
 bool emi_sched_overdue(uint32_t due, uint32_t now) {

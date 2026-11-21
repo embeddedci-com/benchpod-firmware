@@ -4778,11 +4778,19 @@ shows. Each one is an `EVENT` (kind 7, `ESP32-C3 restart`) whose text has the ca
 **The mode.** The loop runs an operating mode (`emi mode`, see the console's `emi` command): `ci`
 (the lab's, the default), `interactive`, `sensor` or `stress`. Every start and every change is an
 `EVENT` (kind 9, `mode`) whose text is the mode, e.g. `mode ci`. `emi_test` carries it as `mode`,
-with `captures_on` (false after `emi cap off`), `busy_permille` (the share of the last minute a
-capture or its read-back was in flight, in tenths of a percent; -1 until a minute has run) and
-`overdue` (captures that went out 10 s or more after they were due, this run). A capture that
-late counts as failing for the LED while it waits, so a stalled loop never shows green. The short
-`emi_test` in `status` carries `mode` too.
+with `busy_permille` (the share of the last minute a capture or its read-back was in flight, in
+tenths of a percent; -1 until a minute has run) and `overdue` (captures that went out 10 s or more
+after they were due, this run). A capture that late counts as failing for the LED while it waits,
+so a stalled loop never shows green. The short `emi_test` in `status` carries `mode` too.
+
+**The A/B switches.** To tell which block emits, the console's `emi` switches turn blocks off one
+at a time, and `emi_test` records each one: `cap` (`both`, `la`, `adc` or `off`: which captures
+run), `readback` (false: captures stay in the PSRAM, the STM32 does not read them back; the
+loop's capture reply is then `{"adc_samples":N,"la_samples":M,"read_back":false}` and
+`capture_read` cannot resume it), `adc_clock` (`fast` or `slow`: the ADC's free-running
+conversions at 400 kS/s or 400 S/s; `adc_clock_set` is false while the capture that sets it is
+still to run), `power` (target power), with `dac`, `uart_la` and `net_mbit`. The switches survive
+a mode change; `emi defaults` gives the mode's back.
 
 Things the pod counts that the LED does not show are `EVENT`s too (kind 8, `health`), checked once
 a second and logged at most once per item every 10 s (eFuse reverse blocking: every 60 s) with the

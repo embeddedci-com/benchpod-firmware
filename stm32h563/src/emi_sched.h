@@ -36,17 +36,24 @@ typedef enum {
 #define EMI_MODE_DEFAULT EMI_MODE_CI
 #endif
 
-/* A capture the loop takes: the label for the error log, the JSON command, and whether it needs
-   the ADC (a digital-only board skips those). */
+/* What a capture writes into the PSRAM: the LA only, the ADC with the LA beside it, or the ADC
+   only. The ADC kinds need an analog module. */
+typedef enum { EMI_CAPK_LA = 0, EMI_CAPK_DUAL, EMI_CAPK_ADC } emi_cap_kind_t;
+
+/* Which captures run (`emi cap`, an A/B switch that survives a mode change): the mode's (LA and
+   ADC + LA in turn), LA only, ADC only, or none. */
+typedef enum { EMI_CAPSEL_BOTH = 0, EMI_CAPSEL_LA, EMI_CAPSEL_ADC, EMI_CAPSEL_OFF } emi_cap_sel_t;
+
+/* A capture the loop takes: the label for the error log, the JSON command, its kind. */
 typedef struct {
-    const char *label;
-    const char *json;
-    bool        needs_adc;
+    const char    *label;
+    const char    *json;
+    emi_cap_kind_t kind;
 } emi_cap_t;
 
 typedef struct {
     const char      *name;
-    const emi_cap_t *caps;          /* taken in turn */
+    const emi_cap_t *caps;          /* taken in turn, those the selection allows */
     uint8_t          n_caps;
     uint32_t         period_ms;     /* start to start; 0 = back to back (after gap_ms) */
     uint32_t         gap_ms;        /* at least this long between a capture's end and the next start */
@@ -74,9 +81,26 @@ int emi_mode_from_name(const char *name);              /* -1 for anything else *
 /* When the next capture may start, given when the last one started and ended. */
 uint32_t emi_sched_next_start(const emi_mode_desc_t *d, uint32_t started_at, uint32_t ended_at);
 
-/* The capture after `cur` (an index into d->caps), skipping those that need an ADC on a board
-   without one. d->n_caps when there is none to take. Pass d->n_caps as `cur` for the first. */
-unsigned emi_sched_next_cap(const emi_mode_desc_t *d, unsigned cur, bool has_adc);
+/* Whether a capture of `kind` runs under `sel`: BOTH takes LA and ADC + LA (the mode's pair), LA and
+   ADC only their own kind, OFF none. Without an ADC (a digital-only board, or the ADC's clock held
+   slow, `emi adcclk slow`, which an ADC capture would undo) no ADC kind runs. */
+bool emi_sched_cap_allowed(emi_cap_kind_t kind, emi_cap_sel_t sel, bool adc_ok);
+
+/* The capture after `cur` (an index into d->caps) that emi_sched_cap_allowed lets run. d->n_caps
+   when there is none to take. Pass d->n_caps as `cur` for the first. */
+unsigned emi_sched_next_cap(const emi_mode_desc_t *d, unsigned cur, emi_cap_sel_t sel, bool adc_ok);
+
+const char *emi_cap_sel_name(emi_cap_sel_t sel);   /* "both", "la", "adc", "off" */
+int emi_cap_sel_from_name(const char *name);       /* also "on" for both; -1 for anything else */
+
+/* The ADC's free-running conversion clock (`emi adcclk`). The gateware converts all the time at
+   the rate of the last ADC capture (400 kS/s from reset: 16 SCLK cycles at 12 MHz every 2.5 us),
+   whether or not a capture runs; only an ADC capture changes it. These captures set it: a few ADC
+   samples, no LA. */
+#define EMI_SCHED_ADCCLK_SLOW_JSON \
+    "{\"cmd\":\"capture_dual\",\"adc_samples\":4,\"la_samples\":0,\"adc_sample_rate_hz\":400}"
+#define EMI_SCHED_ADCCLK_FAST_JSON \
+    "{\"cmd\":\"capture_dual\",\"adc_samples\":4,\"la_samples\":0,\"adc_sample_rate_hz\":400000}"
 
 /* A capture due at `due` and still not issued at `now` is overdue (EMI_SCHED_OVERDUE_MS). */
 bool emi_sched_overdue(uint32_t due, uint32_t now);
