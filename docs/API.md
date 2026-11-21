@@ -322,7 +322,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
-| `usb_flash` | T1 | Development builds only. Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy | object | no |
+| `usb_flash` | T1 | Development builds only. Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32 | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -4566,9 +4566,26 @@ computer would:
   the sectors the image covers and writes it at `address`.
 - `teensy`: the Teensy loader (Teensy 3.x, 4.0, 4.1, MicroMod; press the button or use the 1200
   baud touch to start it). Blocks of 0xFF are skipped.
+- `avr`: the Arduino AVR bootloaders over the board's USB serial port. The pod finds the one the
+  board runs: Caterina (Leonardo, Micro, Pro Micro, Feather 32u4; a board running its sketch gets
+  the 1200 baud touch first), optiboot and the older Nano bootloader (Uno, Nano, Pro Mini, after a
+  DTR reset at 115200 then 57600 baud), and the Mega 2560 bootloader. Every page is read back and
+  compared.
+- `samd`: the Arduino SAMD bootloader (Zero, MKR, Nano 33 IoT, and the Adafruit and Seeed SAMD
+  bootloaders, which answer the same way), after the 1200 baud touch. The pod reads the flash size
+  from the chip, erases from `address` to the end, writes, reads back and compares, then resets the
+  board. `address` is where the sketch starts: `0x2000` on a SAMD21, `0x4000` on a SAMD51. The
+  bootloader below it is refused.
+- `esp`: an ESP32 chip's ROM loader over the board's USB: its own USB serial port (C3, C6, S3, H2)
+  or the USB-serial chip of a dev kit (CP210x, CH34x, FTDI). The pod resets the chip into its
+  loader with DTR and RTS as esptool does, writes the image at `address` (0 for a merged image) and
+  checks its MD5 on the chip. A dev kit's chip runs at 460800 baud for the write.
 
-The image for `dfu` and `teensy` is a binary with its start `address` (the SDK converts `.hex` and
-`.dfu` files). The flash runs in the background; poll `usb_flash` for its state.
+Serial ports: CDC ACM (a board's own USB), and the FTDI, CP210x and CH34x USB-serial chips.
+
+The image for `dfu`, `teensy`, `avr`, `samd` and `esp` is a binary with its start `address` (the SDK
+converts `.hex` and `.dfu` files). The flash runs in the background; poll `usb_flash` for its
+state.
 
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_a", "timeout_s": 120}
@@ -4576,19 +4593,22 @@ The image for `dfu` and `teensy` is a binary with its start `address` (the SDK c
 {"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440}
 {"cmd": "usb_flash", "mode": "dfu", "address": "0x08000000", "len": 131072}
 {"cmd": "usb_flash", "mode": "teensy", "address": 0, "len": 262144}
+{"cmd": "usb_flash", "mode": "avr", "len": 10240}
+{"cmd": "usb_flash", "mode": "samd", "address": "0x2000", "len": 51200}
+{"cmd": "usb_flash", "mode": "esp", "address": 0, "len": 1048576}
 {"cmd": "usb_flash"}
 {"status": "ok", "data": {"running": false, "have_result": true, "mode": "file", "name": "FIRMWARE.BIN",
-  "len": 61440, "address": 0, "phase": "done", "done": 120, "total": 120, "result": "ok", "ok": true,
-  "ms": 1840}}
+  "len": 61440, "address": 0, "protocol": "", "phase": "done", "done": 120, "total": 120, "result": "ok",
+  "ok": true, "ms": 1840}}
 {"cmd": "usb_flash", "abort": true}
 ```
 
 | Argument | Description |
 |---|---|
-| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12 or FAT16 file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. Without `mode` the command reads the state. |
-| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). A number or a `0x` string. |
+| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12 or FAT16 file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. `avr`, `samd`, `esp`: a binary for the board's bootloader on its USB serial port. Without `mode` the command reads the state. |
+| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). `avr`: the byte address (0 for a sketch). `samd`: the flash address (`0x2000` on a SAMD21). `esp`: the flash offset (0 for a merged image, `0x10000` for an application). A number or a `0x` string. |
 | `block` | `teensy`: the loader's block size, 1024 (default) or 512 (Teensy LC). |
-| `leave` | `dfu`, `teensy`: `false` keeps the board in its loader at the end; by default it starts the new firmware. |
+| `leave` | `dfu`, `teensy`, `avr`, `samd`, `esp`: `false` keeps the board in its loader at the end; by default it starts the new firmware. Some bootloaders (optiboot, Caterina) start the sketch on their own after a few seconds anyway. |
 | `name` | With `mode` `file`: the file name, an 8.3 name such as `FIRMWARE.BIN`. A file of the same name is replaced. |
 | `len` | Bytes of the uploaded file to write. |
 | `abort` | `true` stops a running flash. |
@@ -4596,13 +4616,15 @@ The image for `dfu` and `teensy` is a binary with its start `address` (the SDK c
 | Field | Description |
 |---|---|
 | `running` | A flash is in progress. While it runs, captures, DAC playback, uploads and updates are refused with BP0048. |
-| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done`. `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. |
-| `done`, `total` | Sectors (`uf2`, `file`) or blocks (`dfu`, `teensy`) written, of all. |
-| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12/FAT16 file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error, the board is not a Teensy in its loader, ...). |
+| `protocol` | `avr`: the bootloader found, `avr109`, `stk500v1` or `stk500v2`. `samd`: `sam-ba`. `esp`: the chip, such as `ESP32-S3`. Empty otherwise. |
+| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done`. `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. `avr` and `samd`: `start`, `touch`, `reattach`, `reset`, `sync`, `info`, `erase`, `write`, `verify`, `leave`, `done`. `esp`: `reset`, then the ESP32 flasher's phases (`sync`, `data`, `md5`, ...). |
+| `done`, `total` | Sectors (`uf2`, `file`), blocks (`dfu`, `teensy`, `esp`) or bytes (`avr`, `samd`: written, then verified) of all. |
+| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12/FAT16 file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error, the board is not a Teensy in its loader, no bootloader answered on the serial port, what the board holds is not the image, the image would overwrite the bootloader, ...). |
 
-The pod keeps `usb_host` on while a flash runs. The flash logic runs from the pod's W25Q (`xip`),
-so it needs the `xip` blob of the running firmware. Refusals: BP0084 (`usb_flash_refused`, arg
-`why`: host mode off, no drive mounted or device attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
+The pod keeps `usb_host` on while a flash runs. The flash logic of every mode but `esp` runs from
+the pod's W25Q (`xip`), so it needs the `xip` blob of the running firmware; `esp` uses the same
+flasher as `esp_flash`, and is refused while another ESP32 flash runs. Refusals: BP0084 (`usb_flash_refused`, arg
+`why`: host mode off, no drive mounted, device or serial port attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
 code), BP0048 (the storage bus is busy).
 
 ### `xip` — code that runs from the W25Q

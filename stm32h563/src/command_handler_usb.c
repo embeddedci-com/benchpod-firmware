@@ -113,6 +113,9 @@ void handle_usb_host(int conn_id, const char *json)
  *   {"cmd":"usb_flash","mode":"file","name":"FIRMWARE.BIN","len":N}  drag-and-drop (DAPLink, ...)
  *   {"cmd":"usb_flash","mode":"dfu","address":"0x08000000","len":N} USB DFU / ST DfuSe
  *   {"cmd":"usb_flash","mode":"teensy","address":0,"len":N[,"block":512]}  Teensy HalfKay
+ *   {"cmd":"usb_flash","mode":"avr","len":N}                       Arduino AVR bootloaders
+ *   {"cmd":"usb_flash","mode":"samd","address":"0x2000","len":N}   Arduino SAMD bootloader
+ *   {"cmd":"usb_flash","mode":"esp","address":0,"len":N}           ESP32 ROM over USB serial
  *   optional "leave":false (dfu, teensy): stay in the loader
  *   {"cmd":"usb_flash"}                                            the state
  *   {"cmd":"usb_flash","abort":true}
@@ -126,13 +129,13 @@ static void usb_flash_reply(int conn_id)
 {
     usb_flash_status_t st;
     usb_flash_status(&st);
-    char data[320];
+    char data[384];
     snprintf(data, sizeof(data),
              "{\"running\":%s,\"have_result\":%s,\"mode\":\"%s\",\"name\":\"%s\",\"len\":%lu,"
-             "\"address\":%lu,\"phase\":\"%s\",\"done\":%lu,\"total\":%lu,\"result\":\"%s\",\"ok\":%s,"
-             "\"ms\":%lu}",
+             "\"address\":%lu,\"protocol\":\"%s\",\"phase\":\"%s\",\"done\":%lu,\"total\":%lu,"
+             "\"result\":\"%s\",\"ok\":%s,\"ms\":%lu}",
              st.running ? "true" : "false", st.have_result ? "true" : "false", st.mode, st.name,
-             (unsigned long)st.len, (unsigned long)st.address, st.phase, (unsigned long)st.done,
+             (unsigned long)st.len, (unsigned long)st.address, st.protocol, st.phase, (unsigned long)st.done,
              (unsigned long)st.total, st.result,
              (!st.running && st.have_result && st.rc == 0) ? "true" : "false", (unsigned long)st.ms);
     send_ok_str(conn_id, data);
@@ -145,7 +148,7 @@ void handle_usb_flash(int conn_id, const char *json)
     if (!bp_json_get(json, "mode", mode, sizeof(mode))) { usb_flash_reply(conn_id); return; }
     usb_flash_params_t p = {0};
     int m = usb_flash_mode_from_name(mode);
-    if (m < 0) { bp_err_usb_flash_refused(conn_id, "mode must be uf2, file, dfu or teensy"); return; }
+    if (m < 0) { bp_err_usb_flash_refused(conn_id, "mode must be uf2, file, dfu, teensy, avr, samd or esp"); return; }
     p.mode = (uint8_t)m;
     (void)bp_json_get(json, "name", p.name, sizeof(p.name));
     char v[16] = {0};
