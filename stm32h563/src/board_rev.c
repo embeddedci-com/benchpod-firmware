@@ -15,7 +15,7 @@
 
 /* The bands are in board_rev.h (board_rev_decide): v3 2850..3400 mV and v3r2 2450..2849 mV;
    v3r4 is told by ratios to VREF+, not a mV band: PA3 at 95.0..99.5 % and the second strap
-   (PC3) at 40..60 %. */
+   (PF12) at 40..60 %. */
 
 static int s_rev      = BOARD_REV_UNKNOWN;
 static int s_strap_mv = -1;

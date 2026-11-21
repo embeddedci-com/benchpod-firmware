@@ -127,7 +127,7 @@ LEASE_SRCS := test_lease_gate.c ../src/lease_gate.c ../src/cmd_tier.c ../src/bp_
 LEASELOCAL_SRCS := test_lease_local.c ../src/lease_local.c ../src/cmd_tier.c ../src/bp_json.c
 ADCPOOL_SRCS := test_adc_pool.c ../src/adc_pool.c
 CMDTIER_SRCS := test_cmd_tier.c ../src/cmd_tier.c ../src/bp_json.c
-LANCLIENTS_SRCS := test_lan_clients.c ../src/lan_clients.c
+LANCLIENTS_SRCS := test_lan_clients.c ../src/lan_clients.c ../src/bp_json.c
 CMDGATE_SRCS := test_cmd_gate.c ../src/cmd_gate.c ../src/cmd_tier.c ../src/bp_json.c ../src/bp_errors.c
 # The command_handler modules, each on its own with the modules around it faked in the test
 # (shim_ch: the HAL tick/reset they call).
