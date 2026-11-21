@@ -342,7 +342,7 @@ static void handle_work(cmd_work_t *w) {
     case WK_ESP_FLASH:                    /* Wi-Fi found no esp-hosted image on the C3 */
         if (heavy_or_claimed()) {
             if (!s_esp_flash_deferred)
-                printf("[hw] ESP32-C3 flash deferred: a capture, upload or update owns the PSRAM bus\n");
+                LOG_W("[hw] ESP32-C3 flash deferred: a capture, upload or update owns the PSRAM bus\n");
             s_esp_flash_deferred = true;
             break;
         }
@@ -384,17 +384,17 @@ static void ice40_idle_check(uint32_t now) {
     const recovery_action_t a = recovery_poll(&s_rcv, now, fail_ms, 0, &no_resets);
     if (a == RECOVERY_ICE40_RELOAD) {
         recovery_done(&s_rcv, a, now, &no_resets);
-        printf("[hw] recovery: the iCE40 has not answered for %lu s, reloading it from its flash\n",
-               (unsigned long)(fail_ms / 1000u));
+        LOG_W("[hw] recovery: the iCE40 has not answered for %lu s, reloading it from its flash\n",
+              (unsigned long)(fail_ms / 1000u));
         const int rc = ice40_reload();
         const bool alive = rc == 0 && signal_engine_refresh_version();
         dac_quad_boot();                                    /* outputs parked, as at boot */
         if (dac_limits_get()->enabled) (void)dac_limits_park_now();
-        printf("[hw] recovery: iCE40 reload %s, gateware v%u\n", alive ? "ok" : "FAILED",
-               (unsigned)signal_engine_fpga_version());
+        LOG_W("[hw] recovery: iCE40 reload %s, gateware v%u\n", alive ? "ok" : "FAILED",
+              (unsigned)signal_engine_fpga_version());
         if (alive) s_ping_fail_since = 0;
     } else if (recovery_exhausted(&s_rcv, now, fail_ms, no_resets)) {
-        printf("[hw] recovery: the iCE40 still does not answer and the reload limit is reached\n");
+        LOG_W("[hw] recovery: the iCE40 still does not answer and the reload limit is reached\n");
     }
 }
 #endif
@@ -421,7 +421,7 @@ static void worker_task(void *arg) {
         apply_parked_teardowns(); /* closes/resets that did not fit in the queue */
         if (s_esp_flash_deferred && !heavy_or_claimed()) {   /* the bus is free again */
             s_esp_flash_deferred = false;
-            printf("[hw] running the deferred ESP32-C3 flash\n");
+            LOG_I("[hw] running the deferred ESP32-C3 flash\n");
             start_esp_flash();
         }
         c3_update_poll();         /* an esp update: start writing it into the C3 when due */
@@ -436,8 +436,8 @@ static void worker_task(void *arg) {
             uint32_t n = g_malloc_failures;
             if (n != seen) {
                 LOG_E("[heap] %lu allocation failure(s) so far (free %u, min %u)\n",
-                       (unsigned long)n, (unsigned)xPortGetFreeHeapSize(),
-                       (unsigned)xPortGetMinimumEverFreeHeapSize());
+                      (unsigned long)n, (unsigned)xPortGetFreeHeapSize(),
+                      (unsigned)xPortGetMinimumEverFreeHeapSize());
                 seen = n;
             }
         }
@@ -467,10 +467,10 @@ bool hw_worker_is_current(void) {
 
 void hw_worker_init(void) {
     s_q = xQueueCreate(HW_WORK_QUEUE_DEPTH, sizeof(cmd_work_t));
-    if (!s_q) { printf("[hw] worker queue alloc failed\n"); return; }
+    if (!s_q) { LOG_E("[hw] worker queue alloc failed\n"); return; }
     if (xTaskCreate(worker_task, "hw", 3072, NULL,
                     tskIDLE_PRIORITY + 1, &s_task) != pdPASS) {
-        printf("[hw] worker task create failed\n");
+        LOG_E("[hw] worker task create failed\n");
         return;
     }
 }

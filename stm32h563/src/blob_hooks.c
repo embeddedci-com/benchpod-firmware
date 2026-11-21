@@ -8,10 +8,11 @@
 #include "dac_quad.h"
 #include "i2c_bus.h"
 #include <stdio.h>
+#include "bp_log.h"
 
 void blob_store_on_installed(blob_id_t id)
 {
-    printf("[blob] %s installed\n", blob_name(id));
+    LOG_I("[blob] %s installed\n", blob_name(id));
     switch (id) {
     case BLOB_GW0:
     case BLOB_GW1:

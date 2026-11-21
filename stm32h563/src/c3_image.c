@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include "bp_log.h"
 
 typedef struct {
     uint32_t magic;          /* C3_IMAGE_REC_MAGIC */
@@ -83,7 +84,7 @@ static int write_rec(const c3_rec_t *r)
     if (w25q_erase_sector(C3_IMAGE_REC_ADDR) != 0 ||
         w25q_program(C3_IMAGE_REC_ADDR, (const uint8_t *)&w, sizeof(w)) != 0) {
         s_rec_valid = false;   /* half written reads as no record: back to the legacy view */
-        printf("[c3] could not record the ESP32-C3's image\n");
+        LOG_W("[c3] could not record the ESP32-C3's image\n");
         return -1;
     }
     s_rec = w;

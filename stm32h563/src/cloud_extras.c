@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "bp_log.h"
 
 /* The company CA as installed (PEM, NUL-terminated), heap; NULL = none. Written by the worker,
    read by the net task inside cloud_extras_ca_pem() under a critical section. */
@@ -81,7 +82,7 @@ static void ca_reject(const char *why) {
     s_ca_error = why;
     taskEXIT_CRITICAL();
     if (old) vPortFree(old);
-    printf("[cloud] company CA %s: ignored, the cloud link uses the built-in roots only\n", why);
+    LOG_W("[cloud] company CA %s: ignored, the cloud link uses the built-in roots only\n", why);
 }
 
 static void load_ca_locked(void) {
@@ -109,7 +110,7 @@ static void load_ca_locked(void) {
     if (old) vPortFree(old);
     if (why) {
         vPortFree(ca);
-        printf("[cloud] company CA %s: ignored, the cloud link uses the built-in roots only\n", why);
+        LOG_W("[cloud] company CA %s: ignored, the cloud link uses the built-in roots only\n", why);
     }
 }
 
@@ -132,8 +133,8 @@ void cloud_extras_load(void) {
         w25q_close();
     }
     if (s_ca || s_proxy.host[0])
-        printf("[cloud] company CA %s, proxy %s\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "none"),
-               s_proxy.host[0] ? s_proxy.host : "none");
+        LOG_I("[cloud] company CA %s, proxy %s\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "none"),
+              s_proxy.host[0] ? s_proxy.host : "none");
     s_ready = true;
 }
 
@@ -182,7 +183,7 @@ void cloud_extras_ca_changed(void) {
         load_ca_locked();
         w25q_session_close();
     }
-    printf("[cloud] company CA %s: reconnecting\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "removed"));
+    LOG_I("[cloud] company CA %s: reconnecting\n", s_ca ? "installed" : (s_ca_error ? s_ca_error : "removed"));
     /* After the reply: this command may have come in over the link being reloaded. */
     net_cloud_reload_after_reply();
 }
@@ -325,7 +326,7 @@ const char *cloud_extras_proxy_set(const char *spec, const char *user, const cha
     taskENTER_CRITICAL();
     s_proxy = p;
     taskEXIT_CRITICAL();
-    printf("[cloud] proxy %s%s: reconnecting\n", p.host[0] ? "set to " : "cleared", p.host);
+    LOG_I("[cloud] proxy %s%s: reconnecting\n", p.host[0] ? "set to " : "cleared", p.host);
     /* After the reply: this command may have come in over the link being reloaded. */
     net_cloud_reload_after_reply();
     return NULL;

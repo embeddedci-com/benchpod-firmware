@@ -27,6 +27,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include "bp_log.h"
 
 /* Standard STM32 flash unlock keys (not in the CMSIS device header). */
 #define OTA_FLASH_KEY1 0x45670123u
@@ -269,8 +270,8 @@ int ota_commit(void) {
     uint32_t total    = ota_size();
     uint32_t nsectors = (total + (FLASH_SECTOR_BYTES - 1u)) / FLASH_SECTOR_BYTES;
 
-    printf("[ota] committing %lu bytes (%lu sectors) — do NOT power off\n",
-           (unsigned long)total, (unsigned long)nsectors);
+    LOG_I("[ota] committing %lu bytes (%lu sectors) — do NOT power off\n",
+          (unsigned long)total, (unsigned long)nsectors);
     /* A copy that survives a power cut, for the bootloader planned next. Before the bus grab
        below: it takes the bus itself (w25q_open). Never blocks the install. */
     (void)ota_store_fw_copy();
@@ -288,13 +289,13 @@ int ota_commit(void) {
        flashed is exactly what was verified. */
     if (ota_reverify_held() != 0) {
         psram_bus_release();
-        printf("[ota] commit refused: %s\n", ota_error());
+        LOG_W("[ota] commit refused: %s\n", ota_error());
         return -1;
     }
     if (nsectors > OTA_MAX_SECTORS) {
         psram_bus_release();
-        printf("[ota] commit refused: %lu sectors, more than %u\n",
-               (unsigned long)nsectors, (unsigned)OTA_MAX_SECTORS);
+        LOG_W("[ota] commit refused: %lu sectors, more than %u\n",
+              (unsigned long)nsectors, (unsigned)OTA_MAX_SECTORS);
         return -1;
     }
     /* Per-sector CRCs of the hashed image, read through the HAL path (bus still held). */
@@ -306,7 +307,7 @@ int ota_commit(void) {
         memset(s_sector, 0xFF, sizeof(s_sector));
         if (psram_read(OTA_PSRAM_BASE + base, s_sector, len) != 0) {
             psram_bus_release();
-            printf("[ota] commit refused: PSRAM read failed at sector %lu\n", (unsigned long)sct);
+            LOG_E("[ota] commit refused: PSRAM read failed at sector %lu\n", (unsigned long)sct);
             return -1;
         }
         s_sector_crc[sct] = ram_crc32(s_sector, FLASH_SECTOR_BYTES);
@@ -316,8 +317,8 @@ int ota_commit(void) {
     if (ram_commit_all(nsectors, total, s_sector) != 0) {   /* returns only if refused */
         boot_guard_planned_reset(false);
         psram_bus_release();
-        printf("[ota] commit refused: the raw PSRAM read does not match the verified image; "
-               "nothing was erased\n");
+        LOG_W("[ota] commit refused: the raw PSRAM read does not match the verified image; "
+              "nothing was erased\n");
         return -1;
     }
     return -1;                                    /* unreachable */

@@ -8,6 +8,7 @@
 #include "blob_store.h"
 #include "mbedtls/sha256.h"
 #include "w25q.h"
+#include "bp_log.h"
 
 static uint8_t       *s_doc;      /* heap, s_idx->doc_len bytes; NULL when empty */
 /* The index lives on the heap too (about 900 bytes): RAM has no room for it in .bss. Until
@@ -26,7 +27,7 @@ static bool load_slot(blob_id_t id, uint8_t **out, wiring_index_t *idx) {
     *out = NULL;
     if (!in || !in->present || in->len == 0 || in->len > WIRING_DOC_MAX) return false;
     if (blob_store_verify(id) != 0) {
-        printf("[wiring] slot %s fails its hash: ignored\n", blob_name(id));
+        LOG_W("[wiring] slot %s fails its hash: ignored\n", blob_name(id));
         return false;
     }
     uint8_t *buf = pvPortMalloc(in->len);
@@ -36,7 +37,7 @@ static bool load_slot(blob_id_t id, uint8_t **out, wiring_index_t *idx) {
         if (blob_store_read((void *)(uintptr_t)id, off, buf + off, n) != 0) { vPortFree(buf); return false; }
     }
     if (!wiring_doc_parse(buf, in->len, idx)) {
-        printf("[wiring] slot %s holds no valid profiles: ignored\n", blob_name(id));
+        LOG_W("[wiring] slot %s holds no valid profiles: ignored\n", blob_name(id));
         vPortFree(buf);
         return false;
     }
@@ -47,11 +48,11 @@ static bool load_slot(blob_id_t id, uint8_t **out, wiring_index_t *idx) {
 void wiring_store_load(void) {
     if (!s_idx) {
         wiring_index_t *idx = pvPortMalloc(sizeof(*idx));
-        if (!idx) { printf("[wiring] out of memory: no wiring profiles\n"); return; }
+        if (!idx) { LOG_E("[wiring] out of memory: no wiring profiles\n"); return; }
         s_idx = idx;
     }
     (void)wiring_doc_parse(NULL, 0, s_idx);   /* empty until a copy loads */
-    if (w25q_open() != 0) { printf("[wiring] W25Q does not answer: no wiring profiles\n"); return; }
+    if (w25q_open() != 0) { LOG_W("[wiring] W25Q does not answer: no wiring profiles\n"); return; }
     const blob_id_t ids[2] = { BLOB_WIRING_A, BLOB_WIRING_B };
     int best = -1;
     uint32_t best_seq = 0;
@@ -73,9 +74,9 @@ void wiring_store_load(void) {
         }
     }
     w25q_close();
-    printf("[wiring] %u profile(s)%s%s\n", (unsigned)s_idx->count,
-           s_idx->def != WIRING_NO_DEFAULT ? ", default " : "",
-           s_idx->def != WIRING_NO_DEFAULT ? s_idx->e[s_idx->def].name : "");
+    LOG_I("[wiring] %u profile(s)%s%s\n", (unsigned)s_idx->count,
+          s_idx->def != WIRING_NO_DEFAULT ? ", default " : "",
+          s_idx->def != WIRING_NO_DEFAULT ? s_idx->e[s_idx->def].name : "");
 }
 
 static int mem_src(void *ctx, uint32_t off, uint8_t *buf, uint32_t n) {
@@ -102,7 +103,7 @@ wiring_store_rc_t wiring_store_apply(const wiring_op_t *op, wiring_result_t *why
     int rc = blob_store_write(target, (uint32_t)n, s_seq + 1u, sha, mem_src, out);
     w25q_session_close();
     if (rc != 0) {
-        printf("[wiring] writing slot %s failed (%d): profiles unchanged\n", blob_name(target), rc);
+        LOG_E("[wiring] writing slot %s failed (%d): profiles unchanged\n", blob_name(target), rc);
         vPortFree(out);
         return WIRING_STORE_IO;
     }

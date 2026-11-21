@@ -166,9 +166,9 @@ void dac_poll(void) {
         if (heavy_owner_conn() == conn && !heavy_in_flight()) {
             heavy_release(conn);
             if (!replay_in_psram) replay_len = 0;    /* adc_buf16 is free for captures again */
-            printf("[cmd] conn %d uploaded a waveform but did not replay it within %u s: gate released%s\n",
-                   conn, (unsigned)(LOADED_HOLD_MS / 1000u),
-                   replay_in_psram ? " (the PSRAM upload stays replayable)" : ", upload dropped");
+            LOG_I("[cmd] conn %d uploaded a waveform but did not replay it within %u s: gate released%s\n",
+                  conn, (unsigned)(LOADED_HOLD_MS / 1000u),
+                  replay_in_psram ? " (the PSRAM upload stays replayable)" : ", upload dropped");
         }
     }
 
@@ -180,9 +180,9 @@ void dac_poll(void) {
        stall, error out, return the conn to JSON, release the gate and clear state. */
     if (load_bin_conn >= 0 && time_reached(load_bin_deadline)) {
         int conn = load_bin_conn;
-        printf("[cmd] load_bin timeout — conn %d stalled at %u/%u bytes (no data for %u ms)\n",
-               conn, (unsigned)load_bin_have, (unsigned)load_bin_total,
-               (unsigned)LOAD_BIN_TIMEOUT_MS);
+        LOG_W("[cmd] load_bin timeout — conn %d stalled at %u/%u bytes (no data for %u ms)\n",
+              conn, (unsigned)load_bin_have, (unsigned)load_bin_total,
+              (unsigned)LOAD_BIN_TIMEOUT_MS);
         /* Wedge diag: snapshot the cloud link NOW (30 s in — 60 s before the idle timeout would),
            logged net-task-side.  sndbuf==0 ⇒ the pod's send path is backed up (its ACKs aren't
            leaving ⇒ server stops sending); sndbuf healthy + old ms_since_rx ⇒ the server/Cloudflare
@@ -414,8 +414,8 @@ static void dac_psram_verify_log(uint32_t base, uint32_t total_bytes) {
         if (v > smax) smax = v;
     }
     LOG_D("[dac] staged %u samples in PSRAM @0x%06lX  first=0x%04X min=0x%04X max=0x%04X  %s\n",
-           (unsigned)nsamp, (unsigned long)base, first, smin, smax,
-           (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)");
+          (unsigned)nsamp, (unsigned long)base, first, smin, smax,
+          (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)");
 }
 
 /* `load_bin` — arm a raw binary upload of a host waveform.  Unlike the chunked
@@ -561,7 +561,7 @@ void handle_replay(int conn_id, const char *json) {
     unsigned long rate = (unsigned long)signal_engine_dac_replay_rate_hz();
     if (replay_in_psram) {
         LOG_D("[dac] replay armed (deep/PSRAM): %u samples @ %lu S/s%s\n",
-               (unsigned)samples, rate, co);
+              (unsigned)samples, rate, co);
     } else {
         uint16_t first = adc_buf16[0], smin = 0xFFFF, smax = 0;
         for (size_t i = 0; i < samples; i++) {
@@ -570,8 +570,8 @@ void handle_replay(int conn_id, const char *json) {
             if (v > smax) smax = v;
         }
         LOG_D("[dac] replay armed: %u samples @ %lu S/s  first=0x%04X min=0x%04X max=0x%04X  %s%s\n",
-               (unsigned)samples, rate, first, smin, smax,
-               (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)", co);
+              (unsigned)samples, rate, first, smin, smax,
+              (smin == smax) ? "FLAT — no DAC signal, check the source" : "varying (ok)", co);
     }
 
     /* "cotrig" lets the host know the DAC start was DEFERRED to the next capture (it is not driving
