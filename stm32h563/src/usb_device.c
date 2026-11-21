@@ -27,6 +27,7 @@
 #if defined(BENCHPOD_USB_HOST)
 #include "usb_host.h"
 #include "usb_msc.h"
+#include "usb_serial.h"
 #include "board_caps.h"
 #endif
 #include "console_io.h"
@@ -518,6 +519,7 @@ static void usb_task(void *arg)
         if (s_host_port != USB_HOST_PORT_NONE) {
             tuh_task_ext(1, false);
             usb_msc_pump();   /* a sector request from the hw worker (usb_msc.h) */
+            usb_serial_pump(); /* the hosted board's serial port (usb_serial.h) */
             continue;
         }
 #endif

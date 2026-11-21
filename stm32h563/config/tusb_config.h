@@ -37,8 +37,8 @@
 #define CFG_TUD_NCM_IN_NTB_N         2
 
 
-/* Host (USB_HOST=1 builds only): one device straight on the port, no hub, no class drivers yet (the pod reads the
-   descriptors itself). The enumeration buffer holds a configuration descriptor: a longer
+/* Host (USB_HOST=1 builds only): one device straight on the port, no hub, mass storage and serial class drivers (the pod reads
+   the other descriptors itself). The enumeration buffer holds a configuration descriptor: a longer
    one still enumerates, only the interface list in usb_host is cut. */
 #if defined(BENCHPOD_USB_HOST)
 #define BOARD_TUH_RHPORT         0
@@ -49,6 +49,15 @@
 #define CFG_TUH_HUB              0
 #define CFG_TUH_ENDPOINT_MAX     4
 #define CFG_TUH_MSC              1   /* a USB drive to flash (usb_msc.h, usb_flash.h) */
+#define CFG_TUH_CDC              1   /* a USB serial port to flash over (usb_serial.h, usb_flash.h) */
+#define CFG_TUH_CDC_FTDI         1   /* boards with a USB-serial chip instead of native USB */
+#define CFG_TUH_CDC_CP210X       1
+#define CFG_TUH_CDC_CH34X        1
+#define CFG_TUH_CDC_RX_BUFSIZE   256
+#define CFG_TUH_CDC_TX_BUFSIZE   256
+/* 115200 8N1 when a serial port mounts (the CH34x driver takes it for its init too); the DTR/RTS
+   lines stay low (no reset) until a flash sets them. */
+#define CFG_TUH_CDC_LINE_CODING_ON_ENUM       { 115200, CDC_LINE_CODING_STOP_BITS_1, CDC_LINE_CODING_PARITY_NONE, 8 }
 #endif
 
 #endif /* TUSB_CONFIG_H */
