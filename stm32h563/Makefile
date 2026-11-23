@@ -241,6 +241,12 @@ C_SOURCES := \
   src/c3_update.c \
   src/esp_rom_job.c \
   src/esp_dut_flash.c \
+  src/prog_flash.c \
+  src/prog_updi.c \
+  src/prog_pic.c \
+  src/prog_c2.c \
+  src/prog_tpi.c \
+  src/prog_pdi.c \
   src/esp_part_table.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \
