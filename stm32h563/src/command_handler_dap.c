@@ -15,6 +15,7 @@
 #include "signal_engine.h"   /* fpga_swd_*, fpga_spi_armed */
 #include "la_pins.h"
 #include "dap.h"
+#include "prog_flash.h"
 #include "swd_ll.h"
 #include "jtag_ll.h"
 #include "gw_caps.h"
@@ -267,6 +268,9 @@ void handle_dap_start(int conn_id, const char *json) {
     char pv[8] = {0};
     bool jtag_first = have_jtag && (!have_swd ||
                       (json_get_value(json, "port", pv, sizeof(pv)) && strcmp(pv, "jtag") == 0));
+
+    /* A prog_flash job holds the engine (two-wire) or the DAP's scratch buffer (UPDI). */
+    if (prog_flash_busy()) { bp_err_bus_engine_busy(conn_id, jtag_first ? "jtag" : "swd"); return; }
 
     /* Claim every pin BEFORE touching the FPGA: la_bank.v gives the engine the highest priority,
        so arming over a running UART proxy or sensor used to silently take the line away.  A pin

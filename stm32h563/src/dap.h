@@ -47,4 +47,7 @@ uint8_t dap_port(void);
  * is its length.  Writes the response (starting with the echoed command id, or
  * 0xFF for an unknown command) into `resp` (capacity >= DAP_PACKET_SIZE) and
  * returns the response length in bytes. */
-size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t resp_cap);
+size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t resp_cap);/* The DAP's recording buffer, idle while no DAP session runs (prog_flash borrows it). */
+void *dap_scratch(size_t *len);
+
+

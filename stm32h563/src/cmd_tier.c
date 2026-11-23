@@ -170,6 +170,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "spi_stream", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stream), NULL },
     { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash), NULL },
     { { "esp_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_esp_flash), NULL },
+    { { "prog_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_prog_flash), NULL },
     { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir), NULL },
     { { "lease_acquire", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_acquire), NULL },
     { { "lease_renew", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_renew), NULL },

@@ -40,6 +40,7 @@
 #include "dac_quad.h"      /* the ADC low range keeps the +-12 V output within +-5 V */
 #include "i2c_bus.h"       /* adc_range_get */
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
+#include "prog_flash.h"      /* and a flash over a chip's programming pins (prog_flash_busy) */
 #include "esp_dut_flash.h"   /* so does an ESP32 DUT flash (esp_dut_flash_busy) */
 #include "xip_session.h"   /* a W25Q code session holds the bus */
 #if defined(BENCHPOD_USB_HOST)
@@ -232,7 +233,7 @@ bool heavy_in_flight(void) {
     /* A C3 flash reads its image from the W25Q block by block with the gateware's PSRAM masters
        stopped, so it holds off captures, uploads and updates like they hold off each other. */
     return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING ||
-           esp_rom_flash_busy() || esp_dut_flash_busy() || xip_session_active()
+           esp_rom_flash_busy() || esp_dut_flash_busy() || prog_flash_busy() || xip_session_active()
 #if defined(BENCHPOD_USB_HOST)
            || usb_flash_busy()   /* the esp mode reads the staged image without an XIP session */
 #endif
@@ -261,6 +262,9 @@ const char *bus_busy_reason(void) {
         return bp_tag_storage_bus_busy("busy: a board on the USB host port is being flashed (usb_flash); "
                                        "try again when it ends", "a flash over USB is running");
 #endif
+    if (prog_flash_busy())
+        return bp_tag_storage_bus_busy("busy: a chip is being flashed over its programming pins (prog_flash); "
+                                       "try again when it ends", "a target is being flashed (prog_flash)");
     if (esp_dut_flash_busy())
         return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
                                        "it ends", "a target is being flashed (esp_flash)");

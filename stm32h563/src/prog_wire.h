@@ -9,8 +9,9 @@
  * bytes in order, so the timing between two calls is one feed byte (measure: plan step 0), not a
  * fixed bit period. Rules for the protocols:
  *  - Leave the clock HIGH at every flush and every delay longer than a few us: C2 resets the chip
- *    after a 20 us low, PDI after ~100 us. prog_wire_flush() refuses (returns -1) when the clock
- *    is low at the flush, except inside a reset the protocol asked for (prog_wire_delay_low_us).
+ *    after a 20 us low, PDI after ~100 us. A long clock low is only right where the protocol means
+ *    a reset (C2); the host tests check the longest low outside it.
+ *  - delay_us() sends what is queued first, then waits.
  *  - Samples come back in order, one per prog_wire_sample(), after the flush.
  *
  * UPDI drives one pin through the UART engine in half duplex (open drain, 8E2): the byte calls
@@ -43,9 +44,11 @@ typedef struct {
     void (*uart_rx_clear)(void *io);
 } prog_wire_ops_t;
 
-/* Real ops on the pod (prog_wire.c): two-wire on (clk, data) LA channels, or UPDI on `data`. */
-int  prog_wire_open_2w(prog_wire_ops_t *ops, unsigned clk_ch, unsigned data_ch);
-int  prog_wire_open_uart(prog_wire_ops_t *ops, unsigned data_ch);
+/* Real ops on the pod (prog_wire.c): two-wire on (clk, data) LA channels (fpga_swd_arm's rc:
+   -2 = the engine is in use), or UPDI on `data` (claims the pin itself; err says why not). */
+#define PROG_WIRE_MEM 360u   /* bytes of state the caller provides (mem, 4-byte aligned) */
+int  prog_wire_open_2w(prog_wire_ops_t *ops, void *mem, unsigned clk_ch, unsigned data_ch);
+int  prog_wire_open_uart(prog_wire_ops_t *ops, void *mem, unsigned data_ch, char *err, size_t cap);
 void prog_wire_close(prog_wire_ops_t *ops);
 
 #endif /* PROG_WIRE_H */

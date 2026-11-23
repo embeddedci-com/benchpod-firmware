@@ -76,7 +76,12 @@ uint8_t dap_port(void) { return s_port; }
 
 /* batching state (see the batching section below) */
 #define REC_MAX 128u
-static swd_op_t  s_ops[REC_MAX];
+/* The recording buffer is used only inside one dap_process() call. prog_flash (prog_job.c) borrows
+   it while no DAP session is open: the two exclude each other (dap_start and prog_flash_start
+   both refuse while the other runs), so it costs no RAM of its own. */
+static union { swd_op_t ops[REC_MAX]; uint32_t raw[REC_MAX * sizeof(swd_op_t) / 4u]; } s_rec_buf;
+#define s_ops (s_rec_buf.ops)
+void *dap_scratch(size_t *len) { *len = sizeof(s_rec_buf); return &s_rec_buf; }
 static uint8_t  *s_dst[REC_MAX];     /* where a read's value goes (NULL: discarded) */
 static uint16_t  s_cnt_at[REC_MAX];  /* the command's transfer count when the op was issued */
 static uint8_t  *s_rp_at[REC_MAX];   /* ... and its response write position */

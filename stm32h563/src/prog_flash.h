@@ -101,4 +101,37 @@ extern const prog_proto_t prog_proto_c2;
 extern const prog_proto_t prog_proto_tpi;
 extern const prog_proto_t prog_proto_pdi;
 
+/* ---- the job (prog_flash.c), on the hw worker ---- */
+
+typedef enum { PROG_OP_INFO = 0, PROG_OP_START } prog_op_t;
+
+typedef struct {
+    const prog_proto_t *proto;
+    uint8_t  op;              /* prog_op_t */
+    uint8_t  clk, data;       /* LA channels (UPDI: data only) */
+    uint8_t  mem, erase;
+    uint32_t addr, len;
+    uint16_t page;
+    uint32_t baud, flags;
+    uint8_t  expect_id[8];    /* compared with the chip's ID when expect_len > 0 */
+    uint8_t  expect_len;
+    bool     run;             /* let the chip start its program at the end */
+} prog_params_t;
+
+/* Claims the pins, checks the staged upload, starts the job. 0 = started; < 0 = err says why. */
+int  prog_flash_start(const prog_params_t *p, char *err, size_t cap);
+void prog_flash_poll(void);     /* hw worker loop: one bounded step */
+void prog_flash_abort(void);
+bool prog_flash_busy(void);
+
+typedef struct {
+    bool        running, have_result;
+    const char *op, *proto, *phase, *result;   /* result NULL while running */
+    uint32_t    done, total, at_addr, ms;
+    uint8_t     id[8], id_len;
+    int         rc;
+} prog_status_t;
+void prog_flash_status(prog_status_t *st);
+const char *prog_rc_str(int rc);
+
 #endif /* PROG_FLASH_H */
