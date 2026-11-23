@@ -16,10 +16,12 @@
  *   0x1E0000  slots WIRING-A and WIRING-B: the pod's wiring profiles, two copies so a power
  *             loss during a save keeps the previous ones (wiring_store.h)        2 x 32 KB
  *   0x1F0000  free
- *   0x200000  slot ESP: ESP32-C3 esp-hosted image          4 MB (the C3's own flash size)
+ *   0x200000  slot ESP, retired: older firmware kept a copy of the ESP32-C3 image here (4 MB). The
+ *             C3's image now goes straight into the C3; `esp` in blob_status describes what the C3
+ *             runs (c3_image.h). Only the record sector at 0x5FF000 is still used.
  *   0x200000  slot XIP, inside the old ESP slot: code that runs straight from the W25Q
- *             (xip_image.h), 256 KB. Only on boards that can map the W25Q and have no C3
- *             (blob_store_set_xip_listed), so it never shares the sectors with an esp image.
+ *             (xip_image.h), 256 KB. On every board that can run W25Q code
+ *             (blob_store_set_xip_listed), with or without a C3.
  *   0x240000  slot XIP_PROG, the second code image (the pin programmers of prog_flash), 256 KB,
  *             listed with the XIP slot.
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
