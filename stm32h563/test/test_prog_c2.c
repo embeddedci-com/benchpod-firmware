@@ -652,7 +652,7 @@ static const setup_row_t k_rows[] = {
     { 0x28, 0xAD, 4, {{0xB6,0x90},{0xFF,0x80},{0xEF,0x02},{0xA9,0x03}}, true },      /* UB2, F38x */
     { 0x25, 0xB4, 4, {{0xB6,0x40},{0xFF,0x80},{0xEF,0x02},{0xA9,0x04}}, true },      /* SB1 (direct) */
     { 0x16, 0xB4, 3, {{0xA7,0x00},{0xB2,0x8F},{0xA9,0x00}}, true },                  /* SB2 (direct) */
-    { 0x77, 0xB4, 3, {{0xFF,0x80},{0xEF,0x02},{0xA9,0x00}}, false },                 /* not in the table */
+    { 0x77, 0xB4, 0, {{0}}, false },                                                     /* not in the table: no setup */
 };
 
 static void test_device_setup(void) {
@@ -692,13 +692,13 @@ static void test_device_setup(void) {
     CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
     CHECK(r->chip.nsfr == 0 && r->chip.unprepared == 1);
     free(r);
-    /* an unknown ID is still programmed (common EFM8 sequence, FPDAT 0xB4) and says so in the phase */
+    /* an unknown ID is still programmed (no setup, FPDAT 0xB4): no SFR of another family is written */
     r = malloc(sizeof *r); rig_init(r);
     r->chip.devid = 0x77;
     CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
     r->ctx.addr = 0; r->ctx.len = 16;
     CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
-    CHECK(r->chip.nsfr == 3);
+    CHECK(r->chip.nsfr == 0);
     free(r);
 }
 

@@ -22,10 +22,10 @@
  * monitor, flash timing, clock): EFM8 BB1/BB2/BB3/LB1/UB1/UB2/SB1/SB2, keyed by device ID. The IDs
  * that collide with C8051F families (0x30 F85x, 0x25 F99x, 0x16 F92x, 0x28 F38x) have the same
  * sequence. Other C8051F rows are not in the table (flash is tight): ctx->flags C2_FLAG_NO_SETUP
- * skips it. An ID that is not in the table is not refused: it gets the common EFM8 sequence and
- * FPDAT 0xB4 (the phase reads "setup-default" while it runs). EFM8BB5x (BB50/51/52) is not in AN127
- * Rev 1.4; its device ID and C2 page size are unconfirmed (SDK: 2 KB flash page, and no VDM0CN at
- * SFR 0xFF), so give it ctx->page and C2_FLAG_NO_SETUP from the host until it is measured. */
+ * skips it. An ID that is not in the table is not refused: it gets no setup (writing SFRs of the
+ * wrong family could hit unrelated registers) and FPDAT 0xB4. EFM8BB5x (BB50/51/52) is not in
+ * AN127 Rev 1.4; its device ID and C2 page size are unconfirmed (SDK: 2 KB flash page, and no
+ * VDM0CN at SFR 0xFF), so the host passes ctx->page until it is measured on the bench. */
 #include "prog_flash.h"
 #include "prog_c2.h"
 #include <string.h>
@@ -239,7 +239,8 @@ static const c2_op_t k_seq_ub2[]  = { {0xB6, 0x90}, {0xFF, 0x80}, {0xEF, 0x02}, 
 static const c2_op_t k_seq_sb1[]  = { {0xB6, 0x40}, {0xFF, 0x80}, {0xEF, 0x02}, {0xA9, 0x04}, OPS_END };
 static const c2_op_t k_seq_sb2[]  = { {0xA7, 0x00}, {0xB2, 0x8F}, {0xA9, 0x00}, OPS_END };
 
-/* Returns the sequence for a device ID; *known is false for the fallback (common EFM8 sequence). */
+static const c2_op_t k_seq_none[] = { OPS_END };
+/* Returns the sequence for a device ID; *known is false for an ID not in the table (no setup). */
 static const c2_op_t *seq_for(uint8_t dev, bool *direct, bool *known) {
     *direct = false; *known = true;
     switch (dev) {
@@ -247,7 +248,7 @@ static const c2_op_t *seq_for(uint8_t dev, bool *direct, bool *known) {
     case 0x28: return k_seq_ub2;
     case 0x25: *direct = true; return k_seq_sb1;
     case 0x16: *direct = true; return k_seq_sb2;
-    default: *known = false; return k_seq_efm8;
+    default: *known = false; return k_seq_none;
     }
 }
 
@@ -273,7 +274,7 @@ static int ensure_setup(prog_ctx_t *ctx) {
     if (st->setup_done || (ctx->flags & C2_FLAG_NO_SETUP)) return PROG_OK;
     bool direct, known;
     const c2_op_t *q = seq_for(ctx->id[0], &direct, &known);
-    ctx->phase = known ? "setup" : "setup-default";
+    ctx->phase = known ? "setup" : "setup-none";
     for (int rc; q->sfr || q->val != 0xFF; q++) {
         if (q->sfr == 0) { ctx->w->delay_us(ctx->w->io, 5); continue; }
         rc = direct ? direct_write(ctx, q->sfr, q->val) : sfr_write(ctx, q->sfr, q->val);
