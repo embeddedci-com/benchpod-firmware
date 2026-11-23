@@ -1,7 +1,8 @@
 /* Host test for prog_c2.c against a bit-level model of a C2 chip (prog_sim.h).
  *
  * The model follows the C2 frames cycle by cycle: it latches host bits on the rising clock edge and
- * drives its own bits after the falling edge. It has the registers DEVICEID/REVID/FPCTL/FPDAT, the
+ * drives its own bits after the RISING edge too (AN127 1.4), so a host that samples while the clock
+ * is low reads the previous bit. It has the registers DEVICEID/REVID/FPCTL/FPDAT, the
  * FPI (device erase with its confirm bytes, page erase, block read/write, derivative), a flash with
  * AND-only programming, a lock byte, and knobs for the failure cases. */
 #include "prog_flash.h"
@@ -20,7 +21,7 @@ static int failures;
 #define AR_FPCTL   0x02u
 
 typedef enum { S_START, S_INS, S_ARW, S_ARR, S_LEN, S_DW, S_WAIT, S_DR, S_STOP } c2st_t;
-typedef enum { F_IDLE, F_CONF, F_PAGE, F_PARAMS_R, F_PARAMS_W, F_DATA_W } fpist_t;
+typedef enum { F_IDLE, F_CONF, F_PAGE, F_PAGE0, F_PARAMS_R, F_PARAMS_W, F_DATA_W, F_DIRECT } fpist_t;
 
 typedef struct {
     /* configuration */
@@ -32,6 +33,8 @@ typedef struct {
     bool     hang_erase;         /* device erase never finishes */
     bool     hang_wait;          /* the WAIT field never ends */
     uint32_t wait_cycles;        /* WAIT cycles before the chip is ready */
+    uint8_t  need[6][2]; unsigned nneed;   /* (SFR, value) pairs required before erase/write */
+    uint8_t  refuse_stat;        /* nonzero: page erase answers this status for the 0x00 byte */
 
     /* memory */
     uint8_t  flash[FLASH_SZ];
@@ -42,6 +45,8 @@ typedef struct {
     uint32_t max_low_us;         /* longest clock-low that was not a reset */
     unsigned last_page;
     uint8_t  fpctl_log[8]; unsigned nfpctl;
+    uint8_t  sfr_log[16][2]; unsigned nsfr;   /* writes to other C2 addresses and direct writes */
+    unsigned unprepared;         /* erase/write commands that came before the required setup */
 
     /* C2 state */
     int      prev_clk;
@@ -56,6 +61,18 @@ typedef struct {
 
 static void out_push(c2m_t *m, uint8_t b) { m->out[m->nout++] = b; }
 
+static void sfr_note(c2m_t *m, uint8_t a, uint8_t v) {
+    if (m->nsfr < 16) { m->sfr_log[m->nsfr][0] = a; m->sfr_log[m->nsfr][1] = v; m->nsfr++; }
+}
+static bool sfr_seen(const c2m_t *m, uint8_t a, uint8_t v) {
+    for (unsigned i = 0; i < m->nsfr; i++) if (m->sfr_log[i][0] == a && m->sfr_log[i][1] == v) return true;
+    return false;
+}
+static bool prepared(const c2m_t *m) {
+    for (unsigned i = 0; i < m->nneed; i++) if (!sfr_seen(m, m->need[i][0], m->need[i][1])) return false;
+    return true;
+}
+
 static void fpi_byte(c2m_t *m, uint8_t b) {
     switch (m->fs) {
     case F_IDLE:
@@ -64,10 +81,14 @@ static void fpi_byte(c2m_t *m, uint8_t b) {
         case 0x02:
             if (m->no_deriv) out_push(m, 0x01); else { out_push(m, 0x0D); out_push(m, m->deriv); }
             break;
-        case 0x03: out_push(m, 0x0D); m->fs = F_CONF; m->nconf = 0; m->np = 0; break;
+        case 0x03: if (!prepared(m)) m->unprepared++;
+            out_push(m, 0x0D); m->fs = F_CONF; m->nconf = 0; m->np = 0; break;
         case 0x06: out_push(m, m->locked ? 0x80 : 0x0D); if (!m->locked) { m->fs = F_PARAMS_R; m->np = 0; } break;
-        case 0x07: out_push(m, m->locked ? 0x80 : 0x0D); if (!m->locked) { m->fs = F_PARAMS_W; m->np = 0; } break;
-        case 0x08: out_push(m, m->locked ? 0x80 : 0x0D); if (!m->locked) m->fs = F_PAGE; break;
+        case 0x07: if (!prepared(m)) m->unprepared++;
+            out_push(m, m->locked ? 0x80 : 0x0D); if (!m->locked) { m->fs = F_PARAMS_W; m->np = 0; } break;
+        case 0x08: if (!prepared(m)) m->unprepared++;
+            out_push(m, m->locked ? 0x80 : 0x0D); if (!m->locked) m->fs = F_PAGE; break;
+        case 0x0A: out_push(m, 0x0D); m->fs = F_DIRECT; m->np = 0; break;
         default: out_push(m, 0x01); break;
         }
         break;
@@ -86,12 +107,22 @@ static void fpi_byte(c2m_t *m, uint8_t b) {
             }
         }
         break; }
-    case F_PAGE:
-        m->fs = F_IDLE;
-        m->erase_page++; m->last_page = b;
-        if ((b + 1u) * PAGE <= FLASH_SZ) memset(&m->flash[b * PAGE], 0xFF, PAGE);
-        m->busy_us = 3000;
+    case F_PAGE:                  /* the page number: accepted, the erase waits for the 0x00 byte */
+        m->last_page = b;
+        m->fs = F_PAGE0;
         out_push(m, 0x0D);
+        break;
+    case F_PAGE0:                 /* 0x00 starts the erase; the third status comes when it is done */
+        m->fs = F_IDLE;
+        if (m->refuse_stat) { out_push(m, m->refuse_stat); break; }
+        m->erase_page++;
+        if ((m->last_page + 1u) * PAGE <= FLASH_SZ) memset(&m->flash[m->last_page * PAGE], 0xFF, PAGE);
+        m->busy_us = 40000;
+        out_push(m, 0x0D);
+        break;
+    case F_DIRECT:                /* addr, length 1, data */
+        m->pbuf[m->np++] = b;
+        if (m->np == 3) { sfr_note(m, m->pbuf[0], m->pbuf[2]); m->fs = F_IDLE; }
         break;
     case F_PARAMS_R:
     case F_PARAMS_W:
@@ -133,6 +164,8 @@ static void dr_write_done(c2m_t *m, uint8_t v) {
     } else if (m->ar == m->fpdat_addr) {
         if (!m->enabled || m->enable_wait_us > 0 || m->busy_us > 0) { m->early_fpdat++; return; }
         fpi_byte(m, v);
+    } else if (m->ar != 0 && m->ar != 1) {
+        sfr_note(m, m->ar, v);
     }
 }
 
@@ -140,12 +173,26 @@ static void chip_reset(c2m_t *m) {
     m->resets++;
     m->st = S_START; m->nb = 0; m->ar = 0; m->drive = -1;
     m->enabled = false; m->fpctl_stage = 0; m->fs = F_IDLE; m->nout = m->oh = 0; m->busy_us = 0;
-    m->enable_wait_us = 0;
+    m->enable_wait_us = 0; m->nsfr = 0;
+}
+
+/* The chip's drive for the cycle that this rising edge starts: valid from the edge until the next
+   rising edge (the falling edge changes nothing), as AN127 1.4 has it. */
+static int drive_for(c2m_t *m) {
+    switch (m->st) {
+    case S_ARR: case S_DR: return (m->outv >> m->nb) & 1u;
+    case S_WAIT:
+        if (m->hang_wait) return 0;
+        if (m->wait_left > 0) { m->wait_left--; return 0; }
+        if (m->is_read && m->ar == m->fpdat_addr && !out_ready(m)) return 0;
+        return 1;
+    default: return -1;
+    }
 }
 
 static void rising(c2m_t *m, int bit) {
-    int drove = m->last_drive;
-    m->drive = -1;
+    int d = drive_for(m);
+    m->drive = d;
     switch (m->st) {
     case S_START: m->st = S_INS; m->nb = 0; m->acc = 0; break;
     case S_INS:
@@ -176,7 +223,7 @@ static void rising(c2m_t *m, int bit) {
         if (++m->nb == 8) { dr_write_done(m, (uint8_t)m->acc); m->st = S_WAIT; m->wait_left = m->wait_cycles; m->nb = 0; }
         break;
     case S_WAIT:
-        if (drove == 1) {
+        if (d == 1) {
             m->nb = 0;
             if (m->is_read) {
                 if (m->ar == 0) m->outv = m->devid;
@@ -192,27 +239,12 @@ static void rising(c2m_t *m, int bit) {
     }
 }
 
-static void falling(c2m_t *m) {
-    m->drive = -1;
-    switch (m->st) {
-    case S_ARR: case S_DR: m->drive = (m->outv >> m->nb) & 1u; break;
-    case S_WAIT:
-        if (m->hang_wait) m->drive = 0;
-        else if (m->wait_left > 0) { m->wait_left--; m->drive = 0; }
-        else if (m->is_read && m->ar == m->fpdat_addr && !out_ready(m)) m->drive = 0;
-        else m->drive = 1;
-        break;
-    default: break;
-    }
-    m->last_drive = m->drive;
-}
-
 static void m_on_pins(prog_sim_t *s, int clk, int pod_data) {
     c2m_t *m = s->chip;
     if (m->silent) return;
     if (clk == m->prev_clk) return;
     m->prev_clk = clk;
-    if (clk == 0) { m->low_us = 0; falling(m); }
+    if (clk == 0) m->low_us = 0;
     else {
         if (m->low_us >= 20) chip_reset(m);
         else {
@@ -258,6 +290,33 @@ static int rig_dst(void *job, uint32_t off, const uint8_t *buf, uint32_t n) {
     return 0;
 }
 
+/* A layer over the sim's ops that watches what the protocol queues, as the feed does: the clock
+   level at each sample, the set(1,..) bytes between a rising edge and the sample (each is one
+   feed byte, >= 40 ns assumed, so 3 give 120 ns), and the longest run of bytes queued with the
+   clock low (prog_wire.c flushes automatically only with the clock high, with 16 bytes of room). */
+static struct {
+    prog_wire_ops_t orig;
+    int clk; unsigned since, run, max_run, samples, low_samples, min_hold;
+} g_w;
+
+static void w_set(void *io, int clk, int d) {
+    if (clk) { g_w.since = g_w.clk ? g_w.since + 1 : 0; g_w.run = 0; }
+    else if (++g_w.run > g_w.max_run) g_w.max_run = g_w.run;
+    g_w.clk = clk;
+    g_w.orig.set(io, clk, d);
+}
+static void w_drive(void *io, bool on) {
+    if (!g_w.clk && ++g_w.run > g_w.max_run) g_w.max_run = g_w.run;
+    g_w.orig.data_drive(io, on);
+}
+static void w_sample(void *io) {
+    g_w.samples++;
+    if (!g_w.clk) g_w.low_samples++;
+    else if (g_w.since < g_w.min_hold) g_w.min_hold = g_w.since;
+    if (!g_w.clk && ++g_w.run > g_w.max_run) g_w.max_run = g_w.run;
+    g_w.orig.sample(io);
+}
+
 static void rig_init(rig_t *r) {
     memset(r, 0, sizeof *r);
     r->chip.devid = 0x32; r->chip.revid = 0x03; r->chip.deriv = 0x21;
@@ -267,6 +326,9 @@ static void rig_init(rig_t *r) {
     r->chip.wait_cycles = 2;
     memset(r->chip.flash, 0xFF, sizeof r->chip.flash);
     prog_sim_init(&r->sim, &r->ops, &k_model, &r->chip);
+    memset(&g_w, 0, sizeof g_w);
+    g_w.orig = r->ops; g_w.clk = 1; g_w.min_hold = 1000;
+    r->ops.set = w_set; r->ops.data_drive = w_drive; r->ops.sample = w_sample;
     r->ctx.w = &r->ops;
     r->ctx.page = PAGE;
     r->ctx.src = rig_src; r->ctx.dst = rig_dst; r->ctx.job = r;
@@ -318,6 +380,23 @@ static void test_enter(void) {
     r = malloc(sizeof *r); rig_init(r); r->chip.fpdat_addr = 0xAD; r->ctx.flags = 0xAD;
     CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
     CHECK(r->ctx.id_len == 3 && r->ctx.id[2] == 0x21);
+    free(r);
+}
+
+/* Reads come from the chip after the rising edge: sampled with the clock high, >= 3 feed bytes
+   (120 ns at the assumed 40 ns) after the edge, and no long clock-low run for an auto flush. */
+static void test_read_timing(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->ctx.id[0] == 0x32 && r->ctx.id[1] == 0x03);   /* a sample one bit early would differ */
+    r->ctx.addr = 0; r->ctx.len = 300;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_OK);
+    CHECK(memcmp(r->rd, r->chip.flash, 300) == 0);
+    CHECK(g_w.samples > 1000);
+    CHECK(g_w.low_samples == 0);
+    CHECK(g_w.min_hold >= 3);
+    CHECK(g_w.max_run <= 8);
+    check_pins(r);
     free(r);
 }
 
@@ -542,9 +621,124 @@ static void test_busy_chip(void) {
     free(r);
 }
 
+/* Page erase: page number, status, 0x00, third status after the erase (AN127 3.3). */
+static void test_erase_page_third_status(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    fill_chip(r, 0x00);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.erase = PROG_ERASE_PAGE; r->ctx.addr = 0x200; r->ctx.len = 1;
+    uint32_t t0 = r->sim.us;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->chip.erase_page == 1 && r->chip.flash[0x200] == 0xFF);   /* only the 0x00 byte erases */
+    CHECK(r->sim.us - t0 >= 40000);                                    /* waited for the third status */
+    CHECK(r->chip.early_fpdat == 0);
+    /* the chip refuses at the 0x00 byte: raw status reported, nothing erased */
+    r->chip.refuse_stat = 0x02;
+    r->ctx.addr = 0x400;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_E_PROTOCOL);
+    CHECK(r->ctx.at_addr == 0x02 && r->chip.flash[0x400] == 0x00);
+    r->chip.refuse_stat = 0;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK && r->chip.flash[0x400] == 0xFF);
+    check_pins(r);
+    free(r);
+}
+
+/* Device setup before erase/write (AN127 Table 3.6) keyed by the device ID. */
+typedef struct { uint8_t id, fpdat; unsigned n; uint8_t seq[5][2]; bool known; } setup_row_t;
+static const setup_row_t k_rows[] = {
+    { 0x30, 0xB4, 3, {{0xFF,0x80},{0xEF,0x02},{0xA9,0x00}}, true },                  /* BB1 */
+    { 0x32, 0xB4, 3, {{0xFF,0x80},{0xEF,0x02},{0xA9,0x00}}, true },                  /* BB2, UB1 */
+    { 0x34, 0xB4, 3, {{0xFF,0x80},{0xEF,0x02},{0xA9,0x00}}, true },                  /* BB3, LB1 */
+    { 0x28, 0xAD, 4, {{0xB6,0x90},{0xFF,0x80},{0xEF,0x02},{0xA9,0x03}}, true },      /* UB2, F38x */
+    { 0x25, 0xB4, 4, {{0xB6,0x40},{0xFF,0x80},{0xEF,0x02},{0xA9,0x04}}, true },      /* SB1 (direct) */
+    { 0x16, 0xB4, 3, {{0xA7,0x00},{0xB2,0x8F},{0xA9,0x00}}, true },                  /* SB2 (direct) */
+    { 0x77, 0xB4, 3, {{0xFF,0x80},{0xEF,0x02},{0xA9,0x00}}, false },                 /* not in the table */
+};
+
+static void test_device_setup(void) {
+    for (unsigned k = 0; k < sizeof k_rows / sizeof k_rows[0]; k++) {
+        const setup_row_t *row = &k_rows[k];
+        for (int op = 0; op < 3; op++) {              /* page erase, device erase, write */
+            rig_t *r = malloc(sizeof *r); rig_init(r);
+            r->chip.devid = row->id; r->chip.fpdat_addr = row->fpdat;
+            r->chip.nneed = row->n;
+            for (unsigned i = 0; i < row->n; i++) { r->chip.need[i][0] = row->seq[i][0]; r->chip.need[i][1] = row->seq[i][1]; }
+            CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+            CHECK(r->chip.nsfr == 0);                  /* entering touches no SFR */
+            r->ctx.addr = 0x200; r->ctx.len = 64;
+            r->ctx.erase = op == 1 ? PROG_ERASE_CHIP : PROG_ERASE_PAGE;
+            int rc = op == 2 ? run(PROTO.write, &r->ctx, NULL) : run(PROTO.erase, &r->ctx, NULL);
+            CHECK(rc == PROG_OK);
+            CHECK(r->chip.nsfr == row->n);
+            for (unsigned i = 0; i < row->n && i < r->chip.nsfr; i++)
+                CHECK(r->chip.sfr_log[i][0] == row->seq[i][0] && r->chip.sfr_log[i][1] == row->seq[i][1]);
+            CHECK(r->chip.unprepared == 0 && r->chip.early_fpdat == 0);
+            if (op == 2) CHECK(memcmp(&r->chip.flash[0x200], r->img, 64) == 0);   /* FPI works after the SFR writes */
+            /* a second call does not repeat the setup */
+            unsigned n = r->chip.nsfr;
+            r->ctx.erase = PROG_ERASE_PAGE;
+            CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK && r->chip.nsfr == n);
+            check_pins(r);
+            free(r);
+        }
+    }
+    /* reading needs none; the skip flag skips it */
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    r->chip.nneed = 1; r->chip.need[0][0] = 0xFF; r->chip.need[0][1] = 0x80;
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 16;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_OK && r->chip.nsfr == 0);
+    r->ctx.flags = C2_FLAG_NO_SETUP;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->chip.nsfr == 0 && r->chip.unprepared == 1);
+    free(r);
+    /* an unknown ID is still programmed (common EFM8 sequence, FPDAT 0xB4) and says so in the phase */
+    r = malloc(sizeof *r); rig_init(r);
+    r->chip.devid = 0x77;
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 16;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->chip.nsfr == 3);
+    free(r);
+}
+
+/* FPDAT is picked from the device ID (AN127 Table 3.5); a host flag overrides. */
+static void test_fpdat_from_id(void) {
+    static const struct { uint8_t id, fpdat; } t[] = {
+        {0x28, 0xAD}, {0x0F, 0xAD}, {0x18, 0xAD}, {0x19, 0xAD}, {0x1A, 0xAD},
+        {0x32, 0xB4}, {0x30, 0xB4}, {0x04, 0xB4}, {0x77, 0xB4}, {0x2A, 0xB4},
+    };
+    for (unsigned i = 0; i < sizeof t / sizeof t[0]; i++) {
+        rig_t *r = malloc(sizeof *r); rig_init(r);
+        r->chip.devid = t[i].id; r->chip.fpdat_addr = t[i].fpdat;
+        CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+        CHECK(r->ctx.id_len == 3 && r->ctx.id[2] == 0x21);       /* the derivative came through FPDAT */
+        CHECK(r->chip.early_fpdat == 0);
+        free(r);
+    }
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    r->chip.devid = 0x28; r->chip.fpdat_addr = 0xB4; r->ctx.flags = 0xB4;   /* flag wins over the ID */
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK && r->ctx.id_len == 3);
+    free(r);
+}
+
+/* The raw FPI status reaches the caller. */
+static void test_raw_status(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    r->chip.locked = true;
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 16;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_E_LOCKED && r->ctx.at_addr == 0x80);
+    r->ctx.at_addr = 0;
+    r->ctx.erase = PROG_ERASE_PAGE;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_E_LOCKED && r->ctx.at_addr == 0x80);
+    free(r);
+}
+
 int main(void) {
     CHECK(strcmp(PROTO.name, "c2") == 0);
     test_enter();
+    test_read_timing();
     test_no_answer();
     test_leave();
     test_erase_device();
@@ -553,6 +747,10 @@ int main(void) {
     test_verify_fail();
     test_lock();
     test_busy_chip();
+    test_erase_page_third_status();
+    test_device_setup();
+    test_fpdat_from_id();
+    test_raw_status();
     printf("test_prog_c2: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }

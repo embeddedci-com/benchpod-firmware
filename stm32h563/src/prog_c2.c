@@ -2,8 +2,11 @@
  *
  * Pins: C2CK = clk (also the chip's /RST), C2D = data. One C2 clock cycle ("strobe") is
  * set(0,d) set(0,d) set(1,d): two set() calls for the low phase (the C2 minimum is 80 ns), and the
- * clock is high at every flush and delay. The chip drives C2D after the falling edge; the host
- * samples while the clock is low. The pod never drives C2D while the chip may drive it.
+ * clock is high at every flush and delay. The chip drives C2D after the RISING edge of C2CK
+ * (AN127 1.4; AN127SW: STROBE_C2CK(); then read C2D): the host samples with the clock high, at
+ * least 120 ns after the edge. The feed byte time is not measured yet (prog_wire.h); this file
+ * assumes >= 40 ns per byte, so an input cycle queues SAMPLE_HOLD = 3 more set(1,..) bytes between
+ * the edge and the sample. The pod never drives C2D while the chip may drive it.
  *
  * Frames (AN124), all LSB first:
  *   START (1 cycle, data released), INS (2), then
@@ -12,7 +15,17 @@
  *   data write     INS 01: LEN(2)=0, DATA(8), WAIT (chip drives 0 until done, then 1), STOP
  *   data read      INS 00: LEN(2)=0, WAIT, DATA(8) driven by the chip, STOP
  * Flash programming goes through the FPI: bytes written to / read from FPDAT, with InBusy/OutReady
- * polled through address reads (AN127). Every FPI command is answered with 0x0D when accepted. */
+ * polled through address reads (AN127). Every FPI command is answered with 0x0D when accepted.
+ * An FPI answer other than 0x0D fails the call (PROG_E_LOCKED when the first answer of an erase or
+ * block command refuses, else PROG_E_PROTOCOL) and ctx->at_addr holds that raw status byte.
+ * Before the first erase or write, the device-specific setup of AN127 3.8 Table 3.6 runs (VDD
+ * monitor, flash timing, clock): EFM8 BB1/BB2/BB3/LB1/UB1/UB2/SB1/SB2, keyed by device ID. The IDs
+ * that collide with C8051F families (0x30 F85x, 0x25 F99x, 0x16 F92x, 0x28 F38x) have the same
+ * sequence. Other C8051F rows are not in the table (flash is tight): ctx->flags C2_FLAG_NO_SETUP
+ * skips it. An ID that is not in the table is not refused: it gets the common EFM8 sequence and
+ * FPDAT 0xB4 (the phase reads "setup-default" while it runs). EFM8BB5x (BB50/51/52) is not in AN127
+ * Rev 1.4; its device ID and C2 page size are unconfirmed (SDK: 2 KB flash page, and no VDM0CN at
+ * SFR 0xFF), so give it ctx->page and C2_FLAG_NO_SETUP from the host until it is measured. */
 #include "prog_flash.h"
 #include "prog_c2.h"
 #include <string.h>
@@ -21,15 +34,17 @@
 #define AR_REVID 0x01u
 #define AR_FPCTL 0x02u
 
-#define FPCTL_HALT   0x02u
-#define FPCTL_RESET  0x04u
-#define FPCTL_ENABLE 0x01u
+/* FPCTL key sequence 0x02, 0x04, 0x01 (AN127 2.1; AN127SW names: RESET, CORE_RESET, HALT) */
+#define FPCTL_RESET      0x02u
+#define FPCTL_CORE_RESET 0x04u
+#define FPCTL_HALT       0x01u
 
 #define FPI_GET_DERIV 0x02u
 #define FPI_ERASE_DEV 0x03u
 #define FPI_BLOCK_RD  0x06u
 #define FPI_BLOCK_WR  0x07u
 #define FPI_PAGE_ERASE 0x08u
+#define FPI_DIRECT_WR 0x0Au
 #define FPI_OK        0x0Du
 
 #define STAT_OUT_READY 0x01u
@@ -37,7 +52,9 @@
 
 #define BLOCK_MAX   256u
 #define PIECE       32u      /* bytes staged on the stack at a time */
-#define POLL_LONG   20000u   /* polls (about 50 us apart) before PROG_E_TIMEOUT */
+#define POLL_LONG   20000u   /* polls (about 50 us apart) before PROG_E_TIMEOUT: ~1 s of delay plus the
+                                polls themselves; the device erase takes up to 20 s (AN127SW) */
+#define SAMPLE_HOLD 3u       /* set(1,..) bytes after the rising edge before a sample (>= 120 ns) */
 #define POLL_SHORT  200u
 #define WAIT_MAX    255u     /* WAIT cycles before PROG_E_TIMEOUT */
 #define E_STAT      (-100)   /* internal: the FPI answered something other than 0x0D */
@@ -46,6 +63,7 @@ typedef struct {
     uint8_t  fpdat;        /* C2 address of FPDAT */
     uint8_t  ar;           /* address register selected now (0xFF: unknown) */
     uint8_t  e_init, w_init, r_init;
+    uint8_t  setup_done;   /* the device setup ran */
     uint16_t lim;          /* poll limit for FPI polls */
     uint32_t pos;          /* erase: next page; write/read: byte offset of the next block */
 } c2_state_t;
@@ -62,12 +80,12 @@ static void strobe(const prog_wire_ops_t *w, int d) {
     w->set(w->io, 1, d);
 }
 
-/* A cycle in which the chip drives C2D: sample while the clock is low. */
+/* A cycle in which the chip drives C2D: sample with the clock high, after the rising edge. */
 static void in_strobe(const prog_wire_ops_t *w) {
     w->set(w->io, 0, 1);
     w->set(w->io, 0, 1);
+    for (unsigned i = 0; i <= SAMPLE_HOLD; i++) w->set(w->io, 1, 1);   /* edge, then the hold */
     w->sample(w->io);
-    w->set(w->io, 1, 1);
 }
 
 static void put_bits(const prog_wire_ops_t *w, uint32_t v, unsigned n) {
@@ -191,12 +209,78 @@ static int fpi_get(prog_ctx_t *ctx, uint8_t *b) {
     return rc;
 }
 
-/* The answer to a command or a parameter list: 0x0D or E_STAT. */
+/* The answer to a command or a parameter list: 0x0D, or E_STAT with the raw byte in at_addr. */
 static int fpi_status(prog_ctx_t *ctx) {
     uint8_t b;
     int rc = fpi_get(ctx, &b);
     if (rc) return rc;
-    return b == FPI_OK ? PROG_OK : E_STAT;
+    if (b == FPI_OK) return PROG_OK;
+    ctx->at_addr = b;
+    return E_STAT;
+}
+
+/* ---- device tables (AN127 3.8, Tables 3.5 and 3.6) ---- */
+
+/* FPDAT: 0xAD on EFM8UB2 and 'F38x (0x28), 'F34x (0x0F), 'T62x/'T32x (0x18, 0x19; 0x1A in
+   AN127SW); 0xB4 on everything else, including IDs this table does not know. A host flag wins. */
+static uint8_t fpdat_for(uint8_t dev, uint32_t flags) {
+    if (flags & 0xFFu) return (uint8_t)flags;
+    if (dev == 0x28 || dev == 0x0F || (dev >= 0x18 && dev <= 0x1A)) return 0xADu;
+    return (uint8_t)PROG_C2_FPDAT_DEFAULT;
+}
+
+/* Setup sequences: (SFR, value) pairs, SFR 0 = wait 5 us, end at SFR 0 with value 0xFF.
+   Written with WriteSFR (address write, data write) or, on SB1/SB2 ("WriteDirect" in the table),
+   with the FPI direct write command. */
+typedef struct { uint8_t sfr, val; } c2_op_t;
+#define OPS_END { 0, 0xFF }
+static const c2_op_t k_seq_efm8[] = { {0xFF, 0x80}, {0, 0}, {0xEF, 0x02}, {0xA9, 0x00}, OPS_END };   /* BB1 BB2 BB3 LB1 UB1 */
+static const c2_op_t k_seq_ub2[]  = { {0xB6, 0x90}, {0xFF, 0x80}, {0xEF, 0x02}, {0xA9, 0x03}, OPS_END };
+static const c2_op_t k_seq_sb1[]  = { {0xB6, 0x40}, {0xFF, 0x80}, {0xEF, 0x02}, {0xA9, 0x04}, OPS_END };
+static const c2_op_t k_seq_sb2[]  = { {0xA7, 0x00}, {0xB2, 0x8F}, {0xA9, 0x00}, OPS_END };
+
+/* Returns the sequence for a device ID; *known is false for the fallback (common EFM8 sequence). */
+static const c2_op_t *seq_for(uint8_t dev, bool *direct, bool *known) {
+    *direct = false; *known = true;
+    switch (dev) {
+    case 0x30: case 0x32: case 0x34: return k_seq_efm8;
+    case 0x28: return k_seq_ub2;
+    case 0x25: *direct = true; return k_seq_sb1;
+    case 0x16: *direct = true; return k_seq_sb2;
+    default: *known = false; return k_seq_efm8;
+    }
+}
+
+static int sfr_write(prog_ctx_t *ctx, uint8_t a, uint8_t v) {
+    int rc = ar_write(ctx->w, a);
+    if (!rc) rc = dr_write(ctx->w, v);
+    ST(ctx)->ar = 0xFF;                  /* the address register no longer selects FPDAT */
+    return rc;
+}
+
+static int direct_write(prog_ctx_t *ctx, uint8_t a, uint8_t v) {
+    int rc = fpi_put(ctx, FPI_DIRECT_WR);
+    if (!rc) rc = fpi_status(ctx);
+    if (!rc) rc = fpi_put(ctx, a);
+    if (!rc) rc = fpi_put(ctx, 1);
+    if (!rc) rc = fpi_put(ctx, v);
+    return rc;
+}
+
+/* Before the first erase or write. A failed answer is a protocol error. */
+static int ensure_setup(prog_ctx_t *ctx) {
+    c2_state_t *st = ST(ctx);
+    if (st->setup_done || (ctx->flags & C2_FLAG_NO_SETUP)) return PROG_OK;
+    bool direct, known;
+    const c2_op_t *q = seq_for(ctx->id[0], &direct, &known);
+    ctx->phase = known ? "setup" : "setup-default";
+    for (int rc; q->sfr || q->val != 0xFF; q++) {
+        if (q->sfr == 0) { ctx->w->delay_us(ctx->w->io, 5); continue; }
+        rc = direct ? direct_write(ctx, q->sfr, q->val) : sfr_write(ctx, q->sfr, q->val);
+        if (rc) return rc == E_STAT ? PROG_E_PROTOCOL : rc;
+    }
+    st->setup_done = 1;
+    return PROG_OK;
 }
 
 /* ---- enter / leave ---- */
@@ -205,7 +289,6 @@ static int c2_enter(prog_ctx_t *ctx) {
     const prog_wire_ops_t *w = ctx->w;
     c2_state_t *st = ST(ctx);
     memset(ctx->state, 0, sizeof ctx->state);
-    st->fpdat = (ctx->flags & 0xFFu) ? (uint8_t)ctx->flags : (uint8_t)PROG_C2_FPDAT_DEFAULT;
     st->lim = POLL_LONG;
     ctx->phase = "enter";
     c2_reset(ctx);
@@ -219,12 +302,13 @@ static int c2_enter(prog_ctx_t *ctx) {
     if (rc) return rc == PROG_E_PROTOCOL ? rc : PROG_E_NO_ANSWER;
     if (dev == 0xFF || dev == 0x00) return PROG_E_NO_ANSWER;   /* a silent line reads ones (or zeros) */
     ctx->id[0] = dev; ctx->id[1] = rev; ctx->id_len = 2;
+    st->fpdat = fpdat_for(dev, ctx->flags);
 
     ctx->phase = "enter";
     rc = select_reg(ctx, AR_FPCTL);
-    if (!rc) rc = dr_write(w, FPCTL_HALT);
     if (!rc) rc = dr_write(w, FPCTL_RESET);
-    if (!rc) rc = dr_write(w, FPCTL_ENABLE);
+    if (!rc) rc = dr_write(w, FPCTL_CORE_RESET);
+    if (!rc) rc = dr_write(w, FPCTL_HALT);
     if (rc) return rc;
     w->delay_us(w->io, 20000);
 
@@ -258,9 +342,11 @@ static int range_ok(const prog_ctx_t *ctx) {
 
 /* Device erase needs the 0xDE 0xAD 0xA5 confirm bytes; it also unlocks a locked chip. */
 static int erase_device(prog_ctx_t *ctx) {
+    int rc = ensure_setup(ctx);
+    if (rc) return rc;
     ctx->phase = "erase";
     ctx->total = 1; ctx->done = 0;
-    int rc = fpi_put(ctx, FPI_ERASE_DEV);
+    rc = fpi_put(ctx, FPI_ERASE_DEV);
     if (!rc) rc = fpi_status(ctx);
     if (!rc) rc = fpi_put(ctx, 0xDE);
     if (!rc) rc = fpi_put(ctx, 0xAD);
@@ -279,13 +365,20 @@ static int erase_page(prog_ctx_t *ctx) {
     uint32_t first = ctx->addr / ctx->page, last = (ctx->addr + ctx->len - 1u) / ctx->page;
     if (last > 0xFFu) return PROG_E_ARGS;                 /* the page number is one byte */
     if (!st->e_init) { st->e_init = 1; st->pos = first; ctx->total = last - first + 1u; ctx->done = 0; }
+    int rc = ensure_setup(ctx);
+    if (rc) return rc;
     ctx->phase = "erase";
-    int rc = fpi_put(ctx, FPI_PAGE_ERASE);
+    rc = fpi_put(ctx, FPI_PAGE_ERASE);
     if (!rc) rc = fpi_status(ctx);
+    if (rc == E_STAT) return PROG_E_LOCKED;               /* a locked chip refuses page erase */
+    /* page number, status, then 0x00 starts the erase and the third status ends it (AN127 3.3:
+       up to 40 ms; the status poll below allows far more) */
     if (!rc) rc = fpi_put(ctx, (uint8_t)st->pos);
     if (!rc) rc = fpi_status(ctx);
-    if (rc == E_STAT) rc = PROG_E_LOCKED;                 /* a locked chip refuses page erase */
-    if (rc) return rc;
+    if (!rc) rc = fpi_put(ctx, 0x00);
+    if (!rc) rc = fpi_status(ctx);
+    if (rc == E_STAT) rc = PROG_E_PROTOCOL;
+    if (rc) { st->e_init = 0; return rc; }
     st->pos++;
     ctx->done = st->pos - first;
     if (st->pos > last) { st->e_init = 0; return PROG_OK; }
@@ -351,6 +444,8 @@ static int c2_write(prog_ctx_t *ctx) {
         for (uint32_t o = 0; o < ctx->len; o += block_len(ctx, o, true)) ctx->total++;
     }
     uint32_t off = st->pos, n = block_len(ctx, off, true), a = ctx->addr + off;
+    rc = ensure_setup(ctx);
+    if (rc) { st->w_init = 0; return rc; }
     ctx->phase = "write";
     rc = block_open(ctx, FPI_BLOCK_WR, a, n);
     for (uint32_t i = 0; !rc && i < n;) {
