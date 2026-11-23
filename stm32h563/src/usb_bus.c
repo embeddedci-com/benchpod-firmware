@@ -21,9 +21,10 @@ static uint16_t s_fn;
 static uint32_t s_t;
 static usb_bus_info_t s_info;
 
-/* THE resume register order, in one place (the bench iterates it). Stage 0 starts the resume
-   signaling, stage 1 ends it and lets the SOFs run again, stage 2 clears both bits without any
-   signaling (the clean-up of a bus that is not suspended, or a role change). */
+/* THE resume register order, in one place. Stage 0 starts the resume signaling (L2RES, held
+   RESUME_MS as ST's HAL_HCD_ResumePort does), stage 1 ends it and lets the SOFs run again, stage 2
+   clears the bits and flags without any signaling (the clean-up of a bus that is not suspended, or
+   a role change). Bench-verified on an Uno R3 (16U2): SOFs restart, the board answers, 5/5. */
 static void resume_regs(unsigned stage)
 {
     switch (stage) {
@@ -32,7 +33,12 @@ static void resume_regs(unsigned stage)
         break;
     default:  /* stages 1 and 2 */
         USB_DRD_FS->CNTR &= ~USB_CNTR_L2RES;
-        USB_DRD_FS->CNTR &= ~USB_CNTR_SUSPEN;
+        USB_DRD_FS->CNTR &= ~USB_CNTR_SUSPEN;   /* the hardware already cleared it during the K state */
+        /* Bench-found (Uno R3, 2026-11-23): the SOFs restart only once the SUSP and WKUP flags are
+           cleared too. The host driver masks those interrupts, so nobody else clears them; without
+           this the frame number stays frozen and the port is dead until host mode restarts.
+           ISTR is rc_w0: writing 0 clears a flag, writing 1 leaves it. */
+        USB_DRD_FS->ISTR = ~(uint32_t)(USB_ISTR_SUSP | USB_ISTR_WKUP);
         break;
     }
 }
