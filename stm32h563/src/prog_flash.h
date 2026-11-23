@@ -116,6 +116,7 @@ typedef struct {
     uint8_t  expect_id[8];    /* compared with the chip's ID when expect_len > 0 */
     uint8_t  expect_len;
     bool     run;             /* let the chip start its program at the end */
+    uint8_t  reset;           /* the chip's reset: 0 = the pod's reset pin, else an LA pin (open drain) */
 } prog_params_t;
 
 /* Claims the pins, checks the staged upload, starts the job. 0 = started; < 0 = err says why. */

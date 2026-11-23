@@ -76,7 +76,16 @@ static void release_pins(void)
         la_pins_release_fn(LA_FN_SWD_CLK);
         la_pins_release_fn(LA_FN_SWD_DIO);
     }
-    if (j.p.proto->uses_nrst) nrst_ctrl_assert(false);
+    if (j.p.proto->uses_nrst) {
+        uint8_t rst = j.p.reset;
+        if (rst) {
+            la_pins_set_level(rst, 1);
+            la_pins_release(rst);
+            (void)fpga_la_set(rst, la_pins_drive(rst));   /* back to high-Z */
+        } else {
+            nrst_ctrl_assert(false);
+        }
+    }
 }
 
 int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
@@ -93,9 +102,16 @@ int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
     _Static_assert(sizeof(work_t) <= 1024u, "work_t must fit the DAP scratch");
     if (scratch_len < sizeof(work_t)) { snprintf(err, cap, "no room for the job"); return -1; }
     if (!(pr->mems & (1u << p->mem))) { snprintf(err, cap, "%s cannot write that memory", pr->name); return -1; }
-    if (pr->uses_nrst && !nrst_ctrl_supported()) {
-        snprintf(err, cap, "this pod has no reset pin, which %s needs", pr->name); return -1;
+    if (pr->uses_nrst && !p->reset && !nrst_ctrl_supported()) {
+        snprintf(err, cap, "this pod has no reset pin: wire the chip's reset to an LA pin and pass reset");
+        return -1;
     }
+    uint8_t rst = pr->uses_nrst ? p->reset : 0;
+    if (rst && (rst == p->data || (!pr->uart && rst == p->clk))) {
+        snprintf(err, cap, "reset must be another pin than clk and data"); return -1;
+    }
+    if (rst && !la_pins_check_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, &rst, 1, 0, la_pull_mask_now(), err, cap))
+        return -1;
     uint32_t base = 0, staged = 0;
     if (p->op == PROG_OP_START) {
         if (p->len == 0) { snprintf(err, cap, "len must be more than 0"); return -1; }
@@ -129,6 +145,10 @@ int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
             else          snprintf(err, cap, "invalid clk or data pin");
             return -1;
         }
+    }
+    if (rst) {
+        la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, &rst, 1);   /* claimed released (high) */
+        prog_wire_reset_pin(&j.ops, rst);
     }
     if (p->op == PROG_OP_START) signal_engine_quiesce_psram_masters();
 

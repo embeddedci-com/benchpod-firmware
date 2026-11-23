@@ -6,6 +6,7 @@
  *   {"cmd":"prog_flash","op":"start","proto":"c2","clk":3,"data":4,"mem":"flash","addr":0,
  *    "len":8192,"page":512,"erase":"chip","expect_id":"0x30","baud":0,"flags":0,"run":true}
  *       writes the first len bytes a `load_bin` with "psram" staged and verifies them; poll status
+ * PIC and TPI take "reset": "nrst" (the pod's reset pin, the default) or an LA pin (open drain).
  *   {"cmd":"prog_flash","op":"status"}
  *   {"cmd":"prog_flash","op":"abort"}
  *
@@ -110,6 +111,9 @@ void handle_prog_flash(int conn_id, const char *json) {
     if (!p.proto) { send_error(conn_id, "missing or unknown proto (updi, pic, c2, tpi, pdi)"); return; }
     if (!get_la(conn_id, json, "data", &p.data)) return;
     if (!p.proto->uart && !get_la(conn_id, json, "clk", &p.clk)) return;
+    char rs[8] = {0};
+    if (bp_json_get(json, "reset", rs, sizeof(rs)) && rs[0] && strcmp(rs, "nrst") != 0 &&
+        !get_la(conn_id, json, "reset", &p.reset)) return;
     p.op = info ? PROG_OP_INFO : PROG_OP_START;
     p.run = true;
     if (has_key(json, "run")) p.run = bp_json_flag(json, "run");
