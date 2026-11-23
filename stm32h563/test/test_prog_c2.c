@@ -344,11 +344,81 @@ static void test_leave(void) {
     free(r);
 }
 
+static void fill_chip(rig_t *r, uint8_t v) { memset(r->chip.flash, v, sizeof r->chip.flash); }
+
+static void test_erase_device(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    fill_chip(r, 0x5A);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->chip.erase_dev == 1 && r->chip.bad_confirm == 0);
+    for (unsigned i = 0; i < FLASH_SZ; i++) if (r->chip.flash[i] != 0xFF) { CHECK(0); break; }
+    CHECK(r->ctx.done == 1 && r->ctx.total == 1);
+    CHECK(r->chip.early_fpdat == 0);
+
+    /* ERASE_NONE does nothing */
+    fill_chip(r, 0x11);
+    r->ctx.erase = PROG_ERASE_NONE;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->chip.flash[0] == 0x11 && r->chip.erase_dev == 1);
+    check_pins(r);
+    free(r);
+
+    /* the model refuses a wrong confirm sequence (so the pod's bytes are what erased the chip above) */
+    c2m_t m; memset(&m, 0, sizeof m); m.corrupt_at = -1; m.fpdat_addr = PROG_C2_FPDAT_DEFAULT;
+    memset(m.flash, 0x00, sizeof m.flash);
+    fpi_byte(&m, 0x03); fpi_byte(&m, 0xDE); fpi_byte(&m, 0xAD); fpi_byte(&m, 0xA6);
+    CHECK(m.bad_confirm == 1 && m.erase_dev == 0 && m.flash[0] == 0x00);
+
+    /* a device erase that never ends */
+    r = malloc(sizeof *r); rig_init(r); r->chip.hang_erase = true;
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_E_TIMEOUT);
+    check_pins(r);
+    free(r);
+}
+
+static void test_erase_page(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    fill_chip(r, 0x00);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.erase = PROG_ERASE_PAGE;
+    r->ctx.addr = 0x300; r->ctx.len = 0x400;        /* pages 1, 2, 3 (0x300..0x6FF) */
+    unsigned calls = 0;
+    CHECK(run(PROTO.erase, &r->ctx, &calls) == PROG_OK);
+    CHECK(calls == 3 && r->ctx.total == 3 && r->ctx.done == 3);
+    CHECK(r->chip.erase_page == 3 && r->chip.erase_dev == 0);
+    CHECK(r->chip.flash[0x1FF] == 0x00 && r->chip.flash[0x200] == 0xFF);
+    CHECK(r->chip.flash[0x7FF] == 0xFF && r->chip.flash[0x800] == 0x00);
+    CHECK(r->chip.early_fpdat == 0);
+
+    /* a second erase starts over */
+    r->ctx.addr = 0; r->ctx.len = 1;
+    CHECK(run(PROTO.erase, &r->ctx, &calls) == PROG_OK);
+    CHECK(calls == 1 && r->chip.flash[0] == 0xFF && r->chip.last_page == 0);
+
+    /* bad arguments */
+    r->ctx.page = 0; r->ctx.addr = 0; r->ctx.len = 16;
+    CHECK(PROTO.erase(&r->ctx) == PROG_E_ARGS);
+    r->ctx.page = PAGE; r->ctx.len = 0;
+    CHECK(PROTO.erase(&r->ctx) == PROG_E_ARGS);
+    r->ctx.addr = 0xFFF0; r->ctx.len = 0x20;
+    CHECK(PROTO.erase(&r->ctx) == PROG_E_ARGS);
+    r->ctx.addr = 0; r->ctx.len = 16; r->ctx.mem = PROG_MEM_EEPROM;
+    CHECK(PROTO.erase(&r->ctx) == PROG_E_ARGS);
+    check_pins(r);
+    free(r);
+}
+
 int main(void) {
     CHECK(strcmp(PROTO.name, "c2") == 0);
     test_enter();
     test_no_answer();
     test_leave();
+    test_erase_device();
+    test_erase_page();
     printf("test_prog_c2: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }

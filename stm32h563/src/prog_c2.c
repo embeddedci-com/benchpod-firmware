@@ -248,11 +248,62 @@ static void c2_leave(prog_ctx_t *ctx, bool run) {
     w->flush(w->io, &s, 0);
 }
 
+/* ---- erase ---- */
+
+static int range_ok(const prog_ctx_t *ctx) {
+    if (ctx->mem != PROG_MEM_FLASH && ctx->mem != PROG_MEM_CONFIG) return PROG_E_ARGS;
+    if (ctx->len == 0 || ctx->addr > 0x10000u || ctx->len > 0x10000u - ctx->addr) return PROG_E_ARGS;
+    return PROG_OK;
+}
+
+/* Device erase needs the 0xDE 0xAD 0xA5 confirm bytes; it also unlocks a locked chip. */
+static int erase_device(prog_ctx_t *ctx) {
+    ctx->phase = "erase";
+    ctx->total = 1; ctx->done = 0;
+    int rc = fpi_put(ctx, FPI_ERASE_DEV);
+    if (!rc) rc = fpi_status(ctx);
+    if (!rc) rc = fpi_put(ctx, 0xDE);
+    if (!rc) rc = fpi_put(ctx, 0xAD);
+    if (!rc) rc = fpi_put(ctx, 0xA5);
+    if (!rc) rc = fpi_status(ctx);
+    if (rc == E_STAT) rc = PROG_E_PROTOCOL;
+    if (rc) return rc;
+    ctx->done = 1;
+    return PROG_OK;
+}
+
+/* One page per call over [addr, addr+len). */
+static int erase_page(prog_ctx_t *ctx) {
+    c2_state_t *st = ST(ctx);
+    if (ctx->page == 0) return PROG_E_ARGS;
+    uint32_t first = ctx->addr / ctx->page, last = (ctx->addr + ctx->len - 1u) / ctx->page;
+    if (last > 0xFFu) return PROG_E_ARGS;                 /* the page number is one byte */
+    if (!st->e_init) { st->e_init = 1; st->pos = first; ctx->total = last - first + 1u; ctx->done = 0; }
+    ctx->phase = "erase";
+    int rc = fpi_put(ctx, FPI_PAGE_ERASE);
+    if (!rc) rc = fpi_status(ctx);
+    if (!rc) rc = fpi_put(ctx, (uint8_t)st->pos);
+    if (!rc) rc = fpi_status(ctx);
+    if (rc == E_STAT) rc = PROG_E_LOCKED;                 /* a locked chip refuses page erase */
+    if (rc) return rc;
+    st->pos++;
+    ctx->done = st->pos - first;
+    if (st->pos > last) { st->e_init = 0; return PROG_OK; }
+    return PROG_RUNNING;
+}
+
+static int c2_erase(prog_ctx_t *ctx) {
+    if (ctx->erase == PROG_ERASE_NONE) return PROG_OK;
+    if (ctx->erase == PROG_ERASE_CHIP) return erase_device(ctx);
+    int rc = range_ok(ctx);
+    return rc ? rc : erase_page(ctx);
+}
+
 static int c2_unsupported(prog_ctx_t *ctx) { (void)ctx; return PROG_E_UNSUPPORTED; }
 
 const prog_proto_t prog_proto_c2 = {
     .name = "c2", .uart = false, .uses_nrst = false,
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG),
-    .enter = c2_enter, .erase = c2_unsupported, .write = c2_unsupported, .read = c2_unsupported,
+    .enter = c2_enter, .erase = c2_erase, .write = c2_unsupported, .read = c2_unsupported,
     .leave = c2_leave,
 };
