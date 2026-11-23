@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 14
+revision = 15
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -935,3 +935,10 @@ firmware = "4.0.3"
 docs = "API.md#usb_flash--flash-a-board-over-usb"
 dated = "code"
 note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives, FAT12/FAT16), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
+
+[features.usb_check]
+rev = 15   # may be renumbered when another branch also takes 15 (merge one, renumber the other)
+firmware = "next"
+docs = "API.md#usb_check--check-the-boards-usb-firmware"
+dated = "code"
+note = "Checks of the board's own USB firmware on the USB host port, with its VBUS on eFuse 1: enumerate (power-on to pull-up, descriptor and mounted, min/avg/max over count cycles), power (eFuse 1 current against bMaxPower), suspend (suspended current against 2.5 mA, resume, still answers), reset (port resets, re-enumeration time), replug (VBUS dropouts of 5 to 500 ms). Background job (poll usb_check, abort). BP0085 refused (why), BP0086 not powered from eFuse 1."

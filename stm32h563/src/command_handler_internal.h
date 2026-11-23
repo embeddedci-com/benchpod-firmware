@@ -171,6 +171,7 @@ void handle_usb_cc(int conn_id, const char *json);
 void handle_usb_host(int conn_id, const char *json);
 /* Flash a board that shows up as a USB drive (command_handler_usb.c, USB_HOST=1 builds). */
 void handle_usb_flash(int conn_id, const char *json);
+void handle_usb_check(int conn_id, const char *json);
 
 /* Digital v3r3's analog module link (command_handler_module.c, module_link.h). */
 void handle_module(int conn_id, const char *json);

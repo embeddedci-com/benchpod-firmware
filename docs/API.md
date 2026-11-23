@@ -323,6 +323,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
 | `usb_flash` | T1 | Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32 | object | no |
+| `usb_check` | T1 | Check the board's own USB firmware: enumeration time after power-on, current against bMaxPower and in suspend, bus resets, short VBUS dropouts | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -4638,6 +4639,81 @@ the pod's W25Q (`xip`), so it needs the `xip` blob of the running firmware; `esp
 flasher as `esp_flash`, and is refused while another ESP32 flash runs. Refusals: BP0084 (`usb_flash_refused`, arg
 `why`: host mode off, no drive mounted, device or serial port attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
 code), BP0048 (the storage bus is busy).
+
+### `usb_check` — check the board's USB firmware
+
+Firmware after 4.0.3 (feature `usb_check`). The pod hosts the board on its USB port
+([`usb_host`](#usb_host--usb-host-mode)) and, with the board's USB power (VBUS) wired to target-power
+eFuse 1 (the internal 5 V rail, `target_power` eFuse 1, switched on), it can measure what a computer
+cannot. A check runs in the background; poll `usb_check` for its state and result. Only one check
+runs at a time, and `usb_flash` is refused while one runs (and the other way round).
+
+```json
+{"cmd": "usb_check", "test": "enumerate", "count": 10, "off_ms": 500}
+{"cmd": "usb_check", "test": "power", "duration_ms": 3000}
+{"cmd": "usb_check", "test": "suspend", "settle_ms": 200, "duration_ms": 1000}
+{"cmd": "usb_check", "test": "reset", "count": 20}
+{"cmd": "usb_check", "test": "replug", "count": 10, "off_ms": [5, 20, 100, 500]}
+{"cmd": "usb_check"}
+{"cmd": "usb_check", "abort": true}
+```
+
+| Argument | Description |
+|---|---|
+| `test` | `enumerate`, `power`, `suspend`, `reset` or `replug` (below). Without `test` the command reads the state. |
+| `count` | `enumerate` (default 10) and `reset` (default 20): cycles, 1 to 200. `replug` (default 10): cycles per length, 1 to 100. |
+| `off_ms` | `enumerate`: how long eFuse 1 stays off, 50 to 10000, default 500. `replug`: a number or a list of up to 6 dropout lengths in ms, 1 to 5000, default `[5, 20, 100, 500]`. |
+| `timeout_ms` | `enumerate`, `reset`, `replug`: how long to wait for the board after each cycle, 500 to 30000, default 5000. |
+| `duration_ms` | `power` (default 3000) and `suspend` (default 1000): the measuring time, 200 to 60000. |
+| `settle_ms` | `suspend`: the wait after the bus is suspended before measuring, 20 to 5000, default 200. |
+| `abort` | `true` stops a running check. eFuse 1 and the bus are put back as they were. |
+
+The tests:
+
+- `enumerate`: power-cycles the board through eFuse 1 (off for `off_ms`) `count` times and times
+  power-on to its pull-up on the port (`connect_ms`), to its device descriptor (`descriptor_ms`)
+  and to mounted (`mount_ms`), each as `min`, `avg`, `max`. A cycle fails when the board never
+  shows its pull-up (`no_connect`), enumeration stalls (`stuck`) or it is not mounted within
+  `timeout_ms` (`timeout`). Times have about 2 ms resolution. If the board still sits on the bus
+  2.5 s after the rail went off, the check stops with the error `not_powered_by_efuse1`.
+- `power`: samples eFuse 1's current for `duration_ms` and compares the average (`avg_ua`) with the
+  configuration's `bMaxPower` (`limit_ma`). `verdict`: `ok`, `avg_over` (the average is above the
+  limit), `peak_over` (a sample is more than 25 % above it: USB allows a short inrush) or `no_limit`
+  (the configuration declares 0 mA). Pass is `ok`. The monitor's resolution is about 0.1 mA.
+- `suspend`: stops the SOFs so the board enters suspend, waits `settle_ms`, measures eFuse 1's
+  current for `duration_ms` and compares the average with the 2.5 mA a bus-powered device may draw
+  suspended (`limit_ua`; `current`: `ok`, `avg_over`, or `skipped` when the board's configuration
+  says it is self-powered). Then it resumes the bus and checks the board still answers a
+  GET_STATUS request. `suspend_ok` is false when the pod could not suspend the bus (`susprdy` is
+  the peripheral's report, `sof_stopped` whether the frame counter really stood still). `resume`
+  is `signaling` when resume signaling restarted the bus and `failed` when it did not; then the
+  pod resets the bus and `recovered_by_reset` says whether the board came back. Pass needs a
+  working suspend, a resume by signaling, a board that answers and the current within the limit.
+- `reset`: issues `count` port resets to the mounted board and times each until it is mounted
+  again (`reenumerate_ms`). Failures are `timeout` and `stuck`. `identity_changed` counts boards
+  that came back with another vendor or product ID, which also fails the check.
+- `replug`: for each length in `off_ms`, switches eFuse 1 off for that long `count` times. Each
+  cycle ends `reenumerated` (the board dropped off the bus and enumerated again), `stayed` (it never
+  left the bus and still answers a GET_STATUS request: its capacitance carried it through) or
+  `failed` (not back within `timeout_ms`, stuck, or mounted for the host but not answering). Pass
+  needs no `failed`. Dropout lengths have about 2 ms of jitter.
+
+The reply (about 1 KB at most) is the same for every test:
+
+| Field | Description |
+|---|---|
+| `running`, `have_result` | A check is in progress; the last one has ended. Neither before the first check. |
+| `test`, `phase`, `done`, `total`, `ms` | The test, its phase (`power_off`, `power_on`, `gap`, `reset`, `sample`, `suspend`, `settle`, `measure`, `resume`, `check`, `recover`, `done`), progress (cycles, or ms for `power` and `suspend`) and the time so far. |
+| `pass`, `error` | When it ended: the verdict, and why it stopped early: `aborted`, `host_stopped`, `not_powered_by_efuse1`, `no_device`, `monitor_error`, `efuse_error`, `bus_busy`, `bus_timeout`. Empty when the check ran to its end. |
+| `result` | The numbers of the test (above), with the board's `vid` and `pid`. |
+
+Currents are in uA, the eFuse 1 monitor's reading (the board's own draw, not the pod's). Suspend
+uses the peripheral's own suspend and resume registers, which TinyUSB's host driver does not use;
+the bus is resumed at the end of every check. eFuse 1 is put back on if the check turned it off.
+
+Refusals: BP0085 (`usb_check_refused`, arg `why`: bad argument, host mode off, no board enumerated,
+a USB flash, another check or a power profile running), BP0086 (`usb_check_no_efuse_power`: eFuse 1
+is off, for every test but `reset`).
 
 ### `xip` — code that runs from the W25Q
 

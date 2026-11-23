@@ -5,6 +5,7 @@
 #include "usb_msc.h"
 #include "usb_serial.h"
 #include "usb_host.h"
+#include "usb_check.h"
 #include "msc_flash.h"
 #include "ctrl_flash.h"
 #include "ser_flash.h"
@@ -296,6 +297,7 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
 {
     *why = NULL;
     if (s.running) { *why = "a USB flash is already running"; return -1; }
+    if (usb_check_busy()) { *why = "a USB check is running (usb_check)"; return -1; }
     free_ctx();
     if (s.ctx) { *why = "the last USB request has not finished yet"; return -1; }
     if (p->mode >= USB_FLASH_MODES) { *why = "mode must be uf2, file, dfu, teensy, avr, samd or esp"; return -1; }

@@ -1105,3 +1105,28 @@ sdk = "start USB host mode and wait until the board's drive is mounted, upload t
 cli = "start USB host mode and wait until the board's drive is mounted, upload the file, then flash again"
 mcp = "start USB host mode (usb_host), wait until the board's drive is mounted, upload the file, then call usb_flash again"
 web = "Start USB host mode and wait until the board's drive shows up, then try again."
+
+[BP0085]
+name = "usb_check_refused"
+area = "usb"
+since = "next"
+args = { why = "str" }
+message = "The pod cannot run the USB check: {why}"
+cause = "A USB check needs the pod hosting the board (usb_host on, the board enumerated for every check but enumerate) and nothing else using the USB port or eFuse 1's current monitor. {why}."
+[BP0085.fix]
+sdk = "start USB host mode and wait until the board enumerates, stop any USB flash or power profile, then run the check again"
+cli = "start USB host mode and wait until the board enumerates, stop any USB flash or power profile, then run the check again"
+mcp = "start USB host mode (usb_host), wait until the board enumerates, make sure no usb_flash or power_profile is running, then call usb_check again"
+web = "Start USB host mode and wait until the board shows up, then try again."
+
+[BP0086]
+name = "usb_check_no_efuse_power"
+area = "usb"
+since = "next"
+message = "The board is not powered from target-power eFuse 1"
+cause = "The enumerate, power, suspend and replug checks switch eFuse 1 and measure its current, so the board's USB power (VBUS) must come from eFuse 1 and the eFuse must be on. It is off now, or the board is powered another way."
+[BP0086.fix]
+sdk = "wire the board's USB VBUS to eFuse 1, switch it on (bp.power_on), let the board enumerate, then run the check again"
+cli = "wire the board's USB VBUS to eFuse 1, switch it on with `benchpod power on`, let the board enumerate, then run the check again"
+mcp = "ask the user to wire the board's USB VBUS to eFuse 1, call power_on for the internal 5 V rail, wait until the board enumerates, then call usb_check again"
+web = "Power the board's USB from eFuse 1 and switch it on, then try again."

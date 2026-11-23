@@ -202,6 +202,43 @@ void handle_usb_flash(int conn_id, const char *json)
     usb_flash_reply(conn_id);
 }
 
+/* ---- usb_check: checks of the board's own USB firmware (usb_check.h) -------------------------
+ *   {"cmd":"usb_check","test":"enumerate","count":10,"off_ms":500,"timeout_ms":5000}
+ *   {"cmd":"usb_check","test":"power","duration_ms":3000}
+ *   {"cmd":"usb_check","test":"suspend","settle_ms":200,"duration_ms":1000}
+ *   {"cmd":"usb_check","test":"reset","count":20}
+ *   {"cmd":"usb_check","test":"replug","count":10,"off_ms":[5,20,100,500]}
+ *   {"cmd":"usb_check"}                  the state and the last result
+ *   {"cmd":"usb_check","abort":true}
+ * Refusals: BP0085 (usb_check_refused), BP0086 (not powered from eFuse 1).
+ */
+#include "usb_check.h"
+
+static void usb_check_reply_send(int conn_id)
+{
+    const size_t cap = BP_CLOUD_REPLY_MAX - 64u;
+    char *data = pvPortMalloc(cap);
+    if (!data) { send_error(conn_id, "usb_check: out of memory"); return; }
+    if (usb_check_reply(data, cap) == 0) bp_err_reply_too_large(conn_id);
+    else send_ok_large(conn_id, data);
+    vPortFree(data);
+}
+
+void handle_usb_check(int conn_id, const char *json)
+{
+    if (bp_json_flag(json, "abort")) { usb_check_abort(); usb_check_reply_send(conn_id); return; }
+    char t[12] = {0};
+    if (!bp_json_get(json, "test", t, sizeof(t))) { usb_check_reply_send(conn_id); return; }
+    uc_args_t a;
+    char why[96] = {0};
+    if (uc_parse_args(json, &a, why, sizeof(why)) != 0) { bp_err_usb_check_refused(conn_id, why); return; }
+    const char *w = NULL;
+    int rc = usb_check_start(&a, &w);
+    if (rc == -2) { bp_err_usb_check_no_efuse_power(conn_id); return; }
+    if (rc != 0) { bp_err_usb_check_refused(conn_id, w ? w : "refused"); return; }
+    usb_check_reply_send(conn_id);
+}
+
 #else /* !BENCHPOD_USB_HOST */
 
 void handle_usb_host(int conn_id, const char *json)
@@ -215,5 +252,11 @@ void handle_usb_flash(int conn_id, const char *json)
 {
     (void)json;
     bp_err_unknown_command(conn_id, "usb_flash");
+}
+
+void handle_usb_check(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, "usb_check");
 }
 #endif /* BENCHPOD_USB_HOST */

@@ -5,7 +5,7 @@
 /* The revision of features/features.toml this firmware is built from. The pod announces it as
    features_rev (status, cloud capabilities frame); clients take every feature with rev <= it from
    their copy of features/features.json instead of a list the pod sends. */
-#define BP_FEATURES_REV 14u
+#define BP_FEATURES_REV 15u
 
 /* The client API level (features.toml `api`), announced as "api" next to features_rev: it goes up
    only for a change a client built for an older level would misread. */
