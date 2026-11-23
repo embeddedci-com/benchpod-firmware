@@ -140,11 +140,11 @@ static int getel(prog_ctx_t *c, uint32_t off, uint32_t *v) {
     return 0;
 }
 
-static int args(prog_ctx_t *c, uint32_t *ub) {
+static int args(prog_ctx_t *c, uint32_t *ub, bool rows) {
     uint32_t es = nar(c) ? 1u : 2u;
     if (c->mem >= PROG_MEM_COUNT || !c->len || c->addr % es) return PROG_E_ARGS;
     *ub = es;
-    if (c->mem == PROG_MEM_FLASH) {
+    if (c->mem == PROG_MEM_FLASH && rows) {
         if (c->page < 2 || (c->page & 1) || c->page > 512 || c->addr % c->page) return PROG_E_ARGS;
         *ub = c->page;
     }
@@ -192,9 +192,105 @@ static int pic_enter(prog_ctx_t *c) {
     return fl(c);
 }
 
-static int pic_erase(prog_ctx_t *c) { (void)c; return PROG_E_UNSUPPORTED; }
-static int pic_write(prog_ctx_t *c) { (void)c; return PROG_E_UNSUPPORTED; }
-static int pic_read(prog_ctx_t *c)  { (void)c; return PROG_E_UNSUPPORTED; }
+/* Errors and the last call end a multi-call step: the next call starts afresh. */
+static int fin(prog_ctx_t *c, int r) {
+    if (r != PROG_RUNNING) ST(c)->stage = 0;
+    return r;
+}
+
+static int er(prog_ctx_t *c) {
+    pic_st_t *s = ST(c);
+    uint32_t ub;
+    if (c->erase == PROG_ERASE_NONE) return PROG_OK;
+    c->phase = "erase";
+    if (c->erase == PROG_ERASE_CHIP) {      /* from config space: also clears code protection */
+        if (s8(c)) {
+            TRY(seek(c, byt(c) ? 0x300000u : 0x8000u));
+            TRY(xfer(c, B_BULK, 0, 0, 0));
+        } else {
+            TRY(seek(c, 0x8000u));
+            TRY(xfer(c, A_BULKP, 0, 0, 0));
+            TRY(wait(c, T_ERASE_US));
+            if (c->flags & PIC_F_HAS_EE) TRY(xfer(c, A_BULKD, 0, 0, 0));
+        }
+        TRY(wait(c, T_ERASE_US));
+        s->pc = -1; s->locked = 0;
+        c->done = c->total = 1;
+        return PROG_OK;
+    }
+    if (c->mem != PROG_MEM_FLASH) return PROG_OK;   /* words are overwritten; chip erase clears config */
+    TRY(args(c, &ub, true));
+    TRY(locked_chk(c));
+    if (!s->stage) { s->stage = 1; s->idx = 0; c->done = 0; c->total = (c->len + ub - 1) / ub; }
+    TRY(seek(c, pcof(c, c->addr + s->idx * ub)));
+    TRY(xfer(c, s8(c) ? B_ROWER : A_ROWER, 0, 0, 0));
+    TRY(wait(c, T_ERASE_US));
+    c->done = ++s->idx;
+    return s->idx == c->total ? PROG_OK : PROG_RUNNING;
+}
+
+static int wr(prog_ctx_t *c) {
+    pic_st_t *s = ST(c);
+    uint32_t ub, es = nar(c) ? 1u : 2u;
+    TRY(args(c, &ub, true));
+    uint32_t units = (c->len + ub - 1) / ub, nel = ub / es, st = pcstep(c);
+    if (!s->stage) {
+        TRY(locked_chk(c));
+        s->stage = 1; s->idx = 0; c->done = 0; c->total = units; c->phase = "write";
+    }
+    uint32_t off = s->idx * ub, start = pcof(c, c->addr + off), v, x;
+    if (s->stage == 1) {
+        TRY(seek(c, start));
+        for (uint32_t i = 0; i < nel; i++) {
+            bool more = i + 1 < nel;
+            TRY(getel(c, off + i * es, &v));
+            if (s8(c)) {
+                TRY(xfer(c, more ? B_LDINC : B_LD, 1, v, 0));
+            } else {
+                TRY(xfer(c, nar(c) ? A_LDDAT : A_LDPGM, 1, v, 0));
+                if (more) { TRY(xfer(c, A_INC, 0, 0, 0)); s->pc++; }
+            }
+        }
+        if (s8(c)) s->pc = (int32_t)(start + (nel - 1) * st);
+        TRY(xfer(c, s8(c) ? B_BEGIN : A_BEGIN, 0, 0, 0));
+        TRY(wait(c, c->mem == PROG_MEM_FLASH ? T_PROG_US : T_PROGN_US));
+        c->done = ++s->idx;
+        if (s->idx == units) { s->stage = 2; s->idx = 0; c->done = 0; c->phase = "verify"; }
+        return PROG_RUNNING;
+    }
+    for (uint32_t i = 0; i < nel && off + i * es < c->len; i++) {
+        uint32_t o = off + i * es, nb = c->len - o < es ? c->len - o : es;
+        TRY(rdel(c, start + i * st, &x));
+        TRY(getel(c, o, &v));
+        if ((x ^ v) & (nb == 1 ? 0xFFu : emask(c))) { c->at_addr = c->addr + o; return PROG_E_VERIFY; }
+    }
+    c->done = ++s->idx;
+    return s->idx == units ? PROG_OK : PROG_RUNNING;
+}
+
+static int rdb(prog_ctx_t *c) {
+    pic_st_t *s = ST(c);
+    uint32_t ub, es = nar(c) ? 1u : 2u, v;
+    uint8_t buf[BLOCK];
+    TRY(args(c, &ub, false));
+    if (!s->stage) {
+        TRY(locked_chk(c));
+        s->stage = 1; s->idx = 0; c->done = 0; c->total = (c->len + BLOCK - 1) / BLOCK; c->phase = "read";
+    }
+    uint32_t off = s->idx * BLOCK, n = c->len - off < BLOCK ? c->len - off : BLOCK;
+    for (uint32_t k = 0; k < n; k += es) {
+        TRY(rdel(c, pcof(c, c->addr + off + k), &v));
+        buf[k] = (uint8_t)v;
+        if (es == 2 && k + 1 < n) buf[k + 1] = (uint8_t)(v >> 8);
+    }
+    if (c->dst(c->job, off, buf, n)) return PROG_E_SRC;
+    c->done = ++s->idx;
+    return s->idx == c->total ? PROG_OK : PROG_RUNNING;
+}
+
+static int pic_erase(prog_ctx_t *c) { return fin(c, er(c)); }
+static int pic_write(prog_ctx_t *c) { return fin(c, wr(c)); }
+static int pic_read(prog_ctx_t *c)  { return fin(c, rdb(c)); }
 
 static void pic_leave(prog_ctx_t *c, bool run) {
     const prog_wire_ops_t *w = c->w;

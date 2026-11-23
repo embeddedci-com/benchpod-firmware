@@ -80,7 +80,7 @@ static bool locked(chip_t *c) {
 static unsigned widx(chip_t *c, uint32_t pc) { return c->byt ? pc / 2 : pc; }
 static unsigned step(chip_t *c, uint32_t pc, int ds) {
     uint16_t m; int k;
-    return cell(c, pc, ds, &m, &k) && k == CELL_FL && c->byt ? 2 : 1;
+    return cell(c, pc, ds, &m, &k) && m == 0xFFFF && c->byt ? 2 : 1;   /* 16-bit words step by 2 bytes */
 }
 
 static void erase_all(chip_t *c, bool cfg, bool ee) {
@@ -331,6 +331,7 @@ static void test_entry_id(void) {
         rig_t *r = calloc(1, sizeof *r);
         rig_init(r, k);
         int rc = P()->enter(&r->ctx);
+        if (rc != PROG_OK) printf("  kind %d rc %d\n", k, rc);
         CHECK(rc == PROG_OK);
         CHECK(r->chip.prog && r->chip.entries == 1 && r->chip.last_key == KEY);
         CHECK(r->ctx.id_len == 4);
@@ -357,9 +358,130 @@ static void test_no_answer(void) {
     }
 }
 
+/* ---- operations ---- */
+static int op(rig_t *r, step_fn f, int mem, int erase, uint32_t addr, uint32_t len) {
+    r->ctx.mem = (uint8_t)mem; r->ctx.erase = (uint8_t)erase; r->ctx.addr = addr; r->ctx.len = len;
+    return run(r, f);
+}
+#define OP_ENTER() P()->enter(&r->ctx)
+#define OP_ERASE(mem, e, a, n)  op(r, P()->erase, mem, e, a, n)
+#define OP_WRITE(mem, a, n)     op(r, P()->write, mem, PROG_ERASE_NONE, a, n)
+#define OP_READ(mem, a, n)      op(r, P()->read, mem, PROG_ERASE_NONE, a, n)
+
+/* the image: 14-bit chips only keep 14 bits of a word */
+static void gen(rig_t *r, uint32_t n, bool w14, unsigned seed) {
+    for (uint32_t i = 0; i < n; i++) {
+        uint8_t b = (uint8_t)(i * 7 + seed * 13 + (i >> 3));
+        r->img[i] = (w14 && (i & 1)) ? b & 0x3F : b;
+    }
+}
+
+typedef struct { uint32_t cfg, cfg_n, user, user_n, ee; } geom_t;
+static const geom_t GEOM[3] = {
+    { 0x10010, 2, 0x10000, 8, 4 },
+    { 0x10010, 2, 0x10000, 8, 0x7004 },
+    { 0x300008, 2, 0x200000, 8, 0x380004 },
+};
+
+static bool readback(rig_t *r, int mem, uint32_t addr, uint32_t n) {
+    memset(r->out, 0xAA, sizeof r->out); r->out_n = 0;
+    if (OP_READ(mem, addr, n) != PROG_OK) return false;
+    return r->out_n == n && !memcmp(r->out, r->img, n);
+}
+
+static void test_flow(int kind) {
+    rig_t *r = calloc(1, sizeof *r);
+    rig_init(r, kind);
+    chip_t *c = &r->chip;
+    const geom_t *g = &GEOM[kind];
+    bool w14 = kind != K_B18;
+    uint16_t m; int k;
+    for (unsigned i = 0; i < NW; i++) c->fl[i] = 0x1234 & c->mask;
+    *cell(c, c->cp_pc, 0, &m, &k) &= (uint16_t)~(1u << c->cp_bit);      /* code protected */
+    CHECK(locked(c));
+    CHECK(OP_ENTER() == PROG_OK);
+    /* protected: flash is refused, config stays readable */
+    CHECK(OP_READ(PROG_MEM_FLASH, 0, 16) == PROG_E_LOCKED);
+    gen(r, 32, w14, 1);
+    CHECK(OP_WRITE(PROG_MEM_FLASH, 0x40, 32) == PROG_E_LOCKED);
+    CHECK(OP_ERASE(PROG_MEM_FLASH, PROG_ERASE_PAGE, 0x40, 32) == PROG_E_LOCKED);
+    CHECK(c->programs == 0 && c->rowerase == 0);
+    /* chip erase unlocks */
+    CHECK(OP_ERASE(PROG_MEM_FLASH, PROG_ERASE_CHIP, 0, 0) == PROG_OK);
+    CHECK(c->bulk >= 1 && !locked(c));
+    for (unsigned i = 0; i < NW; i++) CHECK(c->fl[i] == c->mask);
+    /* flash, a partial last row */
+    uint32_t n = 70, a = 0x40;
+    gen(r, n, w14, 2);
+    CHECK(OP_WRITE(PROG_MEM_FLASH, a, n) == PROG_OK);
+    CHECK(r->ctx.done == r->ctx.total && r->ctx.total == (n + r->ctx.page - 1) / r->ctx.page);
+    for (uint32_t i = 0; i < n / 2; i++)
+        CHECK(c->fl[a / 2 + i] == (uint16_t)((r->img[2 * i] | r->img[2 * i + 1] << 8) & c->mask));
+    CHECK(c->fl[a / 2 + n / 2] == c->mask);
+    CHECK(readback(r, PROG_MEM_FLASH, a, n));
+    /* config word, user ID, EEPROM */
+    gen(r, 16, false, 3);
+    if (kind != K_B18) r->img[1] &= 0x3F;
+    CHECK(OP_WRITE(PROG_MEM_CONFIG, g->cfg, g->cfg_n) == PROG_OK);
+    CHECK(readback(r, PROG_MEM_CONFIG, g->cfg, g->cfg_n));
+    gen(r, 16, w14, 4);
+    CHECK(OP_WRITE(PROG_MEM_USER, g->user, g->user_n) == PROG_OK);
+    CHECK(readback(r, PROG_MEM_USER, g->user, g->user_n));
+    gen(r, 12, false, 5);
+    CHECK(OP_WRITE(PROG_MEM_EEPROM, g->ee, 12) == PROG_OK);
+    CHECK(readback(r, PROG_MEM_EEPROM, g->ee, 12));
+    for (unsigned i = 0; i < 12; i++) {
+        uint16_t *p = cell(c, g->ee + i, kind == K_A, &m, &k);
+        CHECK(p && *p == r->img[i]);
+    }
+    /* the flash is still there after all that */
+    gen(r, n, w14, 2);
+    CHECK(readback(r, PROG_MEM_FLASH, a, n));
+    /* page erase: the rows covering the range */
+    CHECK(OP_ERASE(PROG_MEM_FLASH, PROG_ERASE_PAGE, a, n) == PROG_OK);
+    unsigned rows = (n + r->ctx.page - 1) / r->ctx.page;
+    CHECK(c->rowerase == rows);
+    for (uint32_t i = 0; i < rows * r->ctx.page / 2; i++) CHECK(c->fl[a / 2 + i] == c->mask);
+    clean(r, "flow");
+    P()->leave(&r->ctx, true);
+    CHECK(c->ran == 1);
+    free(r);
+}
+
+static void test_verify_fail(int kind) {
+    rig_t *r = calloc(1, sizeof *r);
+    rig_init(r, kind);
+    gen(r, 64, kind != K_B18, 6);
+    r->chip.fault_idx = 0x40 / 2 + 5;
+    CHECK(OP_ENTER() == PROG_OK);
+    CHECK(OP_WRITE(PROG_MEM_FLASH, 0x40, 64) == PROG_E_VERIFY);
+    CHECK(r->ctx.at_addr == 0x40 + 10);
+    clean(r, "verify");
+    free(r);
+}
+
+static void test_args(int kind) {
+    rig_t *r = calloc(1, sizeof *r);
+    rig_init(r, kind);
+    gen(r, 64, true, 7);
+    CHECK(OP_ENTER() == PROG_OK);
+    CHECK(OP_WRITE(PROG_MEM_FLASH, 2, 16) == PROG_E_ARGS);          /* not row aligned */
+    CHECK(OP_WRITE(PROG_MEM_FLASH, r->ctx.page, 0) == PROG_E_ARGS);
+    r->ctx.page = 0;
+    CHECK(OP_WRITE(PROG_MEM_FLASH, 0, 16) == PROG_E_ARGS);
+    CHECK(OP_ERASE(PROG_MEM_FLASH, PROG_ERASE_PAGE, 0, 16) == PROG_E_ARGS);
+    CHECK(OP_READ(PROG_MEM_FLASH, 1, 16) == PROG_E_ARGS);           /* odd flash address */
+    r->ctx.page = 16;
+    r->ctx.src = NULL;
+    CHECK(r->chip.programs == 0 && r->chip.rowerase == 0);
+    clean(r, "args");
+    free(r);
+}
+
 int main(void) {
     test_entry_id();
     test_no_answer();
+    for (int k = K_A; k <= K_B18; k++) { test_flow(k); test_verify_fail(k); test_args(k); }
     printf("test_prog_pic: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }
