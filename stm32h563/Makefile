@@ -385,10 +385,10 @@ C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
 endif
 
 # Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
-# USB_HOST=1 4 KB (the host stack and its classes), XIP_RAM=1 16 KB (the RAM copy of the image).
+# USB_HOST=1 5 KB (the host stack and its classes, a 1 KB descriptor buffer), XIP_RAM=1 16 KB (the RAM copy of the image).
 HEAP_KB := 259
 ifeq ($(USB_HOST),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 4)
+HEAP_KB := $(shell expr $(HEAP_KB) - 5)
 endif
 ifeq ($(XIP_RAM),1)
 HEAP_KB := $(shell expr $(HEAP_KB) - 16)

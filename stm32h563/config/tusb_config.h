@@ -44,7 +44,9 @@
 #define BOARD_TUH_RHPORT         0
 #define CFG_TUH_ENABLED          1
 #define CFG_TUH_MAX_SPEED        OPT_MODE_FULL_SPEED
-#define CFG_TUH_ENUMERATION_BUFSIZE 512
+/* The whole configuration descriptor is read into this: a longer one never enumerates (usbh.c),
+   which usb_host reports as "enumeration":"stuck". 1024 covers composite boards (CDC+MSC+HID, audio). */
+#define CFG_TUH_ENUMERATION_BUFSIZE 1024
 #define CFG_TUH_DEVICE_MAX       1
 #define CFG_TUH_HUB              0
 #define CFG_TUH_ENDPOINT_MAX     4
