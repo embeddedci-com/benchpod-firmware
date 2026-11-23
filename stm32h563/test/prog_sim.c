@@ -2,6 +2,12 @@
 #include "prog_sim.h"
 #include <string.h>
 
+static void tick(prog_sim_t *s) {
+    if (!s->byte_ns) return;
+    s->ns += s->byte_ns;
+    s->us = (uint32_t)(s->ns / 1000u);
+}
+
 static void notify(prog_sim_t *s) {
     if (s->m.on_pins) s->m.on_pins(s, s->clk, s->pod_drives ? s->pod_data : -1);
 }
@@ -16,10 +22,12 @@ static int line(prog_sim_t *s) {
 
 static void sim_set(void *io, int clk, int data) {
     prog_sim_t *s = io;
-    if (clk == 0 && s->clk == 1) s->clk_low_since = s->us;
+    tick(s);
+    if (clk == 0 && s->clk == 1) { s->clk_low_since = s->us; s->clk_low_since_ns = s->ns; }
     if (clk == 1 && s->clk == 0) {
         uint32_t low = s->us - s->clk_low_since;
         if (low > s->clk_low_max_us) s->clk_low_max_us = low;
+        if (s->ns - s->clk_low_since_ns > s->clk_low_max_ns) s->clk_low_max_ns = s->ns - s->clk_low_since_ns;
     }
     s->clk = clk; s->pod_data = data;
     notify(s);
@@ -28,12 +36,14 @@ static void sim_set(void *io, int clk, int data) {
 
 static void sim_drive(void *io, bool drive) {
     prog_sim_t *s = io;
+    tick(s);
     s->pod_drives = drive;
     notify(s);
 }
 
 static void sim_sample(void *io) {
     prog_sim_t *s = io;
+    tick(s);
     if (s->nsamples < PROG_SIM_SAMPLES) s->samples[s->nsamples++] = (uint8_t)line(s);
 }
 
@@ -55,6 +65,7 @@ static void sim_nrst(void *io, bool low) {
 static void sim_delay(void *io, uint32_t us) {
     prog_sim_t *s = io;
     s->us += us;
+    s->ns = (uint64_t)s->us * 1000u + (s->ns % 1000u);
     if (s->m.on_time) s->m.on_time(s, us);
 }
 
