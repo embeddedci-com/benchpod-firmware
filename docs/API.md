@@ -5301,7 +5301,9 @@ Firmware 3.9.3+. See `docs/design/lan-tls.md`.
 The pod also serves this API on TCP `8443` with TLS 1.2 (ECDHE, AES-GCM or ChaCha20-Poly1305). A
 full handshake takes the pod about 0.46 s with its EC key (about 1.1 s with an RSA 2048 one); it
 resumes sessions (session tickets and a 4-entry session cache, one hour), which takes about 20 ms, so
-clients that open a connection per command should keep the session. On
+clients that open a connection per command should keep the session. A session that was set up
+without a client certificate is not resumed (the client gets a full handshake and can send its
+certificate, see [LAN pairing](design/lan-pairing.md)). On
 the first boot of firmware with LAN TLS it generates an ECDSA P-256 key and a self-signed
 certificate for `benchpod-xxxxxx` and `benchpod-xxxxxx.local` (its mDNS name), valid to 9999 (the
 pod has no clock), and keeps both in its internal config flash. `sha256` is the SHA-256 of the

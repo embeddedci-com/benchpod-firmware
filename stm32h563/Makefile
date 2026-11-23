@@ -205,7 +205,7 @@ C_SOURCES := \
   src/cloud_ca.c \
   src/cloud_extras.c \
   src/lan_tls.c \
-  src/lan_tls_pem.c src/lan_clients.c \
+  src/lan_tls_pem.c src/lan_clients.c src/lan_tls_resume.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/command_handler_lease.c \
