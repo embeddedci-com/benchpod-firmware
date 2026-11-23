@@ -2,8 +2,10 @@
  *
  * The model latches data on the falling clock edge, drives read data after the rising edge, takes
  * the LVP key while MCLR is low, and checks the spec's waits (entry hold, program, erase) against
- * the simulated time. Three chips: K_A (6-bit commands, PIC16F1xxx), K_B16 (8-bit commands,
- * PIC16F18xxx) and K_B18 (8-bit commands, byte PC, PIC18 Q). */
+ * the simulated time. Four chips: K_A (6-bit commands, key LSb first with 33 clocks, one ID word
+ * with DEV and REV packed, PIC16F1xxx), K_B16 (8-bit commands, PIC16F18xxx), K_B18 (PIC18 Q43/Q84:
+ * byte PC, Program Data with a payload, Bulk Erase with a region payload, config bytes) and K_Q10
+ * (PIC18 Q10: Bulk Erase by PC, 16-bit config words). User ID words are 16 bits on the PIC18s. */
 #include "prog_flash.h"
 #include "prog_pic.h"
 #include "prog_sim.h"
@@ -18,7 +20,7 @@ static int failures;
 #define NW  512u        /* flash words */
 #define EESZ 64u
 
-enum { K_A, K_B16, K_B18 };
+enum { K_A, K_B16, K_B18, K_Q10 };
 enum { CELL_FL, CELL_CFG, CELL_EE, CELL_RO };
 
 typedef struct {
@@ -26,7 +28,10 @@ typedef struct {
     uint32_t key; bool deaf;
     uint16_t mask; unsigned rw;
     uint32_t cp_pc; int cp_bit;
-    uint16_t fl[NW], cfgw[32], ee[EESZ], rev, dev;
+    uint16_t fl[NW], cfgw[32], uid[16], ee[EESZ], rev, dev, idw, rsv;
+    bool split, key_lsb;                 /* set A: separate REV/DEV words; key sent LSb first (33 clocks) */
+    uint32_t tpint, tenth, bulk_need;    /* PIC18 Q: TPINT, TENTH, TERAB in us */
+    unsigned bulk_mask;                  /* Q43/Q84: OR of the Bulk Erase payloads */
     uint16_t lat[64]; uint8_t latv[64]; uint16_t lat1; bool ld_data;
     int fault_idx;                       /* flash word index read back with bit 0 flipped, -1 none */
     /* engine */
@@ -56,15 +61,25 @@ static uint16_t *cell(chip_t *c, uint32_t pc, int data_sp, uint16_t *mask, int *
             *kind = CELL_FL; return &c->fl[pc];
         }
         pc -= 0x8000;
+        if (c->kind == K_A && !c->split) {      /* DEV<8:0> and REV<4:0> in one word; 0x8005 reserved */
+            if (pc == 5) { *kind = CELL_RO; return &c->rsv; }
+            if (pc == 6) { *kind = CELL_RO; return &c->idw; }
+        }
         if (pc == 5) { *kind = CELL_RO; return &c->rev; }
         if (pc == 6) { *kind = CELL_RO; return &c->dev; }
         return pc < 32 ? &c->cfgw[pc] : NULL;
     }
     if (pc < 2 * NW) { *kind = CELL_FL; return &c->fl[pc / 2]; }
+    *mask = 0xFFFF;
+    if (pc >= 0x200000 && pc < 0x200020 && !(pc & 1)) return &c->uid[(pc - 0x200000) / 2];
+    if (c->kind == K_Q10) {
+        if (pc >= 0x300000 && pc < 0x300020 && !(pc & 1)) return &c->cfgw[16 + (pc - 0x300000) / 2];
+    } else if (pc >= 0x300000 && pc < 0x300010) {
+        *mask = 0xFF; return &c->cfgw[16 + pc - 0x300000];
+    }
+    uint32_t eeb = c->kind == K_Q10 ? 0x310000u : 0x380000u;
     *mask = 0xFF;
-    if (pc >= 0x200000 && pc < 0x200008) return &c->cfgw[pc - 0x200000];
-    if (pc >= 0x300000 && pc < 0x300010) return &c->cfgw[16 + pc - 0x300000];
-    if (pc >= 0x380000 && pc < 0x380000 + EESZ) { *kind = CELL_EE; return &c->ee[pc - 0x380000]; }
+    if (pc >= eeb && pc < eeb + EESZ) { *kind = CELL_EE; return &c->ee[pc - eeb]; }
     *mask = 0xFFFF;
     if (pc == 0x3FFFFC) { *kind = CELL_RO; return &c->rev; }
     if (pc == 0x3FFFFE) { *kind = CELL_RO; return &c->dev; }
@@ -85,7 +100,8 @@ static unsigned step(chip_t *c, uint32_t pc, int ds) {
 
 static void erase_all(chip_t *c, bool cfg, bool ee) {
     for (unsigned i = 0; i < NW; i++) c->fl[i] = c->mask;
-    if (cfg) for (unsigned i = 0; i < 32; i++) c->cfgw[i] = c->byt && i >= 8 ? 0xFF : (c->byt ? 0xFF : 0x3FFF);
+    if (cfg) for (unsigned i = 0; i < 32; i++) c->cfgw[i] = !c->byt ? 0x3FFF : c->kind == K_Q10 ? 0xFFFF : 0xFF;
+    if (cfg && c->byt) for (unsigned i = 0; i < 16; i++) c->uid[i] = 0xFFFF;
     if (ee) for (unsigned i = 0; i < EESZ; i++) c->ee[i] = 0xFF;
 }
 
@@ -141,9 +157,40 @@ static uint32_t rd(chip_t *c, bool dsp, bool inc) {
     return v;
 }
 
-static void bulk_erase(chip_t *c) {
+/* PIC18 Q Program Data: the word is written at once, TPINT (TPDFM for EEPROM and Q43/Q84 config bytes) */
+static void qprog(chip_t *c, uint32_t d, bool inc) {
+    uint16_t m; int k;
+    uint16_t *p = cell(c, c->pc, 0, &m, &k);
+    c->programs++;
+    if (p && k == CELL_FL) { if (!locked(c)) *p &= (uint16_t)((d & m) | ~m); }
+    else if (p && k != CELL_RO) *p &= (uint16_t)((d & m) | ~m);
+    c->busy_need = (p && (k == CELL_EE || (k == CELL_CFG && m == 0xFF))) ? 11000 : c->tpint;
+    if (inc) c->pc += step(c, c->pc, 0);
+}
+
+static void bulk_erase(chip_t *c, uint32_t d) {
     c->bulk++;
-    uint32_t base = c->byt ? 0x300000u : 0x8000u;
+    if (c->kind == K_B18) {                 /* payload: bit 0 EEPROM, 1 flash, 2 user ID, 3 config */
+        c->bulk_mask |= d;
+        if (d & 2) for (unsigned i = 0; i < NW; i++) c->fl[i] = 0xFFFF;
+        if (d & 4) for (unsigned i = 0; i < 16; i++) c->uid[i] = 0xFFFF;
+        if (d & 8) for (unsigned i = 16; i < 32; i++) c->cfgw[i] = 0xFF;
+        if (d & 1) for (unsigned i = 0; i < EESZ; i++) c->ee[i] = 0xFF;
+        c->busy_need = c->bulk_need;
+        return;
+    }
+    if (c->kind == K_Q10) {                 /* no payload: the PC picks the regions (Table 3-2) */
+        if (c->pc >= 0x300000 && c->pc < 0x300100) {
+            for (unsigned i = 0; i < NW; i++) c->fl[i] = 0xFFFF;
+            for (unsigned i = 0; i < 16; i++) c->uid[i] = 0xFFFF;
+            for (unsigned i = 16; i < 32; i++) c->cfgw[i] = 0xFFFF;
+        } else if (c->pc >= 0x310000 && c->pc < 0x310400) {
+            for (unsigned i = 0; i < EESZ; i++) c->ee[i] = 0xFF;
+        }
+        c->busy_need = c->bulk_need;
+        return;
+    }
+    uint32_t base = 0x8000u;
     if (c->pc == base) erase_all(c, true, true); else erase_all(c, false, false);
     c->busy_need = 5000;
 }
@@ -158,7 +205,7 @@ static void exec(chip_t *c, uint32_t d) {
         case 0x06: c->pc++; break;
         case 0x16: c->pc = 0; break;
         case 0x08: do_program(c); break;
-        case 0x09: bulk_erase(c); break;
+        case 0x09: bulk_erase(c, 0); break;
         case 0x0B: for (unsigned i = 0; i < EESZ; i++) c->ee[i] = 0xFF; c->bulk++; c->busy_need = 5000; break;
         case 0x11: row_erase(c); break;
         default: c->bad_cmds++;
@@ -166,11 +213,11 @@ static void exec(chip_t *c, uint32_t d) {
     } else {
         switch (c->cmd) {
         case 0x80: c->pc = d; break;
-        case 0x00: load(c, d, false, false); break;
-        case 0x02: load(c, d, true, false); break;
+        case 0x00: if (c->byt) c->bad_cmds++; else load(c, d, false, false); break;
+        case 0x02: if (c->byt) c->bad_cmds++; else load(c, d, true, false); break;
         case 0xF8: c->pc += step(c, c->pc, 0); break;
-        case 0xE0: do_program(c); break;
-        case 0x18: bulk_erase(c); break;
+        case 0xC0: case 0xE0: if (c->byt) qprog(c, d, c->cmd == 0xE0); else if (c->cmd == 0xE0) do_program(c); else c->bad_cmds++; break;
+        case 0x18: bulk_erase(c, d); break;
         case 0xF0: row_erase(c); break;
         default: c->bad_cmds++;
         }
@@ -180,7 +227,11 @@ static void exec(chip_t *c, uint32_t d) {
 static void cmd_done(chip_t *c) {
     bool w, r;
     if (!c->set8) { w = c->cmd == 0x00 || c->cmd == 0x02 || c->cmd == 0x03; r = c->cmd == 0x04 || c->cmd == 0x05; }
-    else          { w = c->cmd == 0x80 || c->cmd == 0x00 || c->cmd == 0x02; r = c->cmd == 0xFC || c->cmd == 0xFE; }
+    else          {
+        w = c->cmd == 0x80 || (!c->byt && (c->cmd == 0x00 || c->cmd == 0x02))
+            || (c->byt && (c->cmd == 0xC0 || c->cmd == 0xE0)) || (c->kind == K_B18 && c->cmd == 0x18);
+        r = c->cmd == 0xFC || c->cmd == 0xFE;
+    }
     c->k = 0; c->sh = 0;
     if (w) { c->st = S_PW; return; }
     if (r) {
@@ -209,7 +260,7 @@ static void rise(chip_t *c) {
     if (c->first_rise) { if (c->idle_us < 1) c->timing_err++; c->first_rise = false; }
     if (c->prog) {
         if (c->st == S_CMD && c->k == 0 && c->sh == 0) {
-            if (c->first_cmd && c->idle_us < 250) c->timing_err++;     /* TENTH */
+            if (c->first_cmd && c->idle_us < (c->byt ? 1000 : 250)) c->timing_err++;     /* TENTH */
             if (c->idle_us < c->busy_need) c->timing_err++;             /* program / erase time */
             if (c->idle_us < 1) c->timing_err++;                        /* TDLY after a command */
             c->first_cmd = false; c->busy_need = 0;
@@ -224,8 +275,10 @@ static void fall(chip_t *c, int bit) {
     if (!c->nrst_low) return;
     c->idle_us = 0;
     if (!c->prog) {
-        c->keyreg = (c->keyreg << 1) | (uint32_t)bit;
-        if (++c->nkey == 32) {
+        if (c->nkey < 32) {
+            if (c->key_lsb) c->keyreg |= (uint32_t)bit << c->nkey; else c->keyreg = (c->keyreg << 1) | (uint32_t)bit;
+        }
+        if (++c->nkey == (c->key_lsb ? 33 : 32)) {
             c->last_key = c->keyreg;
             if (!c->deaf && c->keyreg == c->key) { c->prog = true; c->first_cmd = true; c->entries++; }
         }
@@ -262,22 +315,32 @@ static const prog_sim_model_t MODEL = { .on_pins = on_pins, .chip_data = chip_da
 
 static void chip_init(chip_t *c, int kind) {
     memset(c, 0, sizeof *c);
-    c->kind = kind; c->set8 = kind != K_A; c->byt = kind == K_B18;
+    c->kind = kind; c->set8 = kind != K_A; c->byt = kind >= K_B18; c->key_lsb = kind == K_A;
+    c->tpint = kind == K_Q10 ? 65 : 75; c->bulk_need = kind == K_Q10 ? 75000 : 11000;
     c->key = KEY; c->mask = c->byt ? 0xFFFF : 0x3FFF;
     c->clen = c->set8 ? 8 : 6; c->plen = c->set8 ? 24 : 16;
     c->rw = kind == K_A ? 8 : 16;
     c->prev_clk = 1; c->out = -1; c->fault_idx = -1;
     erase_all(c, true, true);
-    if (kind == K_A)   { c->dev = 0x2A5; c->rev = 0x2002; c->cp_pc = 0x8007; c->cp_bit = 5; }
+    if (kind == K_A)   { c->dev = 0xA4; c->rev = 0x02; c->idw = (uint16_t)(c->dev << 5 | c->rev); c->cp_pc = 0x8007; c->cp_bit = 5; }
     if (kind == K_B16) { c->dev = 0x30B2; c->rev = 0x2001; c->cp_pc = 0x800B; c->cp_bit = 1; }
     if (kind == K_B18) { c->dev = 0x7A31; c->rev = 0x2003; c->cp_pc = 0x300004; c->cp_bit = 3; }
+    if (kind == K_Q10) { c->dev = 0x7B10; c->rev = 0x2004; c->cp_pc = 0x300004; c->cp_bit = 3; }
 }
 
 /* ---- rig: the pod's side ---- */
 typedef struct {
     prog_sim_t sim; prog_wire_ops_t ops; chip_t chip; prog_ctx_t ctx;
     uint8_t img[1024]; uint8_t out[1024]; uint32_t out_n;
+    /* the pod's side of the wire queues pin levels: a level change must be flushed before MCLR moves */
+    bool dirty; unsigned nrst_unflushed;
+    void (*o_set)(void *, int, int); void (*o_drive)(void *, bool);
+    int (*o_flush)(void *, uint8_t *, size_t); void (*o_nrst)(void *, bool);
 } rig_t;
+static void w_set(void *io, int clk, int d) { rig_t *r = io; r->dirty = true; r->o_set(io, clk, d); }
+static void w_drive(void *io, bool d) { rig_t *r = io; r->dirty = true; r->o_drive(io, d); }
+static int w_flush(void *io, uint8_t *s, size_t n) { rig_t *r = io; r->dirty = false; return r->o_flush(io, s, n); }
+static void w_nrst(void *io, bool low) { rig_t *r = io; if (r->dirty) r->nrst_unflushed++; r->o_nrst(io, low); }
 
 static int rig_src(void *job, uint32_t off, uint8_t *buf, uint32_t n) {
     rig_t *r = job;
@@ -296,6 +359,7 @@ static int rig_dst(void *job, uint32_t off, const uint8_t *buf, uint32_t n) {
 static uint32_t flags_of(int kind) {
     if (kind == K_A)   return PIC_F_CP_BIT(5) | PIC_F_HAS_EE;
     if (kind == K_B16) return PIC_F_SET8 | PIC_F_CP_BIT(1);
+    if (kind == K_Q10) return PIC_F_SET8 | PIC_F_BYTEPC | PIC_F_Q10 | PIC_F_CP_BIT(3);
     return PIC_F_SET8 | PIC_F_BYTEPC | PIC_F_CP_BIT(3);
 }
 
@@ -303,6 +367,8 @@ static void rig_init(rig_t *r, int kind) {
     memset(r, 0, sizeof *r);
     chip_init(&r->chip, kind);
     prog_sim_init(&r->sim, &r->ops, &MODEL, &r->chip);
+    r->o_set = r->ops.set; r->o_drive = r->ops.data_drive; r->o_flush = r->ops.flush; r->o_nrst = r->ops.nrst;
+    r->ops.set = w_set; r->ops.data_drive = w_drive; r->ops.flush = w_flush; r->ops.nrst = w_nrst;
     r->ctx.w = &r->ops;
     r->ctx.flags = flags_of(kind);
     r->ctx.page = kind == K_A ? 16 : 32;
@@ -320,14 +386,15 @@ static int run(rig_t *r, step_fn f) {
 static const prog_proto_t *P(void) { return &prog_proto_pic; }
 
 static void clean(rig_t *r, const char *what) {
-    if (r->sim.contention || r->chip.timing_err || r->chip.bad_cmds) {
-        printf("  %s: contention=%u timing_err=%u bad_cmds=%u\n", what, r->sim.contention, r->chip.timing_err, r->chip.bad_cmds);
+    if (r->sim.contention || r->chip.timing_err || r->chip.bad_cmds || r->nrst_unflushed) {
+        printf("  %s: contention=%u timing_err=%u bad_cmds=%u nrst_unflushed=%u\n", what, r->sim.contention,
+               r->chip.timing_err, r->chip.bad_cmds, r->nrst_unflushed);
         failures++;
     }
 }
 
 static void test_entry_id(void) {
-    for (int k = K_A; k <= K_B18; k++) {
+    for (int k = K_A; k <= K_Q10; k++) {
         rig_t *r = calloc(1, sizeof *r);
         rig_init(r, k);
         int rc = P()->enter(&r->ctx);
@@ -345,7 +412,7 @@ static void test_entry_id(void) {
 }
 
 static void test_no_answer(void) {
-    for (int k = K_A; k <= K_B18; k++) {
+    for (int k = K_A; k <= K_Q10; k++) {
         rig_t *r = calloc(1, sizeof *r);
         rig_init(r, k);
         r->chip.key ^= 1;                       /* only the right key enters */
@@ -377,10 +444,11 @@ static void gen(rig_t *r, uint32_t n, bool w14, unsigned seed) {
 }
 
 typedef struct { uint32_t cfg, cfg_n, user, user_n, ee; } geom_t;
-static const geom_t GEOM[3] = {
+static const geom_t GEOM[4] = {
     { 0x10010, 2, 0x10000, 8, 4 },
     { 0x10010, 2, 0x10000, 8, 0x7004 },
     { 0x300008, 2, 0x200000, 8, 0x380004 },
+    { 0x300008, 4, 0x200000, 8, 0x310004 },
 };
 
 static bool readback(rig_t *r, int mem, uint32_t addr, uint32_t n) {
@@ -394,7 +462,7 @@ static void test_flow(int kind) {
     rig_init(r, kind);
     chip_t *c = &r->chip;
     const geom_t *g = &GEOM[kind];
-    bool w14 = kind != K_B18;
+    bool w14 = kind < K_B18;
     uint16_t m; int k;
     for (unsigned i = 0; i < NW; i++) c->fl[i] = 0x1234 & c->mask;
     *cell(c, c->cp_pc, 0, &m, &k) &= (uint16_t)~(1u << c->cp_bit);      /* code protected */
@@ -406,10 +474,22 @@ static void test_flow(int kind) {
     CHECK(OP_WRITE(PROG_MEM_FLASH, 0x40, 32) == PROG_E_LOCKED);
     CHECK(OP_ERASE(PROG_MEM_FLASH, PROG_ERASE_PAGE, 0x40, 32) == PROG_E_LOCKED);
     CHECK(c->programs == 0 && c->rowerase == 0);
-    /* chip erase unlocks */
+    /* chip erase unlocks (PIC18 Q: every region, also user ID, config and EEPROM) */
+    if (kind >= K_B18) {
+        for (unsigned i = 0; i < 16; i++) c->uid[i] = 0x1234;
+        for (unsigned i = 0; i < EESZ; i++) c->ee[i] = 0x12;
+        for (unsigned i = 16; i < 32; i++) c->cfgw[i] &= 0x12;
+    }
     CHECK(OP_ERASE(PROG_MEM_FLASH, PROG_ERASE_CHIP, 0, 0) == PROG_OK);
     CHECK(c->bulk >= 1 && !locked(c));
     for (unsigned i = 0; i < NW; i++) CHECK(c->fl[i] == c->mask);
+    if (kind >= K_B18) {
+        uint16_t cf = kind == K_Q10 ? 0xFFFF : 0xFF;
+        for (unsigned i = 0; i < 16; i++) CHECK(c->uid[i] == 0xFFFF);
+        for (unsigned i = 0; i < EESZ; i++) CHECK(c->ee[i] == 0xFF);
+        for (unsigned i = 16; i < 32; i++) CHECK(c->cfgw[i] == cf);
+        CHECK(kind == K_Q10 ? c->bulk == 2 : (c->bulk == 1 && c->bulk_mask == 0x0F));
+    }
     /* flash, a partial last row */
     uint32_t n = 70, a = 0x40;
     gen(r, n, w14, 2);
@@ -421,12 +501,18 @@ static void test_flow(int kind) {
     CHECK(readback(r, PROG_MEM_FLASH, a, n));
     /* config word, user ID, EEPROM */
     gen(r, 16, false, 3);
-    if (kind != K_B18) r->img[1] &= 0x3F;
+    if (kind < K_B18) r->img[1] &= 0x3F;
     CHECK(OP_WRITE(PROG_MEM_CONFIG, g->cfg, g->cfg_n) == PROG_OK);
     CHECK(readback(r, PROG_MEM_CONFIG, g->cfg, g->cfg_n));
+    if (kind == K_B18)                      /* Q43/Q84 config: bytes */
+        for (unsigned i = 0; i < g->cfg_n; i++) CHECK(c->cfgw[16 + 8 + i] == r->img[i]);
+    if (kind == K_Q10)                      /* Q10 config: 16-bit words */
+        for (unsigned i = 0; i < g->cfg_n / 2; i++) CHECK(c->cfgw[16 + 4 + i] == (uint16_t)(r->img[2 * i] | r->img[2 * i + 1] << 8));
     gen(r, 16, w14, 4);
     CHECK(OP_WRITE(PROG_MEM_USER, g->user, g->user_n) == PROG_OK);
     CHECK(readback(r, PROG_MEM_USER, g->user, g->user_n));
+    if (kind >= K_B18)                      /* PIC18 user ID: 16-bit words, little endian image */
+        for (unsigned i = 0; i < g->user_n / 2; i++) CHECK(c->uid[i] == (uint16_t)(r->img[2 * i] | r->img[2 * i + 1] << 8));
     gen(r, 12, false, 5);
     CHECK(OP_WRITE(PROG_MEM_EEPROM, g->ee, 12) == PROG_OK);
     CHECK(readback(r, PROG_MEM_EEPROM, g->ee, 12));
@@ -451,7 +537,7 @@ static void test_flow(int kind) {
 static void test_verify_fail(int kind) {
     rig_t *r = calloc(1, sizeof *r);
     rig_init(r, kind);
-    gen(r, 64, kind != K_B18, 6);
+    gen(r, 64, kind < K_B18, 6);
     r->chip.fault_idx = 0x40 / 2 + 5;
     CHECK(OP_ENTER() == PROG_OK);
     CHECK(OP_WRITE(PROG_MEM_FLASH, 0x40, 64) == PROG_E_VERIFY);
@@ -478,10 +564,42 @@ static void test_args(int kind) {
     free(r);
 }
 
+/* the key order and the ID word layout follow the command set; flags override them */
+static void test_key_and_id_flags(void) {
+    rig_t *r = calloc(1, sizeof *r);
+    rig_init(r, K_A);                       /* a 6-bit chip that wants MSb first, 32 clocks */
+    r->chip.key_lsb = false;
+    r->ctx.flags |= PIC_F_KEY_FLIP;
+    CHECK(P()->enter(&r->ctx) == PROG_OK && r->chip.prog && r->chip.last_key == KEY);
+    clean(r, "key flip A");
+    free(r);
+    r = calloc(1, sizeof *r);
+    rig_init(r, K_B16);                     /* an 8-bit chip that wants LSb first, 33 clocks */
+    r->chip.key_lsb = true;
+    r->ctx.flags |= PIC_F_KEY_FLIP;
+    CHECK(P()->enter(&r->ctx) == PROG_OK && r->chip.prog && r->chip.last_key == KEY);
+    clean(r, "key flip B");
+    free(r);
+    r = calloc(1, sizeof *r);
+    rig_init(r, K_A);                       /* a 6-bit chip with REV at 0x8005 and DEV at 0x8006 */
+    r->chip.split = true; r->chip.dev = 0x2A5; r->chip.rev = 0x2002;
+    r->ctx.flags |= PIC_F_ID_SPLIT;
+    CHECK(P()->enter(&r->ctx) == PROG_OK);
+    CHECK((r->ctx.id[0] | r->ctx.id[1] << 8) == 0x2A5 && (r->ctx.id[2] | r->ctx.id[3] << 8) == 0x2002);
+    clean(r, "id split");
+    free(r);
+    r = calloc(1, sizeof *r);
+    rig_init(r, K_A);                       /* packed word: DEV in bits 13:5, REV in 4:0 */
+    CHECK(P()->enter(&r->ctx) == PROG_OK);
+    CHECK((r->ctx.id[0] | r->ctx.id[1] << 8) == 0xA4 && (r->ctx.id[2] | r->ctx.id[3] << 8) == 2);
+    free(r);
+}
+
 int main(void) {
     test_entry_id();
     test_no_answer();
-    for (int k = K_A; k <= K_B18; k++) { test_flow(k); test_verify_fail(k); test_args(k); }
+    test_key_and_id_flags();
+    for (int k = K_A; k <= K_Q10; k++) { test_flow(k); test_verify_fail(k); test_args(k); }
     printf("test_prog_pic: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }

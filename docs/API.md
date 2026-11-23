@@ -3309,6 +3309,17 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 Write one memory region per `start`; the SDK splits a `.hex` or `.elf` file. Every page written is
 read back and compared.
 
+`pic` `flags` (the SDK sets them from its device table; bit values in `stm32h563/src/prog_pic.h`):
+bit 0 8-bit command set (PIC16F18xxx, PIC18 Q), bit 1 PIC18 Q (byte PC), bit 2 chip erase also
+clears the data EEPROM (6-bit set), bit 3 code-protect bit is 1 when protected, bits 8..11 the
+code-protect bit number, bit 4 PIC18 Q10 (bulk erase without a region payload, 16-bit config
+words, 80 ms erase), bit 5 6-bit chip with separate revision (0x8005) and device ID (0x8006) words
+(default: both packed in 0x8006, device ID in `id[0..1]`, revision in `id[2..3]`), bit 6 entry key in
+the other command set's order. PIC18 Q user ID is 16-bit words and the Q43/Q84 config is bytes
+(Q10: words). Chip erase on PIC18 Q also clears the EEPROM. Bulk erase needs VDD above the chip's
+brown-out level (about 2.7 to 2.85 V on most; PIC18 Q10 about 1.9 V): at 1.8 V the erase can be
+ignored.
+
 `info` and `start` reply `{"started":true,"op":"start","proto":"c2"}`. `status` (and `abort`) reply:
 
 ```json
