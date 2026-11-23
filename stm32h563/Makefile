@@ -351,16 +351,20 @@ C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c src/wifi_bridge_ota.c \
              $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c $(BRIDGE_CORE)/bwp_id.c
 endif
 
-# W25Q code (src/xip_image.h, src/xip_session.h) test builds, development only (defines here,
-# before CFLAGS expands DEFS; the linker script switch is further down):
-#   XIP_RAM=1        link the image at a 16 KB RAM region (taken from the FreeRTOS heap) and copy it
-#                    there at session start: runs on any board, everything but memory-mapped mode.
+# W25Q code (src/xip_image.h, src/xip_session.h; defines here, before CFLAGS expands DEFS; the
+# linker script switch is further down):
+#   XIP_RAM=1        (the default, releases too) link the image at a 16 KB RAM region (taken from the
+#                    FreeRTOS heap) and copy it there at session start: runs on every board. The
+#                    pods shipped so far (before digital v3r4) cannot memory-map their W25Q.
+#                    XIP_RAM=0 builds the memory-mapped image (digital v3r4, or the PB6 bodge).
 #   XIP_BODGE_PB6=1  the W25Q's chip-select is PB6 (a wire from PB6 to the W25Q's /CS, PE3 left an
-#                    input): the real memory-mapped mode on a board before digital v3r4.
-ifeq ($(XIP_RAM),1)
-ifeq ($(RELEASE),1)
-$(error XIP_RAM=1 is a development build and cannot be combined with RELEASE=1)
+#                    input): the real memory-mapped mode on a board before digital v3r4 (with
+#                    XIP_RAM=0). Development only.
+XIP_RAM ?= 1
+ifeq ($(XIP_BODGE_PB6),1)
+XIP_RAM := 0
 endif
+ifeq ($(XIP_RAM),1)
 DEFS      += -DBENCHPOD_XIP_RAM=1
 endif
 ifeq ($(XIP_BODGE_PB6),1)
@@ -370,13 +374,11 @@ endif
 DEFS      += -DBENCHPOD_XIP_BODGE_PB6=1
 endif
 
-# USB host build: USB_HOST=1 adds USB host mode (usb_host.h, the usb_host command: the pod hosts
-# the DUT on its USB-C or USB-A port). Not hardware-tested yet, so development only: refused
-# together with RELEASE=1. Without it the usb_host command answers as an unknown command.
+# USB host mode (usb_host.h, the usb_host and usb_flash commands: the pod hosts the DUT on its
+# USB-A host port, or its own USB-C connector on pods without one). On by default, releases too
+# (hardware-tested 2026-11-22); USB_HOST=0 leaves it out (the commands then answer as unknown).
+USB_HOST ?= 1
 ifeq ($(USB_HOST),1)
-ifeq ($(RELEASE),1)
-$(error USB_HOST=1 is a development build and cannot be combined with RELEASE=1)
-endif
 DEFS      += -DBENCHPOD_USB_HOST=1
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
