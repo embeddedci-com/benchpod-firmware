@@ -590,17 +590,36 @@ and deep images only, not the full emulation image.
 
 ## 17. Where the code lives
 
-`prog_sbw.c` is about 7 KB of Thumb code at -Os, see the PR for the measured number. The prog XIP image holds five
-protocols in 13 KB of a 20 KB region shared with the USB flash image (`xip_image.h`). SBW does not fit next to them
-(13 + 7 = 20 KB at best, with no room for the next protocol). A prog_flash job holds one session and runs **one**
-protocol, so the protocols never need to coexist in RAM. Options:
+Measured at -Os (`arm-none-eabi-gcc -mcpu=cortex-m33 -mthumb -Os -DPROG_XIP=1`, the flags `prog_*.o` get in the
+Makefile; text+rodata of the object, 2026-11-23):
+
+| Object | Bytes |
+|---|---|
+| prog_updi | 3 207 |
+| prog_pic | 2 755 |
+| prog_c2 | 2 648 |
+| prog_tpi | 1 865 |
+| prog_pdi | 2 493 |
+| xip_prog_mod | 161 |
+| **the xip_prog image today** | **13 129** |
+| **prog_sbw (FRAM parts, this change)** | **2 752** |
+| image with SBW | 15 881 of the 20 KB region (4.1 KB left) |
+
+The plan's guess was about 8 KB for the JTAG routines (`later.md`); the FRAM-only code is a third of that because it
+uses only the documented word access (`ReadMem`, `WriteMem`) and one mailbox erase. **It fits in the existing
+`xip_prog` image**, which has room for 7 KB. What it does not include and what each would add (estimates, not
+measured): quick reads and the mailbox write funclet (0.5 to 1 KB), password unlock and the MPU BOR dance (0.7 KB),
+F5xx/F6xx flash parts (flash controller and a RAM funclet, 2 to 3 KB), F1xx/F2xx/F4xx (different CPU control, TCLK
+strobes, 3 to 4 KB), and SWIM or cJTAG firmware later. The full MSP430 set would not fit next to the five.
+
+Options (a prog_flash job holds one session and runs one protocol, so protocols never need to coexist in RAM):
 
 | Option | Effect |
 |---|---|
-| a. Third XIP image `prog2` (slot `xip_prog2`, W25Q 0x280000 + header), same 20 KB overlay region in RAM builds, own table and hash record, dispatch by protocol id | no change to the five; adds one blob slot, `XIP_IMG_PROG2`, a table, an expected-hash record, `xip_finish.py` and `check_xip_refs.py` entries; SBW and later SWIM firmware or cJTAG live here. **Recommended.** |
-| b. Put SBW in the existing image and drop one protocol | no |
-| c. Internal flash | about 7 KB of the 57 KB code budget the plan quoted before the XIP move; works, spends what XIP saved |
-| d. Grow the region beyond 20 KB | the region is RAM shared with the usb image; the static RAM is at 99 % (plan.md) |
+| a. **SBW FRAM into `xip_prog` now** (a `dispatch` case, the enum and metadata entry, the Makefile object list, the linker script's object list) | cheapest, 4.1 KB headroom afterwards. **Recommended for the FRAM scope.** |
+| b. Third XIP image `prog2` (slot `xip_prog2`, own table, hash record, `xip_finish.py` and `check_xip_refs.py` entries, `XIP_IMG_PROG2`, dispatch by protocol id), same 20 KB overlay region | when flash parts, the funclet paths or SWIM/cJTAG firmware arrive and the 4.1 KB is gone; move SBW there at that time (the code does not change) |
+| c. Internal flash | spends the code budget XIP saved |
+| d. Grow the region beyond 20 KB | the region is RAM shared with the usb image; static RAM is at 99 % (plan.md) |
 
 The wiring layer has two gaps, both in `prog_wire.c` and out of scope here: (1) `prog_wire_close()` leaves the clock
 **high**, which on an MSP430 re-enables SBW and disables its RST function (section 12): SBW needs a way to leave TEST low
@@ -627,8 +646,9 @@ lock. Order:
 ## 19. What waits
 
 - Gateware (`ice40/`): not touched. A slot engine (section 15) waits for the SWIM session's change to `swd_engine.v` and for M1/M4.
-- Adding `prog_sbw` to the build: needs the third image (section 17, option a) and the protocol enum entry
-  (`PROG_PROTO_SBW`, `prog_flash.c` metadata table, `command_handler_prog.c` `proto` parsing, SDK).
+- Adding `prog_sbw` to the build: the enum entry (`PROG_PROTO_SBW`, today `PROG_PROTO_SBW_ID` = 5 in `prog_sbw.h`),
+  the `prog_flash.c` metadata table, the dispatch case, `command_handler_prog.c` `proto` parsing and the SDK. It fits
+  the existing `xip_prog` image (section 17, option a); a `prog2` image only when flash parts or the faster paths come.
 - `prog_wire` changes (clock left low at close; flush rules): after the bench.
 - Flash parts (Xv1 0x89, F5xx/F6xx flash controller): after FRAM works on the bench.
 - The faster FRAM write paths (mailbox funclet, quick access): after M7.
