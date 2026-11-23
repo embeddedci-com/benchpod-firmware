@@ -284,10 +284,150 @@ static int erase(prog_ctx_t *c) {
     return PROG_OK;
 }
 
+/* ---- memory access ---- */
+
+static uint32_t mbase(prog_ctx_t *c) {
+    st_t *s = S(c);
+    switch (c->mem) {
+    case PROG_MEM_FLASH:  return s->flash_base;
+    case PROG_MEM_EEPROM: return 0x1400;
+    case PROG_MEM_CONFIG: return s->nvm == 0 ? 0x1280 : 0x1050;
+    default:              return s->nvm == 0 ? 0x1300 : 0x1080;   /* user row */
+    }
+}
+
+/* Read n bytes at data address daddr (BUF at a time, one REPEAT + LD ptr++ each). verify: compare
+   with the staged bytes at src offset off (first difference: ctx->at_addr), else store to dst. */
+static int blk(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t n, bool verify) {
+    st_t *s = S(c);
+    TRY(st_ptr(c, daddr));
+    for (uint32_t p = 0; p < n;) {
+        uint32_t k = n - p < BUF ? n - p : BUF;
+        uint8_t t[5] = { SYNC, 0xA0, (uint8_t)(k - 1), SYNC, 0x24 };
+        TRY(xfer(c, t, 5, s->buf, k));
+        if (verify) {
+            if (c->src(c->job, off + p, s->cmp, k)) return PROG_E_SRC;
+            for (uint32_t i = 0; i < k; i++)
+                if (s->buf[i] != s->cmp[i]) { c->at_addr = c->addr + off + p + i; return PROG_E_VERIFY; }
+        } else if (c->dst(c->job, off + p, s->buf, k)) return PROG_E_SRC;
+        p += k;
+    }
+    return PROG_OK;
+}
+
+/* Stream n bytes (the first `real` come from the staged image at src offset off, the rest is 0xFF
+   padding) to data address daddr with ST ptr++, no ACKs; words = 16-bit stores. */
+static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uint32_t n, bool words) {
+    st_t *s = S(c);
+    for (uint32_t d = 0; d < n;) {
+        uint32_t m = n - d, mx = words ? 512 : 256;
+        if (m > mx) m = mx;
+        TRY(st_ptr(c, daddr + d));
+        TRY(stcs(c, CS_CTRLA, CTRLA_NOACK));
+        uint8_t h[5] = { SYNC, 0xA0, (uint8_t)((words ? m / 2 : m) - 1), SYNC, (uint8_t)(0x64 | words) };
+        int r = xfer(c, h, 5, NULL, 0);
+        for (uint32_t p = 0; !r && p < m;) {
+            uint32_t k = m - p < BUF ? m - p : BUF;
+            uint32_t have = real > d + p ? real - (d + p) : 0;
+            if (have > k) have = k;
+            if (have && c->src(c->job, off + d + p, s->buf, have)) r = PROG_E_SRC;
+            else {
+                memset(s->buf + have, 0xFF, k - have);
+                r = xfer(c, s->buf, k, NULL, 0);
+            }
+            p += k;
+        }
+        int r2 = stcs(c, CS_CTRLA, CTRLA_ON);
+        if (r) return r;
+        TRY(r2);
+        d += m;
+    }
+    return PROG_OK;
+}
+
+static int check_args(prog_ctx_t *c) {
+    st_t *s = S(c);
+    if (c->mem >= PROG_MEM_COUNT) return PROG_E_ARGS;
+    if (c->mem != PROG_MEM_CONFIG) {
+        if (!c->page || c->page > 512) return PROG_E_ARGS;
+        if (c->mem == PROG_MEM_FLASH && ((c->page | c->addr) & 1)) return PROG_E_ARGS;
+    }
+    uint64_t end = (uint64_t)mbase(c) + c->addr + c->len;
+    if (end > (1ull << (8 * (s->asz + 1)))) return PROG_E_ARGS;
+    return PROG_OK;
+}
+
+/* ---- write ---- */
+
+/* The commands and stores for one chunk of n bytes at data address a (src offset s->pos). */
+static int write_chunk(prog_ctx_t *c, uint32_t a, uint32_t n) {
+    st_t *s = S(c);
+    uint32_t off = s->pos, np = n;
+    bool v0 = s->nvm == 0, fl = c->mem == PROG_MEM_FLASH, cfg = c->mem == PROG_MEM_CONFIG;
+    bool page_erase = c->erase == PROG_ERASE_PAGE || (!v0 && c->mem == PROG_MEM_USER);
+    if (fl) np = (n + 1) & ~1u;     /* word access to the flash buffer */
+    TRY(nvm_wait(c, 100));
+    if (v0) {
+        if (cfg) {
+            uint8_t b;
+            if (c->src(c->job, off, &b, 1)) return PROG_E_SRC;
+            TRY(sts8(c, NVM_BASE + NVM_ADDR, (uint8_t)a));
+            TRY(sts8(c, NVM_BASE + NVM_ADDR + 1, (uint8_t)(a >> 8)));
+            TRY(sts8(c, NVM_BASE + NVM_DATA, b));
+            TRY(nvm_cmd(c, V0_WFU));
+            return nvm_wait(c, 100);
+        }
+        TRY(nvm_cmd(c, V0_PBC));
+        TRY(nvm_wait(c, 100));
+        TRY(store(c, a, off, n, np, fl));
+        TRY(nvm_cmd(c, (fl && !page_erase) ? V0_WP : V0_ERWP));   /* eeprom and user row always erase-write */
+        return nvm_wait(c, 100);
+    }
+    if (fl || c->mem == PROG_MEM_USER) {
+        if (page_erase) {
+            TRY(nvm_cmd(c, V2_FLPER));
+            TRY(sts8(c, a, 0xFF));
+            TRY(nvm_wait(c, 100));
+            TRY(nvm_cmd(c, V2_NOCMD));
+        }
+        TRY(nvm_cmd(c, V2_FLWR));
+        TRY(store(c, a, off, n, np, fl));
+    } else {
+        TRY(nvm_cmd(c, V2_EEERWR));      /* eeprom and fuses */
+        TRY(store(c, a, off, n, np, false));
+    }
+    TRY(nvm_wait(c, 100));
+    return nvm_cmd(c, V2_NOCMD);
+}
+
+static int write(prog_ctx_t *c) {
+    st_t *s = S(c);
+    c->phase = "write";
+    if (!c->len) return PROG_OK;
+    TRY(check_args(c));
+    uint32_t a = c->addr + s->pos, n;
+    if (c->mem == PROG_MEM_CONFIG) {
+        n = 1;
+        c->total = c->len;
+    } else {
+        n = c->page - a % c->page;
+        if (n > c->len - s->pos) n = c->len - s->pos;
+        c->total = (c->addr + c->len - 1) / c->page - c->addr / c->page + 1;
+    }
+    TRY(write_chunk(c, mbase(c) + a, n));
+    c->phase = "verify";
+    TRY(blk(c, mbase(c) + a, s->pos, n, true));
+    s->pos += n;
+    c->done = ++s->chunk;
+    if (s->pos < c->len) return PROG_RUNNING;
+    s->pos = s->chunk = 0;
+    return PROG_OK;
+}
+
 static int stub(prog_ctx_t *ctx) { (void)ctx; return PROG_E_UNSUPPORTED; }
 
 const prog_proto_t prog_proto_updi = {
     .name = "updi", .uart = true, .uses_nrst = false,
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER),
-    .enter = enter, .erase = erase, .write = stub, .read = stub, .leave = leave,
+    .enter = enter, .erase = erase, .write = write, .read = stub, .leave = leave,
 };

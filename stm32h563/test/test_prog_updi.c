@@ -477,10 +477,125 @@ static void test_erase(void) {
     free(r);
 }
 
+/* Enter, erase as asked, write [addr, addr+len) of `mem` from a patterned image, run to the end. */
+static int do_write(rig_t *r, int mem, uint32_t addr, uint32_t len, int erase, uint16_t page) {
+    const prog_proto_t *p = &prog_proto_updi;
+    fill(r->job.img, sizeof(r->job.img), 0x11);
+    r->ctx.mem = (uint8_t)mem; r->ctx.addr = addr; r->ctx.len = len; r->ctx.erase = (uint8_t)erase; r->ctx.page = page;
+    int rc = run(&r->ctx, p->enter);
+    if (rc) return rc;
+    rc = run(&r->ctx, p->erase);
+    if (rc) return rc;
+    return run(&r->ctx, p->write);
+}
+
+static bool same(const uint8_t *a, const uint8_t *b, uint32_t n) { return !memcmp(a, b, n); }
+
+static void test_write(void) {
+    rig_t *r;
+    /* tinyAVR: flash from a dirty chip, chip erase, 3 pages with a short last one */
+    r = rig_new(0); fill(r->chip.r[R_FLASH].d, 0x4000, 77);
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 150, PROG_ERASE_CHIP, 64), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d, r->job.img, 150));
+    CHECK_EQ(r->chip.r[R_FLASH].d[150], 0xFF);
+    CHECK_EQ(r->ctx.total, 3); CHECK_EQ(r->ctx.done, 3);
+    CHECK_EQ(r->chip.bad_access, 0); CHECK_EQ(r->chip.bad_frame, 0);
+    CHECK_EQ(r->chip.st_bytes, 0);                      /* flash only by words */
+    CHECK_EQ(r->chip.cmds[1], 3);                       /* WP per page */
+    free(r);
+    /* tinyAVR: page erase on an unaligned region: neighbours stay, written pages are erased first */
+    r = rig_new(0); fill(r->chip.r[R_FLASH].d, 0x4000, 77);
+    uint8_t keep[0x4000]; memcpy(keep, r->chip.r[R_FLASH].d, sizeof(keep));
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 70, 100, PROG_ERASE_PAGE, 64), PROG_OK);   /* pages 1 and 2 */
+    CHECK(same(r->chip.r[R_FLASH].d + 70, r->job.img, 100));
+    CHECK(same(r->chip.r[R_FLASH].d, keep, 64));                  /* page 0 untouched */
+    CHECK(same(r->chip.r[R_FLASH].d + 192, keep + 192, 64));      /* page 3 untouched */
+    CHECK_EQ(r->chip.r[R_FLASH].d[64], 0xFF);                     /* start of page 1, before the data */
+    CHECK_EQ(r->ctx.total, 2);
+    CHECK_EQ(r->chip.cmds[3], 2);                                 /* ERWP */
+    free(r);
+    /* tinyAVR: odd length pads the last word with 0xFF */
+    r = rig_new(0);
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 5, PROG_ERASE_CHIP, 64), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d, r->job.img, 5)); CHECK_EQ(r->chip.r[R_FLASH].d[5], 0xFF);
+    free(r);
+    /* tinyAVR: eeprom (page 32, offset 8, 40 bytes), user row, fuses */
+    r = rig_new(0); fill(r->chip.r[R_EE].d, 256, 4);
+    CHECK_EQ(do_write(r, PROG_MEM_EEPROM, 8, 40, PROG_ERASE_NONE, 32), PROG_OK);
+    CHECK(same(r->chip.r[R_EE].d + 8, r->job.img, 40));
+    CHECK_EQ(r->chip.r[R_EE].d[7], (uint8_t)(4 + 7 * 7));      /* neighbours stay */
+    CHECK_EQ(r->chip.r[R_EE].d[48], (uint8_t)(4 + 48 * 7));
+    CHECK_EQ(r->chip.bad_access, 0);
+    free(r);
+    r = rig_new(0); fill(r->chip.r[R_USER].d, 32, 6);
+    CHECK_EQ(do_write(r, PROG_MEM_USER, 0, 32, PROG_ERASE_NONE, 32), PROG_OK);
+    CHECK(same(r->chip.r[R_USER].d, r->job.img, 32));
+    free(r);
+    r = rig_new(0);
+    CHECK_EQ(do_write(r, PROG_MEM_CONFIG, 1, 3, PROG_ERASE_NONE, 0), PROG_OK);
+    CHECK(same(r->chip.r[R_FUSE].d + 1, r->job.img, 3));
+    CHECK_EQ(r->chip.r[R_FUSE].d[0], 0xFF);
+    CHECK_EQ(r->ctx.total, 3);
+    CHECK_EQ(r->chip.bad_access, 0);
+    free(r);
+    /* AVR DA: flash 1200 bytes in 512-byte pages (256 words per REPEAT), page erase */
+    r = rig_new(2); fill(r->chip.r[R_FLASH].d, 0x4000, 77);
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 1200, PROG_ERASE_PAGE, 512), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d, r->job.img, 1200));
+    CHECK_EQ(r->chip.r[R_FLASH].d[1200], 0xFF);                   /* rest of the last page is erased */
+    CHECK_EQ(r->ctx.total, 3);
+    CHECK_EQ(r->chip.bad_access, 0); CHECK_EQ(r->chip.st_bytes, 0);
+    CHECK_EQ(r->chip.ctrla, 0);
+    free(r);
+    /* AVR DA: flash after a chip erase writes without a page erase */
+    r = rig_new(2);
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 512, 512, PROG_ERASE_CHIP, 512), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d + 512, r->job.img, 512));
+    CHECK_EQ(r->chip.cmds[8], 0);
+    free(r);
+    /* AVR DA: eeprom, fuses, user row (user row is erased first) */
+    r = rig_new(2); fill(r->chip.r[R_EE].d, 512, 4);
+    CHECK_EQ(do_write(r, PROG_MEM_EEPROM, 10, 37, PROG_ERASE_NONE, 1), PROG_OK);
+    CHECK(same(r->chip.r[R_EE].d + 10, r->job.img, 37));
+    CHECK_EQ(r->ctx.total, 37);
+    free(r);
+    r = rig_new(2);
+    CHECK_EQ(do_write(r, PROG_MEM_CONFIG, 0, 9, PROG_ERASE_NONE, 0), PROG_OK);
+    CHECK(same(r->chip.r[R_FUSE].d, r->job.img, 9));
+    free(r);
+    r = rig_new(2); fill(r->chip.r[R_USER].d, 32, 6);
+    CHECK_EQ(do_write(r, PROG_MEM_USER, 0, 32, PROG_ERASE_NONE, 32), PROG_OK);
+    CHECK(same(r->chip.r[R_USER].d, r->job.img, 32));
+    CHECK_EQ(r->chip.bad_access, 0);
+    free(r);
+    /* verify failure: the chip reads one byte back wrong */
+    r = rig_new(0); r->chip.corrupt_off = 100;
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 64, 100, PROG_ERASE_PAGE, 64), PROG_E_VERIFY);
+    CHECK_EQ(r->ctx.at_addr, 100);
+    free(r);
+    r = rig_new(2); r->chip.corrupt_off = 600;
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 1000, PROG_ERASE_PAGE, 512), PROG_E_VERIFY);
+    CHECK_EQ(r->ctx.at_addr, 600);
+    free(r);
+    /* NVM stays busy after the page write: timeout */
+    r = rig_new(0); r->chip.busy_polls = 1 << 30;
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 64, PROG_ERASE_CHIP, 64), PROG_E_TIMEOUT);
+    free(r);
+    /* NVM write error flag */
+    r = rig_new(2); r->chip.err = 0x10;
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 64, PROG_ERASE_NONE, 512), PROG_E_PROTOCOL);
+    free(r);
+    /* the staged image cannot be read */
+    r = rig_new(0); r->job.src_fail = 1;
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 64, PROG_ERASE_NONE, 64), PROG_E_SRC);
+    free(r);
+}
+
 int main(void) {
     test_model_raw();
     test_entry();
     test_erase();
+    test_write();
     if (fails) { printf("%d of %d checks FAILED\n", fails, checks); return 1; }
     printf("test_prog_updi: %d checks passed\n", checks);
     return 0;
