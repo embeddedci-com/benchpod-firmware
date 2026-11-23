@@ -4691,7 +4691,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` and `xip_prog` (that code, two images: their `state` is `ok` only for the image built with the running firmware); the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` and `xip_prog` (that code, two images: their `state` is `ok` only for the image built with the running firmware). From this firmware on, every board lists `xip` and `xip_prog`, also pods with the ESP32-C3: they use the W25Q space where older firmware kept a copy of the C3's image (`esp` now goes straight into the C3); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in

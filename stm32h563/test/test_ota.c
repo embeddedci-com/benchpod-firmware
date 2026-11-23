@@ -695,9 +695,11 @@ static void test_xip_target(void) {
     CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP, 0) == 0, "this firmware's xip image was refused");
     ota_abort();
 
-    /* The esp blob shares the sectors: with it listed, xip is not. */
+    /* A pod with the ESP32-C3 lists both: the C3's image goes straight into the C3, so the old
+       esp copy no longer holds the sectors the xip slots use. */
     blob_store_set_esp_listed(true);
-    CHECK(ota_target_from_name("xip") == -1, "xip listed next to the esp blob");
+    CHECK(ota_target_from_name("xip") == OTA_TARGET_XIP, "xip not listed on a pod with the ESP32-C3");
+    CHECK(ota_target_from_name("esp") == OTA_TARGET_ESP, "esp not listed next to xip");
     blob_store_set_xip_listed(false);
     memset(&mock_xip_manifest, 0, sizeof(mock_xip_manifest));
 

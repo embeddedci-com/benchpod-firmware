@@ -49,7 +49,10 @@ static bool s_esp_listed = true;
 
 void blob_store_set_esp_listed(bool listed) { s_esp_listed = listed; }
 
-/* The xip slots share their sectors with the old esp slot: listed only without the esp blob. */
+/* The xip slots use sectors of the old esp slot, which no firmware fills since the C3 image went
+   straight into the C3 (3.10.x): listed on every board that can run W25Q code, C3 or not. A copy
+   older firmware left there is never read as an xip image (the header names its slot), and an xip
+   write erases only its own slot's sectors. */
 static bool s_xip_listed;
 
 void blob_store_set_xip_listed(bool listed) { s_xip_listed = listed; }
@@ -60,7 +63,7 @@ bool blob_listed(blob_id_t id)
     if (id == BLOB_BRIDGE) return true;
 #endif
     if (id == BLOB_ESP) return s_esp_listed;
-    if (id == BLOB_XIP || id == BLOB_XIP_PROG) return s_xip_listed && !s_esp_listed;
+    if (id == BLOB_XIP || id == BLOB_XIP_PROG) return s_xip_listed;
     return id < BLOB_COUNT || id == BLOB_GW2;
 }
 
