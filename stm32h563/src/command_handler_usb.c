@@ -40,8 +40,8 @@ static void usb_host_reply(int conn_id)
     if (!data) { send_error(conn_id, "usb_host: out of memory"); return; }
     usb_host_info_t info;
     usb_host_info(&info);
-    if (usb_host_reply_json(&info, data, cap) == 0) send_error(conn_id, "usb_host: reply too large");
-    else send_ok_str(conn_id, data);
+    if (usb_host_reply_json(&info, data, cap) == 0) bp_err_reply_too_large(conn_id);
+    else send_ok_large(conn_id, data);
     vPortFree(data);
 }
 
@@ -138,7 +138,7 @@ static void usb_flash_reply(int conn_id)
              (unsigned long)st.len, (unsigned long)st.address, st.protocol, st.phase, (unsigned long)st.done,
              (unsigned long)st.total, st.result,
              (!st.running && st.have_result && st.rc == 0) ? "true" : "false", (unsigned long)st.ms);
-    send_ok_str(conn_id, data);
+    send_ok_large(conn_id, data);
 }
 
 void handle_usb_flash(int conn_id, const char *json)
