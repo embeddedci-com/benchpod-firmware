@@ -432,3 +432,204 @@ The pod's wiring layer needs a way to leave the clock low; see section 17.)
 13. Whether the bus keeper still holds the TDO level after the chip releases SBWTDIO at the TDO slot's
     rising edge ([S320 2.2.3.4] speaks of the keeper only for the master's release). Matters for
     sampling after the rising edge instead of before it (section 14).
+
+## 14. The pod's bit-bang byte mode against SBW
+
+What the byte mode is (read from `ice40/src/swd_engine.v`, `signal_engine.c` `fpga_swd_feed`,
+`prog_wire.c`; none of it measured yet, `prog_wire.h`: "edge timing not measured yet"):
+
+- `fpga_swd_arm(clk, data)` puts the SWD engine in remote_bitbang mode. Each byte of a `SWD_FEED` is one
+  command: `d e f g` set (SWCLK, SWDIO) = (0,0) (0,1) (1,0) (1,1) **both at once**; `O`/`o` drive or release
+  SWDIO; `c` samples SWDIO (2-flop synchronised) into the reply.
+- A command takes effect when its byte has been received: **one SPI byte time after the previous one**. The
+  SPI link is 250 MHz / 128 = 1.95 MHz at boot and 250 MHz / 64 = 3.9 MHz once the gateware is v52 or newer
+  (`signal_engine.c` `spi_link_for_version`; the pod runs v61). One byte is 8 SPI clocks: **4.1 us at
+  the boot rate, 2.05 us at the fast rate**, if the STM32 SPI master leaves no gap between bytes of a
+  burst (UNCLEAR, to measure; the H5's master inter-data idleness is not set in `signal_engine.c`).
+- A feed is cut into bursts: `fpga_swd_feed` sends up to 256 bytes per SPI transaction, stops before a
+  `c` that would overflow the caller's reply space, and `prog_wire.c` flushes at 192 bytes
+  (`FEED_MAX`), or when a clock-high `set()` finds 176 queued (`FEED_SOFT`), or before a `c` when
+  `nsamples + nfeed >= 128`. **Between two bursts the pins sit still for tens of microseconds** (CS
+  release, DMA setup, reading the reply). The old rule "keep the clock high at every flush" covers the
+  first two; **the `c` guard flushes before the `c`, that is, with SBWTCK low in a TDO slot.** The SBW bit
+  layer must therefore do its own accounting and flush at cycle boundaries (`prog_sbw.c` does: it flushes
+  before a cycle when more than 96 bytes are queued).
+
+### 14.1 One SBW cycle in bytes
+
+| Slot | Bytes | Low phase (fall to rise) |
+|---|---|---|
+| TMS | `set(1,tms)` setup, `set(0,tms)` fall, `set(1,tms)` rise | 1 byte time |
+| TMS, TMSLDH shape | `set(1,0)`, `set(0,0)`, `set(0,1)`, `set(1,1)` | 2 byte times |
+| TDI | same as TMS | 1 byte time |
+| TDO, with read | `o`, `set(0,x)` fall, `c`, `set(1,x)` rise, `O` | **2 byte times** (the `c` is a byte of its own) |
+| TDO, no read | `o`, fall, rise, `O` | 1 byte time |
+
+A byte holds clock and data together, so a data change needs its own byte *after* the rising edge (hold
+19 ns) and *before* the falling edge (setup 4 ns): that is why each of the TMS and TDI slots is three
+bytes and not two. Data and clock never change in the same byte except at a fall in the TDO slot (data
+released, level irrelevant).
+
+| Per cycle | Boot link (4.1 us/byte) | Fast link (2.05 us/byte) |
+|---|---|---|
+| bytes | 11 with a read, 10 without | same |
+| time | 45 / 41 us | **22.5 / 20.5 us** |
+| longest low phase (TDO with read, TMSLDH) | **8.2 us** | **4.1 us** |
+| JTAG cycles per second | about 22k | about 44k |
+
+Against the limits (section 3): at the fast link the longest low phase, 4.1 us, is under both the 7 us
+of [S320] and the 15 us of the datasheets, with 2.9 us (7 us) of room for jitter. At the boot link it is 8.2 us:
+over [S320]'s 7 us, under the datasheets' 15 us. TMS and TDI slots, and the entry first clock (2.05 us, TI uses
+1 us), are 1 byte time. The minimum, 28 to 40 ns, is no problem.
+
+Sample timing: the `c` byte lands one byte time after the fall (2 us); the chip has driven TDO since 31 ns
+after the fall and drives until the rise, so the sample is inside the valid window by a wide margin.
+Sampling after the rise would depend on the bus keeper (item 13) and is not used.
+
+### 14.2 Cost of the flows (fast link, 22.5 us per cycle; the boot link doubles it)
+
+| Operation | Cycles | Time |
+|---|---|---|
+| `IR_Shift` | 14 | 0.3 ms |
+| `DR_Shift16` | 21 | 0.5 ms |
+| `ReadMem` or `WriteMem` (one word) | 185 | 4.2 ms |
+| 16 KB FR2433: write and read back | 16 384 words x 185 | about 70 s |
+| 256 KB FR5994 | 262 144 words x 185 | about 18 min (with the mailbox funclet and quick reads: about 4 min) |
+| the same with a gateware engine at 1 us per cycle (section 15) | | 3 s for 16 KB, 50 s for 256 KB |
+
+Flush overhead (one SPI transaction and a reply read per 96 to 176 bytes) adds roughly 10 to 15 %; not
+measured. Slow for large parts, fine for the LaunchPad class the bench has (FR2433, 16 KB).
+
+### 14.3 Which sequences need a guaranteed short low phase
+
+All of them: every slot is a low phase, and the limit is on every one. In order of risk: TDO slot with read and
+TMSLDH (2 byte times), TMS/TDI (1), the entry first clock (1). Keeping SBWTCK high between feeds is
+necessary (a gap is tens of microseconds) and the layer keeps to it, but it is **not sufficient** alone:
+
+1. Inside a burst the byte spacing must be uniform. The SPI master, DMA and the FPGA's `spi_slave` decide
+   that; a single stretched byte of 3 us would make a 2-byte low phase 5 us at the fast link, and of 5 us would
+   exceed 7 us.
+2. Inside a burst nothing else may stall the pod's SPI: other transactions to the FPGA from another task (LA
+   capture, status polling, PSRAM streaming) would cut the burst. The prog job runs on the hw worker; whether
+   that is exclusive on the SPI link is the question to measure (section 18, M2).
+3. A burst cut in a low phase is unrecoverable: the chip leaves SBW after 7 us (or 15) and the rest of the
+   sequence goes to a chip that is not listening. The layer then reads a wrong ID, so a failed answer must
+   mean "retry from entry", not "no chip".
+
+Whether the TCLK strobes of flash parts (section 12) are possible in this mode: no, they need edges 1 us
+apart on SBWTDIO inside a TDI slot's low phase (the byte mode's best is 2 us per edge at the fast rate:
+about 250 kHz period against the 250 to 450 kHz required). Flash parts need the engine.
+
+## 15. What a gateware slot engine would add
+
+Over the byte mode:
+
+1. **A guaranteed low phase**: the low phase is `half` clocks of the 24 MHz engine clock, fixed by a register
+   and bounded by the 7-bit field (half <= 127 is 5.3 us, under 7 us whatever the firmware does).
+   No SPI jitter, no flush race.
+2. **Sub-microsecond slots**: with `half = 4` (167 ns) a slot is 333 ns and a cycle 1 us (SBWTCK 3 MHz): 22x
+   faster; this is what makes 256 KB parts reasonable and the mailbox or quick paths cheap.
+3. **Setup and hold by construction**: the data changes half a slot after the rising edge (hold =
+   `half` x 41.7 ns, at least 83 ns) and half a slot before the falling edge.
+4. **Entry/exit timers in the engine** (1 us first clock, 100 us exit) so the firmware does not time them.
+5. TCLK strobes for flash parts (later), and the `DAP_JTAG_Sequence`-shaped interface so OpenOCD or
+   mspdebug-style host tools could drive SBW through the pod's CMSIS-DAP (they do not need it today; the pod's
+   own routines do).
+
+Sketch, next to `ice40/src/jtag_seq.v` (105 lines; this would be a similar size; NOT implemented, gateware is
+held back until the SWIM engine lands in `swd_engine.v`):
+
+```verilog
+module sbw_seq (
+    input  wire       clk, rst,
+    input  wire       on,         // armed in SBW mode (SPI_ARM flags bit 4, v6x+)
+    input  wire       arm,        // 1-cycle: (re)armed: SBWTCK high, SBWTDIO released
+    input  wire [6:0] half,       // clk per SBWTCK half period, 2..127
+    input  wire       dio_s,      // synchronised SBWTDIO (pad)
+    input  wire [7:0] t_rd,       // queue head, as in jtag_seq
+    input  wire       qready,
+    output reg        take, push,
+    output wire [7:0] pdata,
+    output wire       busy,
+    output reg        tck,        // SBWTCK (TEST): rests HIGH, unlike jtag_seq's TCK
+    output reg        dio_o,      // SBWTDIO level
+    output reg        dio_oe      // SBWTDIO driven
+);
+```
+
+SPI_ARM: `sck_ch` = TEST, `mosi_ch` = `miso_ch` = RST/SBWTDIO (one bidirectional pad as in the I2C master's SDA),
+`cs_ch` unused. Queue (SWD_FEED bytes), all fields bit 0 first:
+
+| Token | Bytes | Meaning |
+|---|---|---|
+| SEQ | n in bits 5:0 with bits 7:6 = 00 (cycles, 0 = 64), flags byte, then ceil(n/8) TDI bytes | n JTAG cycles; flags bit 0 = TMS level for all of them (as `DAP_JTAG_Sequence`), bit 1 = capture TDO, bit 2 = TMSLDH slot shape (TCLK handling), bit 3 = TDI slots hold SBWTDIO as TCLK_saved |
+| PINS | `0x40`, levels | SBWTCK, SBWTDIO level and drive (entry, exit, mailbox steps) |
+| WAIT | `0x80`, count lo, count hi | n x 1 us with the pins as they are |
+
+A capturing SEQ appends ceil(n/8) TDO bytes to the reply buffer (jtag_seq packing, where the last byte's TDO bits are
+its top k bits). Cycle: TMS slot: SBWTCK high `half` (data setup), low `half`, rise; TDI slot the same; TDO slot:
+release `half` after the rise, low `half` with the sample at the end (2-flop synchroniser, 83 ns before: still
+inside the chip's drive window), rise, drive again `half` after the rise. Idle: SBWTCK high, so a queue
+underrun between tokens is harmless (a burst cut in the byte mode is not). Like JTAG and I2C it fits the loop
+and deep images only, not the full emulation image.
+
+## 16. Recommendation
+
+1. **Build the bit-bang transport first** (it is written, section 14 says the fast link is inside the limits on
+   paper, and the bench decides), and **require gateware v52+ for SBW** (the fast SPI link). At the boot rate the
+   TDO slot is 8.2 us: over [S320]'s 7 us.
+2. Keep the SBW bit layer behind the small interface of section 6 so the engine can replace it without touching
+   the JTAG, FRAM or lock code.
+3. **Decide on the engine after the bench measurements** of section 18: if M1 shows the longest SBWTCK low phase
+   (TDO slot with read) at most 5 us at the fast link with the pod busy, and M5 shows the real chip tolerates at
+   least 2 us more than that, ship the byte mode for FR2xx/FR4xx-size parts and document the speed (70 s for 16 KB);
+   build the engine when a 128 KB or larger FRAM part, a flash part, or the speed matters, or if M1 or M5 fail.
+   The engine is not needed for correctness on the small parts and is needed for flash parts and big FRAM.
+4. Gateware waits for the SWIM engine session (same `swd_engine.v` queue and SPI_ARM flags) and for the bench
+   numbers.
+
+## 17. Where the code lives
+
+`prog_sbw.c` is about 7 KB of Thumb code at -Os, see the PR for the measured number. The prog XIP image holds five
+protocols in 13 KB of a 20 KB region shared with the USB flash image (`xip_image.h`). SBW does not fit next to them
+(13 + 7 = 20 KB at best, with no room for the next protocol). A prog_flash job holds one session and runs **one**
+protocol, so the protocols never need to coexist in RAM. Options:
+
+| Option | Effect |
+|---|---|
+| a. Third XIP image `prog2` (slot `xip_prog2`, W25Q 0x280000 + header), same 20 KB overlay region in RAM builds, own table and hash record, dispatch by protocol id | no change to the five; adds one blob slot, `XIP_IMG_PROG2`, a table, an expected-hash record, `xip_finish.py` and `check_xip_refs.py` entries; SBW and later SWIM firmware or cJTAG live here. **Recommended.** |
+| b. Put SBW in the existing image and drop one protocol | no |
+| c. Internal flash | about 7 KB of the 57 KB code budget the plan quoted before the XIP move; works, spends what XIP saved |
+| d. Grow the region beyond 20 KB | the region is RAM shared with the usb image; the static RAM is at 99 % (plan.md) |
+
+The wiring layer has two gaps, both in `prog_wire.c` and out of scope here: (1) `prog_wire_close()` leaves the clock
+**high**, which on an MSP430 re-enables SBW and disables its RST function (section 12): SBW needs a way to leave TEST low
+(an ops hook, or `close` not touching the clock when the protocol says so); `prog_sbw_call(LEAVE)` leaves it low
+and the host test checks that; (2) the `c` guard flush described in section 14.
+
+## 18. What the bench must measure
+
+All with the pod's LA (14 channels, observes pins whoever owns them) on SBWTCK and SBWTDIO, and the MSP430
+LaunchPad's chip (cut the eZ-FET jumpers, TEST and RST wired to two pod channels, section 2), under the hardware
+lock. Order:
+
+| # | Measurement | Why | Pass |
+|---|---|---|---|
+| M1 | Feed 192-byte bursts that repeat the bytes of a TDO slot (`o`, fall, `c`, rise, `O`) and of plain slots, at both link rates, 100 000 cycles, with idle pod and with Ethernet and USB traffic and a DAP session running; LA at the highest rate; histogram of the SBWTCK low width and of the high width at burst boundaries | the one number the decision rests on: longest low phase, byte spacing jitter, gaps inside a burst | longest low <= 5 us (TDO with read), fast link, loaded |
+| M2 | Same capture while other tasks use the SPI link to the FPGA (LA capture, status poll, PSRAM streaming, the web UI) | whether a burst can be cut by other SPI users | no burst is cut |
+| M3 | `prog_sbw` against the real chip: ID read (JTAG ID 0x98 for FR2433 and device ID 0x40 0x82), lock check, 1 KB write and verify, 1000 times | functional proof of all slots at the real timing, entry sequence, tolerance of the 2 us first clock | 0 errors in 1000 runs; error pattern if not (which slot) |
+| M4 | Stretch the low phase on purpose (add n extra no-op bytes between the fall and the rise) and find the width at which the chip stops answering | resolves 7 us ([S320]) against 15 us (datasheets) on the real silicon | width found; compare with M1 |
+| M5 | Same as M3 with the boot link (gateware v51 or force `/128`) | confirms the "needs v52+" rule | fails or passes as predicted; decides if the boot rate is allowed |
+| M6 | Sample after the rise instead of before it | bus keeper (item 13) | informational |
+| M7 | `DATA_QUICK` write to FRAM, and the mailbox funclet write | the faster write paths (items 11 and 12) | informational |
+| M8 | Wiring: RST pin loading (10 kohm pod pullup, LaunchPad's RST capacitor) and the pod's drive into it; TEST pulldown against the clock edges | section 2 | clean edges on the LA |
+
+## 19. What waits
+
+- Gateware (`ice40/`): not touched. A slot engine (section 15) waits for the SWIM session's change to `swd_engine.v` and for M1/M4.
+- Adding `prog_sbw` to the build: needs the third image (section 17, option a) and the protocol enum entry
+  (`PROG_PROTO_SBW`, `prog_flash.c` metadata table, `command_handler_prog.c` `proto` parsing, SDK).
+- `prog_wire` changes (clock left low at close; flush rules): after the bench.
+- Flash parts (Xv1 0x89, F5xx/F6xx flash controller): after FRAM works on the bench.
+- The faster FRAM write paths (mailbox funclet, quick access): after M7.
+- Password unlock (FR5xxx/FR6xxx), IPE total erase, LPMx.5 recovery (magic pattern): later, on demand.
