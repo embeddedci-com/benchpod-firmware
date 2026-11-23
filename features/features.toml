@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 14
+revision = 15
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -935,3 +935,17 @@ firmware = "4.0.3"
 docs = "API.md#usb_flash--flash-a-board-over-usb"
 dated = "code"
 note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives, FAT12/FAT16), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
+
+[features.usb_hid]
+rev = 15
+firmware = "next"
+dated = "code"
+docs = "API.md#usb_hid--hid-interfaces-and-input-reports"
+note = "usb_hid (T0): the HID interfaces of the board on the USB host port (the first two) with their report descriptors in hex (offset pages through a long one), and read:true catches input reports (count 1 to 32, timeout_ms up to 10000, optional instance) with a millisecond timestamp and the report bytes in hex. Reports are caught only while a read runs."
+
+[features.usb_flash_picoboot]
+rev = 15
+firmware = "next"
+dated = "code"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+note = "usb_flash mode picoboot: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350) in BOOTSEL through its PICOBOOT interface: exclusive access, exit XIP, erase the 4 KB sectors the image covers, write 256-byte pages at address (default 0x10000000), read every page back and compare, then reboot into the program (leave false stays in BOOTSEL). Any other board is refused with BP0084."

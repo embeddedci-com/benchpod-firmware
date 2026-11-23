@@ -54,7 +54,7 @@ static esp_rom_io_t  s_esp_io;
 static family_t family(uint8_t mode)
 {
     switch (mode) {
-    case USB_FLASH_DFU: case USB_FLASH_TEENSY: return FAM_CTRL;
+    case USB_FLASH_DFU: case USB_FLASH_TEENSY: case USB_FLASH_PICOBOOT: return FAM_CTRL;
     case USB_FLASH_AVR: case USB_FLASH_SAMD:   return FAM_SER;
     case USB_FLASH_ESP:                        return FAM_ESP;
     default:                                   return FAM_MSC;
@@ -63,7 +63,7 @@ static family_t family(uint8_t mode)
 
 const char *usb_flash_mode_name(uint8_t mode)
 {
-    static const char *const k[USB_FLASH_MODES] = { "uf2", "file", "dfu", "teensy", "avr", "samd", "esp" };
+    static const char *const k[USB_FLASH_MODES] = { "uf2", "file", "dfu", "teensy", "avr", "samd", "esp", "picoboot" };
     return mode < USB_FLASH_MODES ? k[mode] : "?";
 }
 
@@ -102,6 +102,12 @@ static int op_ctrl(void *io, const uint8_t setup[8], uint8_t *data, uint32_t *ac
 {
     (void)io;
     return usb_ctrl_io(setup, data, actual, IO_TIMEOUT_MS);
+}
+
+static int op_bulk(void *io, uint8_t ep, uint8_t *data, uint32_t len, uint32_t *actual)
+{
+    (void)io;
+    return usb_bulk_io(ep, data, len, actual, IO_TIMEOUT_MS);
 }
 
 static int op_src(void *io, uint32_t off, uint8_t *buf, uint32_t n)
@@ -298,7 +304,7 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     if (s.running) { *why = "a USB flash is already running"; return -1; }
     free_ctx();
     if (s.ctx) { *why = "the last USB request has not finished yet"; return -1; }
-    if (p->mode >= USB_FLASH_MODES) { *why = "mode must be uf2, file, dfu, teensy, avr, samd or esp"; return -1; }
+    if (p->mode >= USB_FLASH_MODES) { *why = "mode must be uf2, file, dfu, teensy, avr, samd, esp or picoboot"; return -1; }
     const family_t fam = family(p->mode);
     usb_host_info_t hi;
     usb_host_info(&hi);
@@ -314,6 +320,10 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     }
     char n83[11];
     if (p->mode == USB_FLASH_FILE && !msc_flash_name83(p->name, n83)) { *why = "name must be an 8.3 file name"; return -1; }
+    if (p->mode == USB_FLASH_PICOBOOT && !(hi.vid == 0x2E8Au && (hi.pid == 0x0003u || hi.pid == 0x000Fu))) {
+        *why = "not an RP2040 or RP2350 in BOOTSEL (2E8A:0003 or 2E8A:000F)";
+        return -1;
+    }
     uint32_t base = 0, staged = 0;
     if (!command_handler_psram_stage(&base, &staged)) { *why = "nothing staged: load_bin with \"psram\":true first"; return -1; }
     if (p->len == 0 || p->len > staged) { *why = "len is 0 or more than the staged upload"; return -1; }
@@ -332,8 +342,9 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     switch (fam) {
     case FAM_CTRL: {
         ctrl_flash_ctx_t *c = s.ctx;
-        c->ops = (ctrl_flash_ops_t){ &s, op_ctrl, op_src, op_delay, hi.vid, hi.pid };
-        c->mode = p->mode == USB_FLASH_TEENSY ? CTRL_FLASH_HALFKAY : CTRL_FLASH_DFU;
+        c->ops = (ctrl_flash_ops_t){ &s, op_ctrl, op_src, op_delay, hi.vid, hi.pid, op_bulk };
+        c->mode = p->mode == USB_FLASH_TEENSY ? CTRL_FLASH_HALFKAY
+                : p->mode == USB_FLASH_PICOBOOT ? CTRL_FLASH_PICOBOOT : CTRL_FLASH_DFU;
         c->len = p->len;
         c->address = p->address;
         c->block = p->block;
@@ -369,6 +380,10 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     s.mode = p->mode;
     s.len = p->len;
     s.address = p->address;
+    if (p->mode == USB_FLASH_PICOBOOT && s.address == 0) {
+        s.address = 0x10000000u;
+        ((ctrl_flash_ctx_t *)s.ctx)->address = s.address;
+    }
     s.leave = p->leave;
     snprintf(s.name, sizeof(s.name), "%s", p->mode == USB_FLASH_FILE ? p->name : "");
     s.t0 = now_ms();

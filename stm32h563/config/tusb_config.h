@@ -60,6 +60,11 @@
 #define CFG_TUH_HUB              0
 #define CFG_TUH_ENDPOINT_MAX     16  /* endpoint NUMBERS, not a count: usbh indexes by number (an Uno R3 uses EP 4) */
 #define CFG_TUH_MSC              1   /* a USB drive to flash (usb_msc.h, usb_flash.h) */
+#define CFG_TUH_HID              2   /* HID interfaces to read (usb_hid.h): the first two the board has */
+#define CFG_TUH_HID_EPIN_BUFSIZE  64
+#define CFG_TUH_HID_EPOUT_BUFSIZE 8  /* output reports go over the control pipe, not an OUT endpoint */
+#define CFG_TUH_HID_SET_PROTOCOL_ON_ENUM 0   /* keep the device's default (report) protocol */
+#define CFG_TUH_API_EDPT_XFER    1   /* bulk transfers on a vendor interface (usb_msc.h: PICOBOOT) */
 #define CFG_TUH_CDC              1   /* a USB serial port to flash over (usb_serial.h, usb_flash.h) */
 #define CFG_TUH_CDC_FTDI         1   /* boards with a USB-serial chip instead of native USB */
 #define CFG_TUH_CDC_CP210X       1

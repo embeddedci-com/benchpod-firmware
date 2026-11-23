@@ -9,18 +9,21 @@ const char *ctrl_flash_rc_str(int rc)
     case CTRL_FLASH_E_IO:         return "a USB control transfer failed";
     case CTRL_FLASH_E_SRC:        return "reading the uploaded file failed";
     case CTRL_FLASH_E_NO_DFU:     return "the board has no DFU interface in DFU mode";
-    case CTRL_FLASH_E_STATUS:     return "the DFU loader reported an error";
+    case CTRL_FLASH_E_STATUS:     return "the loader reported an error";
     case CTRL_FLASH_E_LAYOUT:     return "the image does not fit the loader's flash layout";
     case CTRL_FLASH_E_NOT_TEENSY: return "the board is not a Teensy in its loader";
     case CTRL_FLASH_E_TIMEOUT:    return "the loader stayed busy";
     case CTRL_FLASH_E_ARGS:       return "bad length, address or block size";
+    case CTRL_FLASH_E_NOT_RP2:    return "the board is not an RP2040 or RP2350 in BOOTSEL";
+    case CTRL_FLASH_E_NO_PICOBOOT: return "the board has no PICOBOOT interface";
+    case CTRL_FLASH_E_VERIFY:     return "a page read back different from what was written";
     default:                      return "?";
     }
 }
 
 const char *ctrl_flash_phase_str(int phase)
 {
-    static const char *const k[] = { "start", "descriptors", "layout", "erase", "address", "write",
+    static const char *const k[] = { "start", "descriptors", "layout", "erase", "address", "write", "verify",
                                       "leave", "done" };
     return (phase >= 0 && phase < (int)(sizeof(k) / sizeof(k[0]))) ? k[phase] : "?";
 }

@@ -20,6 +20,11 @@ int  usb_msc_io(bool write, uint32_t lba, void *buf, uint32_t count, uint32_t ti
    data its data stage, *actual the bytes moved. 0 = ok, -1 = stalled or failed, -2 = no device.
    hw worker only. */
 int  usb_ctrl_io(const uint8_t setup[8], uint8_t *data, uint32_t *actual, uint32_t timeout_ms);
+/* One bulk transfer on `ep` (an endpoint of an RP2040/RP2350 PICOBOOT interface, which a small
+   driver opens at enumeration): data of len bytes (OUT: sent, IN: up to len, ending on a short
+   packet; len 0 sends a zero-length packet), *actual the bytes moved. 0 = ok, -1 = stalled or
+   failed, -2 = no device. hw worker only. */
+int  usb_bulk_io(uint8_t ep, uint8_t *data, uint32_t len, uint32_t *actual, uint32_t timeout_ms);
 /* No request is in flight (a buffer may be freed). */
 bool usb_msc_idle(void);
 /* usb task, every pass of its host loop. */

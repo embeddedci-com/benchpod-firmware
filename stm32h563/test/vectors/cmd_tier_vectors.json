@@ -22,6 +22,7 @@
     "ota_status": "T0",
     "blob_status": "T0",
     "xip": "T0",
+    "usb_hid": "T0",
     "usb_flash": "T1",
     "wiring_list": "T0",
     "wiring_get": "T0",

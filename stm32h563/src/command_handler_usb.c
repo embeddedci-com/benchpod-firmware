@@ -149,7 +149,8 @@ void handle_usb_host(int conn_id, const char *json)
  *   {"cmd":"usb_flash","mode":"avr","len":N}                       Arduino AVR bootloaders
  *   {"cmd":"usb_flash","mode":"samd","address":"0x2000","len":N}   Arduino SAMD bootloader
  *   {"cmd":"usb_flash","mode":"esp","address":0,"len":N}           ESP32 ROM over USB serial
- *   optional "leave":false (dfu, teensy): stay in the loader
+ *   {"cmd":"usb_flash","mode":"picoboot","address":"0x10000000","len":N}  RP2040/RP2350 PICOBOOT
+ *   optional "leave":false (dfu, teensy, picoboot): stay in the loader
  *   {"cmd":"usb_flash"}                                            the state
  *   {"cmd":"usb_flash","abort":true}
  * The file is the first len bytes a load_bin with "psram" staged; usb_host must be on with a
@@ -177,11 +178,11 @@ static void usb_flash_reply(int conn_id)
 void handle_usb_flash(int conn_id, const char *json)
 {
     if (bp_json_flag(json, "abort")) { usb_flash_abort(); usb_flash_reply(conn_id); return; }
-    char mode[8] = {0};
+    char mode[10] = {0};
     if (!bp_json_get(json, "mode", mode, sizeof(mode))) { usb_flash_reply(conn_id); return; }
     usb_flash_params_t p = {0};
     int m = usb_flash_mode_from_name(mode);
-    if (m < 0) { bp_err_usb_flash_refused(conn_id, "mode must be uf2, file, dfu, teensy, avr, samd or esp"); return; }
+    if (m < 0) { bp_err_usb_flash_refused(conn_id, "mode must be uf2, file, dfu, teensy, avr, samd, esp or picoboot"); return; }
     p.mode = (uint8_t)m;
     (void)bp_json_get(json, "name", p.name, sizeof(p.name));
     char v[16] = {0};
@@ -202,6 +203,93 @@ void handle_usb_flash(int conn_id, const char *json)
     usb_flash_reply(conn_id);
 }
 
+/* ---- usb_hid: the HID interfaces of the hosted board and their input reports (usb_hid.h) ------
+ *   {"cmd":"usb_hid"[,"instance":i][,"offset":N]}  interfaces + report descriptors (hex)
+ *   {"cmd":"usb_hid","read":true[,"count":N][,"timeout_ms":T][,"instance":i]}  input reports
+ * count 1..32 (default 1), timeout_ms 1..10000 (default 2000); instance: one interface (default all). */
+#include "usb_hid.h"
+#include "task.h"
+#include "usb_msc.h"
+
+#define HID_DESC_MAX 1024u
+
+static unsigned hid_num(const char *json, const char *key, unsigned def, unsigned lo, unsigned hi, bool *bad)
+{
+    char v[12] = {0};
+    if (!bp_json_get(json, key, v, sizeof(v))) return def;
+    char *end = NULL;
+    long n = strtol(v, &end, 10);
+    if (!end || *end || n < (long)lo || n > (long)hi) { *bad = true; return def; }
+    return (unsigned)n;
+}
+
+void handle_usb_hid(int conn_id, const char *json)
+{
+    usb_host_info_t hi;
+    usb_host_info(&hi);
+    if (hi.mode != USB_HOST_MODE_HOST) { send_error(conn_id, "usb_hid: USB host mode is not on (usb_host)"); return; }
+    bool bad = false;
+    char v[16] = {0};
+    const bool want_inst = bp_json_get(json, "instance", v, sizeof(v));
+    const unsigned inst = hid_num(json, "instance", 0, 0, USB_HID_MAX_ITF - 1u, &bad);
+    if (bad) { send_error(conn_id, "usb_hid: instance must be 0 or 1"); return; }
+    usb_hid_info_t info[USB_HID_MAX_ITF];
+    unsigned n = usb_hid_interfaces(info), m = 0;
+    for (unsigned i = 0; i < n; i++)
+        if (!want_inst || info[i].inst == inst) info[m++] = info[i];
+    n = m;
+    if (want_inst && n == 0) { send_error(conn_id, "usb_hid: no such HID instance"); return; }
+
+    const size_t cap = BP_CLOUD_REPLY_MAX - 64u;
+    char *data = pvPortMalloc(cap);
+    if (!data) { send_error(conn_id, "usb_hid: out of memory"); return; }
+    size_t len = 0;
+
+    memset(v, 0, sizeof(v));
+    if (bp_json_get(json, "read", v, sizeof(v)) && !strcmp(v, "true")) {
+        unsigned count = hid_num(json, "count", 1, 1, USB_HID_RING_MAX, &bad);
+        unsigned timeout = hid_num(json, "timeout_ms", 2000, 1, 10000, &bad);
+        if (bad) { vPortFree(data); send_error(conn_id, "usb_hid: count must be 1 to 32 and timeout_ms 1 to 10000"); return; }
+        if (n == 0) { vPortFree(data); send_error(conn_id, "usb_hid: no HID interface is mounted"); return; }
+        usb_hid_rep_t *slots = pvPortMalloc(USB_HID_RING_MAX * sizeof(*slots));
+        usb_hid_ring_t *ring = pvPortMalloc(sizeof(*ring));
+        if (!slots || !ring) { vPortFree(slots); vPortFree(ring); vPortFree(data); send_error(conn_id, "usb_hid: out of memory"); return; }
+        usb_hid_ring_init(ring, slots, USB_HID_RING_MAX);
+        uint8_t mask = 0;
+        for (unsigned i = 0; i < n; i++) mask |= (uint8_t)(1u << info[i].inst);
+        if (!usb_hid_capture_start(mask, ring)) {
+            vPortFree(slots); vPortFree(ring); vPortFree(data);
+            send_error(conn_id, "usb_hid: a read is already running");
+            return;
+        }
+        const TickType_t t0 = xTaskGetTickCount();
+        while (usb_hid_capture_count() < count && xTaskGetTickCount() - t0 < pdMS_TO_TICKS(timeout)) vTaskDelay(2);
+        usb_hid_capture_stop();
+        len = usb_hid_reports_json(ring, count, data, cap);
+        vPortFree(slots);
+        vPortFree(ring);
+    } else {
+        usb_hid_itf_t it[USB_HID_MAX_ITF];
+        uint8_t *buf = n ? pvPortMalloc(n * HID_DESC_MAX) : NULL;
+        if (n && !buf) { vPortFree(data); send_error(conn_id, "usb_hid: out of memory"); return; }
+        for (unsigned i = 0; i < n; i++) {
+            /* GET_DESCRIPTOR(report) on the interface, over the control pipe. */
+            uint8_t *d = buf + i * HID_DESC_MAX;
+            const uint8_t setup[8] = { 0x81, 6, 0, 0x22, info[i].itf, 0, (uint8_t)HID_DESC_MAX, (uint8_t)(HID_DESC_MAX >> 8) };
+            uint32_t got = 0;
+            if (usb_ctrl_io(setup, d, &got, 1000) != 0) got = 0;
+            it[i] = (usb_hid_itf_t){ info[i].inst, info[i].itf, info[i].protocol, (uint16_t)got, got ? d : NULL };
+        }
+        unsigned off = hid_num(json, "offset", 0, 0, HID_DESC_MAX, &bad);
+        if (bad) { vPortFree(buf); vPortFree(data); send_error(conn_id, "usb_hid: offset must be 0 to 1024"); return; }
+        len = usb_hid_list_json(it, n, hi.attached, off, data, cap);
+        vPortFree(buf);
+    }
+    if (len == 0) bp_err_reply_too_large(conn_id);
+    else send_ok_large(conn_id, data);
+    vPortFree(data);
+}
+
 #else /* !BENCHPOD_USB_HOST */
 
 void handle_usb_host(int conn_id, const char *json)
@@ -215,5 +303,11 @@ void handle_usb_flash(int conn_id, const char *json)
 {
     (void)json;
     bp_err_unknown_command(conn_id, "usb_flash");
+}
+
+void handle_usb_hid(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, "usb_hid");
 }
 #endif /* BENCHPOD_USB_HOST */

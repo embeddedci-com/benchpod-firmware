@@ -397,14 +397,15 @@ endif
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
              $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c \
-             $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c
+             $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c \
+             $(TUSB)/class/hid/hid_host.c src/usb_hid.c src/usb_hid_core.c
 endif
 
 # Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
-# USB_HOST=1 5 KB (the host stack and its classes, a 1 KB descriptor buffer), XIP_RAM=1 16 KB (the RAM copy of the image).
+# USB_HOST=1 6 KB (the host stack and its classes, a 1 KB descriptor buffer, the HID class), XIP_RAM=1 16 KB (the RAM copy of the image).
 HEAP_KB := 259
 ifeq ($(USB_HOST),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 5)
+HEAP_KB := $(shell expr $(HEAP_KB) - 6)
 endif
 ifeq ($(XIP_RAM),1)
 HEAP_KB := $(shell expr $(HEAP_KB) - 16)

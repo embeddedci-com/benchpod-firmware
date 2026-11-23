@@ -75,7 +75,10 @@ static void test_mixed_verbs(void) {
     expect("usb_host", "{\"cmd\":\"usb_host\",\"enabled\":true,\"port\":\"usb_c\"}", CMD_TIER_T2);
     expect("usb_host", "{\"cmd\":\"usb_host\",\"enabled\":false}", CMD_TIER_T2);
     expect("xip", "{\"cmd\":\"xip\"}", CMD_TIER_T0);
+    expect("usb_hid", "{\"cmd\":\"usb_hid\"}", CMD_TIER_T0);
+    expect("usb_hid", "{\"cmd\":\"usb_hid\",\"read\":true,\"count\":4}", CMD_TIER_T0);
     expect("usb_flash", "{\"cmd\":\"usb_flash\"}", CMD_TIER_T1);
+    expect("usb_flash", "{\"cmd\":\"usb_flash\",\"mode\":\"picoboot\",\"len\":4096}", CMD_TIER_T1);
     expect("usb_flash", "{\"cmd\":\"usb_flash\",\"mode\":\"uf2\",\"len\":1024}", CMD_TIER_T1);
     expect("xip", "{\"cmd\":\"xip\",\"selftest\":true}", CMD_TIER_T2);
     /* the console log level: read and set are T0 (it only changes what the console prints) */
