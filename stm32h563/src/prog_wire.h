@@ -49,6 +49,8 @@ typedef struct {
 #define PROG_WIRE_MEM 360u   /* bytes of state the caller provides (mem, 4-byte aligned) */
 int  prog_wire_open_2w(prog_wire_ops_t *ops, void *mem, unsigned clk_ch, unsigned data_ch);
 int  prog_wire_open_uart(prog_wire_ops_t *ops, void *mem, unsigned data_ch, char *err, size_t cap);
+/* The chip's reset on an LA pin (claimed open drain by the caller) instead of the pod's reset pin. */
+void prog_wire_reset_pin(prog_wire_ops_t *ops, unsigned la);
 void prog_wire_close(prog_wire_ops_t *ops);
 
 #endif /* PROG_WIRE_H */

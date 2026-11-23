@@ -3264,9 +3264,9 @@ pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 o
 | `proto` | Chips | Wiring |
 |---|---|---|
 | `updi` | AVR tinyAVR 0/1/2, megaAVR 0, AVR DA/DB/DD | UPDI on an LA pin, `data` |
-| `pic` | PIC16F1xxx, PIC16F18xxx, PIC18F Q (low-voltage entry) | ICSPCLK on `clk`, ICSPDAT on `data`, MCLR on the pod's reset pin |
+| `pic` | PIC16F1xxx, PIC16F18xxx, PIC18F Q (low-voltage entry) | ICSPCLK on `clk`, ICSPDAT on `data`, MCLR on the pod's reset pin or an LA pin (`reset`) |
 | `c2` | Silicon Labs EFM8, C8051F | C2CK on `clk`, C2D on `data` |
-| `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin |
+| `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin or an LA pin (`reset`) |
 | `pdi` | AVR XMEGA | PDI_CLK (the chip's RESET pin) on `clk`, PDI_DATA on `data` |
 
 `status` lists the protocols the running firmware has in `protos`. A protocol that is listed but
@@ -3289,6 +3289,7 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 | `op` | `info` (enter programming mode and read the chip's ID, nothing written), `start`, `status`, `abort` |
 | `proto` | `updi`, `pic`, `c2`, `tpi`, `pdi` |
 | `clk`, `data` | LA pins (1..14); `updi` takes `data` only |
+| `reset` | `pic` and `tpi`: `"nrst"` (default, the pod's reset pin) or an LA pin, driven open-drain |
 | `mem` | `flash` (default), `eeprom`, `config` (PIC configuration words, AVR fuses, C2 lock byte), `user` (AVR user row, PIC user ID) |
 | `addr` | start address in that memory, in bytes (PIC: 2 bytes per word) |
 | `len` | bytes of the staged upload to write (`start` only) |
@@ -3320,7 +3321,8 @@ allow)`, `memory, address, length or page size not valid here`, `could not read 
 Errors at `info`/`start`: `missing or unknown proto`, `nothing staged: load_bin with "psram":true
 first`, `len is more than the staged upload`, `BP0047` (`pod_busy`, also while a job runs), `BP0005`
 (the engine is in use by a DAP, SPI or I2C session), `BP0049` (a UART session is open, `updi`),
-`BP0031` (a pin conflict), `this pod has no reset pin, which pic needs`.
+`BP0031` (a pin conflict), `this pod has no reset pin: wire the chip's reset to an LA pin and pass reset`,
+`reset must be another pin than clk and data`.
 
 ## ESP32 targets (flash over the UART ROM bootloader)
 
