@@ -452,6 +452,7 @@ static void check_chip_erase(int nvm) {
     CHECK_EQ(r->chip.cmds[nvm == 0 ? 5 : 0x20], 1);
     if (nvm == 2) CHECK_EQ(r->chip.ctrla, 0);      /* v2: command cleared afterwards */
     CHECK_EQ(r->chip.bad_access, 0);
+    free(r);
     /* erase = none: nothing is sent to the NVM controller */
     r = rig_new(nvm);
     fill(r->chip.r[R_FLASH].d, 64, 9);
@@ -459,11 +460,13 @@ static void check_chip_erase(int nvm) {
     CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
     CHECK_EQ(run(&r->ctx, p->erase), PROG_OK);
     CHECK(r->chip.r[R_FLASH].d[3] != 0xFF);
+    free(r);
     /* the NVM controller stays busy: timeout */
     r = rig_new(nvm); r->ctx.erase = PROG_ERASE_CHIP;
     CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
     r->chip.stuck = true;
     CHECK_EQ(run(&r->ctx, p->erase), PROG_E_TIMEOUT);
+    free(r);
 }
 
 static void test_erase(void) {
