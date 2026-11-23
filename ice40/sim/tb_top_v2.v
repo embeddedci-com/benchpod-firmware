@@ -125,7 +125,7 @@ module tb_top_v2;
 `elsif USE_EMULATION
         cmd1(8'h18, r); check(r, 8'h04, "FPGA_FEATURES emulation");
 `else
-        cmd1(8'h18, r); check(r, 8'h19, "FPGA_FEATURES loop");
+        cmd1(8'h18, r); check(r, 8'h09, "FPGA_FEATURES loop");
 `endif
         // Fresh boot: dac/cap/step/swd all idle, no capture overflow -> STATUS 0x00.
         cmd1(8'h03, r); check(r, 8'h00, "STATUS");

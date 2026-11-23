@@ -805,7 +805,8 @@ module top (
     // fifth job (swim_engine.v; SPI_ARM flags bit 4): the dio slot is the open-drain SWIM wire, SWD_FEED
     // carries tokens (entry + sync measurement, command and data frames with ACK/retry, receive, config,
     // report), the reply buffer the sync length and the received bytes.  tb_swim.  Loop and deep images
-    // only (FPGA_FEATURES bit 4): the emulation image has no room for it.
+    // only in the deep image (FPGA_FEATURES bit 4): the emulation image has no room for it, and the loop image
+    // did not place with it (~4900 of 5280 LC).
     // GATEWARE_VERSION 61 = v60 + a JTAG MASTER as the SWD engine's fourth job (jtag_seq.v; SPI_ARM
     // flags bit 3): TCK/TDI/TDO/TMS on the SCK/MOSI/MISO/CS slots, and SWD_FEED carries CMSIS-DAP
     // DAP_JTAG_Sequence sequences as is, with the TDO bytes in the reply buffer.  tb_jtag.
@@ -1280,7 +1281,7 @@ module top (
 `elsif USE_EMULATION
     localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54)
 `else
-    localparam [7:0] IMG_FEATURES = 8'h19;   // closed-loop DAC control + JTAG master (v61) + SWIM master (v62)
+    localparam [7:0] IMG_FEATURES = 8'h09;   // closed-loop DAC control + JTAG master (v61)
 `endif
     engine_block #(.N(14), .GATEWARE_VERSION(8'd62), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),

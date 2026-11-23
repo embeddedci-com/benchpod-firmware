@@ -416,9 +416,12 @@ module engine_block #(
 `ifdef HAS_EMULATION
     localparam SWD_HAS_JTAG = 0;   // v61: no room for the JTAG master in the emulation image
     localparam SWD_HAS_SWIM = 0;   // v62: nor for the SWIM master
+`elsif HAS_DAC_LOOP
+    localparam SWD_HAS_JTAG = 1;
+    localparam SWD_HAS_SWIM = 0;   // v62: the loop image places only without it (5333 LC at first, ~4900 slimmed: noplace)
 `else
     localparam SWD_HAS_JTAG = 1;
-    localparam SWD_HAS_SWIM = 1;
+    localparam SWD_HAS_SWIM = 1;   // v62: the deep image has the room
 `endif
     swd_engine #(.REPLY_AW(9), .HAS_JTAG(SWD_HAS_JTAG), .HAS_SWIM(SWD_HAS_SWIM)) swd_i (
         .clk(clk), .rst(rst),

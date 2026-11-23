@@ -181,7 +181,7 @@ uint16_t fpga_dac_loop_input(void);
 #define FPGA_FEATURE_DEEP_REPLAY   0x02u
 #define FPGA_FEATURE_EMULATION     0x04u   /* v54: the sensor-emulation image (I2C/SPI targets, UART2) */
 #define FPGA_FEATURE_JTAG          0x08u   /* v61: the JTAG master (loop and deep images, not emulation) */
-#define FPGA_FEATURE_SWIM          0x10u   /* v62: the SWIM master (loop and deep images, not emulation) */
+#define FPGA_FEATURE_SWIM          0x10u   /* v62: the SWIM master (deep image only) */
 uint8_t  signal_engine_fpga_features(void);
 /* The last FPGA_FEATURES reading, without an SPI read (gw_caps.h). */
 uint8_t  signal_engine_fpga_features_cached(void);

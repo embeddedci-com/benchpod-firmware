@@ -9,7 +9,7 @@ reference; this page is the summary for firmware work. Status: gateware and simu
 
 ## Arming
 
-`SPI_ARM` with flags bit 4 (`0x10`), loop and deep images only (`FPGA_FEATURES` bit 4,
+`SPI_ARM` with flags bit 4 (`0x10`), deep image only (`FPGA_FEATURES` bit 4,
 `FPGA_FEATURE_SWIM`; gateware >= `SWIM_MIN_GW`, 62). The SWIM pin is the channel in `mosi_ch`
 and `miso_ch` (both the same channel); `sck_ch` and `cs_ch` are not driven. The engine only
 ever pulls the line low or releases it. The line must rise through a pull-up: the pod's own
