@@ -591,11 +591,57 @@ static void test_write(void) {
     free(r);
 }
 
+static void test_read(void) {
+    for (int nvm = 0; nvm <= 2; nvm += 2) {
+        rig_t *r = rig_new(nvm);
+        const prog_proto_t *p = &prog_proto_updi;
+        fill(r->chip.r[R_FLASH].d, 0x4000, 33); fill(r->chip.r[R_EE].d, 256, 44);
+        fill(r->chip.r[R_FUSE].d, 8, 55); fill(r->chip.r[R_USER].d, 32, 66);
+        CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+        struct { int mem; uint32_t addr, len; reg_t *reg; } t[] = {
+            { PROG_MEM_FLASH, 0, 1000, &r->chip.r[R_FLASH] },
+            { PROG_MEM_FLASH, 130, 700, &r->chip.r[R_FLASH] },    /* not a multiple of the block size */
+            { PROG_MEM_EEPROM, 5, 200, &r->chip.r[R_EE] },
+            { PROG_MEM_CONFIG, 0, 8, &r->chip.r[R_FUSE] },
+            { PROG_MEM_USER, 4, 20, &r->chip.r[R_USER] },
+        };
+        for (unsigned i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
+            memset(r->job.out, 0xAA, sizeof(r->job.out));
+            r->ctx.mem = (uint8_t)t[i].mem; r->ctx.addr = t[i].addr; r->ctx.len = t[i].len; r->ctx.page = 0;
+            CHECK_EQ(run(&r->ctx, p->read), PROG_OK);
+            CHECK(same(r->job.out, t[i].reg->d + t[i].addr, t[i].len));
+            CHECK_EQ(r->job.out[t[i].len], 0xAA);
+            CHECK_EQ(r->ctx.total, (t[i].len + 255) / 256); CHECK_EQ(r->ctx.done, r->ctx.total);
+        }
+        CHECK_EQ(r->chip.bad_frame, 0);
+        free(r);
+    }
+    /* write then read back through the protocol */
+    rig_t *r = rig_new(2);
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 700, PROG_ERASE_CHIP, 512), PROG_OK);
+    r->ctx.len = 700;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.read), PROG_OK);
+    CHECK(same(r->job.out, r->job.img, 700));
+    /* the chip stops answering in the middle of a read */
+    r->chip.silent = true;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.read), PROG_E_NO_ANSWER);
+    free(r);
+    /* the read-back area cannot be written */
+    r = rig_new(0);
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
+    r->ctx.mem = PROG_MEM_FLASH; r->ctx.addr = 0; r->ctx.len = 0x9000;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.read), PROG_E_ARGS);   /* 0x8000 + 0x9000 does not fit 16 bits */
+    r->ctx.len = 0x4800;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.read), PROG_E_SRC);    /* out[] is 0x4000 */
+    free(r);
+}
+
 int main(void) {
     test_model_raw();
     test_entry();
     test_erase();
     test_write();
+    test_read();
     if (fails) { printf("%d of %d checks FAILED\n", fails, checks); return 1; }
     printf("test_prog_updi: %d checks passed\n", checks);
     return 0;

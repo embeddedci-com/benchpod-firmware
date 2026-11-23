@@ -345,10 +345,11 @@ static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uin
     return PROG_OK;
 }
 
-static int check_args(prog_ctx_t *c) {
+/* geom: page size and flash alignment matter (write); a read needs only the range. */
+static int check_args(prog_ctx_t *c, bool geom) {
     st_t *s = S(c);
     if (c->mem >= PROG_MEM_COUNT) return PROG_E_ARGS;
-    if (c->mem != PROG_MEM_CONFIG) {
+    if (geom && c->mem != PROG_MEM_CONFIG) {
         if (!c->page || c->page > 512) return PROG_E_ARGS;
         if (c->mem == PROG_MEM_FLASH && ((c->page | c->addr) & 1)) return PROG_E_ARGS;
     }
@@ -404,7 +405,7 @@ static int write(prog_ctx_t *c) {
     st_t *s = S(c);
     c->phase = "write";
     if (!c->len) return PROG_OK;
-    TRY(check_args(c));
+    TRY(check_args(c, true));
     uint32_t a = c->addr + s->pos, n;
     if (c->mem == PROG_MEM_CONFIG) {
         n = 1;
@@ -424,10 +425,26 @@ static int write(prog_ctx_t *c) {
     return PROG_OK;
 }
 
-static int stub(prog_ctx_t *ctx) { (void)ctx; return PROG_E_UNSUPPORTED; }
+/* ---- read ---- */
+
+static int read(prog_ctx_t *c) {
+    st_t *s = S(c);
+    c->phase = "read";
+    if (!c->len) return PROG_OK;
+    TRY(check_args(c, false));
+    uint32_t n = c->len - s->pos;
+    if (n > 256) n = 256;
+    c->total = (c->len + 255) / 256;
+    TRY(blk(c, mbase(c) + c->addr + s->pos, s->pos, n, false));
+    s->pos += n;
+    c->done = ++s->chunk;
+    if (s->pos < c->len) return PROG_RUNNING;
+    s->pos = s->chunk = 0;
+    return PROG_OK;
+}
 
 const prog_proto_t prog_proto_updi = {
     .name = "updi", .uart = true, .uses_nrst = false,
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER),
-    .enter = enter, .erase = erase, .write = write, .read = stub, .leave = leave,
+    .enter = enter, .erase = erase, .write = write, .read = read, .leave = leave,
 };
