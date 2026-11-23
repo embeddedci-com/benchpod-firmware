@@ -2,7 +2,14 @@
  * AVR DA (NVM v2) behind prog_sim's UART path. The model parses UPDI frames byte by byte,
  * keeps CS registers, keys, lock state and a small NVM controller, so a wrong sequence
  * (missing erase, byte access to the flash page buffer, no command before a store) shows up
- * as a failing read-back or a counted violation. */
+ * as a failing read-back or a counted violation.
+ *
+ * Timing (simulated us from prog_sim): the UPDI starts disabled and is enabled by a 0x00 at the link
+ * rate or a BREAK; the first SYNC must then start 200 us to 14 ms after the pulse ends (TDebZ), after
+ * a BREAK within 5 ms of its end, else it is lost (UPDI disables itself, counted in timing_viol).
+ * A v2 EEPROM/fuse byte takes 10 ms to write: a streamed (RSD, no ACK) byte that arrives while the
+ * chip is busy is dropped (counted in drops), an ACKed one is held until the write is done. NVMPROG
+ * can appear after a delay (prog_delay_us), and a refused key erase sets ERASEFAIL. */
 #include "../src/prog_flash.h"
 #include "prog_sim.h"
 #include <stdio.h>
@@ -40,12 +47,18 @@ typedef struct {
     int bad_access, bad_frame, st_words, st_bytes, cmds[64];
     long corrupt_off;              /* flash read-back flips bit 0 of this byte, -1 = none */
     uint32_t last_baud;
+    /* timing model */
+    bool enabled, await_sync, erasefail;
+    uint32_t t_open, t_close;      /* window for the first SYNC (sim us) */
+    uint32_t busy_until;           /* v2 EEPROM/fuse byte write in progress until (sim us) */
+    uint32_t prog_delay_us, prog_at;
+    int timing_viol, drops, pulses;
     prog_sim_t *sim;
 } chip_t;
 
 static void chip_init(chip_t *c, int nvm) {
     memset(c, 0, sizeof(*c));
-    c->nvm = nvm; c->corrupt_off = -1; c->busy_polls = 2; c->need_breaks = 0;
+    c->nvm = nvm; c->corrupt_off = -1; c->t_close = 0xFFFFFFFFu; c->busy_polls = 2; c->need_breaks = 0;
     for (int i = 0; i < R_N; i++) { c->r[i].size = 0x4000; memset(c->r[i].d, 0xFF, sizeof(c->r[i].d)); }
     if (nvm == 0) {
         memcpy(c->sib, "tinyAVR P:0D:0-3", 16);
@@ -84,7 +97,9 @@ static uint8_t mrd(chip_t *c, uint32_t addr) {
     if (addr >= 0x1000 && addr < 0x1010) {
         switch (addr - 0x1000) {
         case 0: return c->ctrla;
-        case 2: { uint8_t v = c->err; if (c->busy > 0) { v |= 1; c->busy--; } return v; }
+        case 2: { uint8_t v = c->err; if (c->busy > 0) { v |= 1; c->busy--; }
+                  if (c->sim->us < c->busy_until) v |= 1;
+                  return v; }
         case 6: return c->nv_data;
         case 8: return (uint8_t)c->nv_addr;
         case 9: return (uint8_t)(c->nv_addr >> 8);
@@ -181,7 +196,7 @@ static void mwr1(chip_t *c, uint32_t addr, uint8_t v, int dsz) {
         if (cmd == 0x08) { erase_page(c, ri, off / page_of(c, ri)); return; }       /* FLPER */
         if (cmd == 0x02) { if (dsz != 2 && ri == R_FLASH) c->bad_access++; r->d[off] &= v; return; }   /* FLWR */
     } else {
-        if (cmd == 0x13) { r->d[off] = v; return; }                                   /* EEERWR */
+        if (cmd == 0x13) { r->d[off] = v; c->busy_until = c->sim->us + 10000; return; }   /* EEERWR, 10 ms */
         if (cmd == 0x12) { r->d[off] &= v; return; }                                  /* EEWR */
     }
     c->bad_access++;
@@ -203,8 +218,9 @@ static void stcs(chip_t *c, unsigned reg, uint8_t v) {
         if (v == 0x59) c->inreset = true;
         else if (v == 0 && c->inreset) {
             c->inreset = false;
-            if (c->keyerase) unlock_erase(c);
-            else if (c->keynvm && !c->locked) c->prog = true;
+            if (c->keyerase && c->erasefail) c->keyerase = false;      /* refused: stays locked, ERASEFAIL */
+            else if (c->keyerase) unlock_erase(c);
+            else if (c->keynvm && !c->locked) { c->prog = true; c->prog_at = c->sim->us + c->prog_delay_us; }
             c->keynvm = false;
             if (!c->prog) c->cs[7] &= ~0x10;
         }
@@ -241,15 +257,26 @@ static void args_done(chip_t *c) {
     }
 }
 
+/* A store while the previous byte is still being written: with ACKs the UPDI holds the byte (and the
+   ACK) until the write is done; streamed without ACKs the byte is lost. true = dropped. */
+static bool store_while_busy(chip_t *c) {
+    if (c->sim->us >= c->busy_until) return false;
+    if (c->cs[2] & 8) { c->drops++; return true; }
+    c->sim->us = c->busy_until;
+    return false;
+}
+
 static void data_done(chip_t *c) {
     unsigned dsz = (c->op & 3) + 1;
     c->na = 0;
     if (c->cls == C_STS_DATA) {
+        if (store_while_busy(c)) { c->ps = P_SYNC; return; }
         mwr(c, c->addr, c->arg, (int)dsz);
         if (!(c->cs[2] & 8)) ack(c);
         c->ps = P_SYNC; return;
     }
     /* ST ptr++ with data */
+    if (store_while_busy(c)) { c->ptr += dsz; if (--c->units == 0) c->ps = P_SYNC; return; }
     if (dsz == 2) c->st_words++; else c->st_bytes++;
     mwr(c, c->ptr, c->arg, (int)dsz);
     c->ptr += dsz;
@@ -280,7 +307,8 @@ static void decode_op(chip_t *c) {
         break; }
     case 0x8: {
         unsigned reg = op & 15; uint8_t v = c->cs[reg];
-        if (reg == 0x0B) v = (uint8_t)((c->locked ? 1 : 0) | (c->prog ? 8 : 0));
+        if (reg == 0x0B) v = (uint8_t)((c->locked ? 1 : 0) | ((c->prog && c->sim->us >= c->prog_at) ? 8 : 0) |
+                                       (c->erasefail ? 0x40 : 0));
         reply(c, &v, 1); break; }
     case 0xC: c->cls = C_STCS; c->need = 1; c->ps = P_ARGS; break;
     case 0xA: c->cls = C_RPT; c->need = 1; c->ps = P_ARGS; break;
@@ -305,14 +333,32 @@ static void model_rx(prog_sim_t *s, const uint8_t *b, size_t n, uint32_t baud, b
     chip_t *c = s->chip;
     if (baud == 300) {
         for (size_t i = 0; i < n; i++) if (b[i] == 0) {
+            uint32_t end = s->us + 12u * 1000000u / 300u;   /* the frame (8E2 = 12 bits) is still going */
             c->breaks++; c->ps = P_SYNC; c->disabled = false; c->cs[2] = c->cs[3] = 0; c->rpt = 0;
+            c->enabled = true; c->await_sync = true;
+            c->t_open = 0; c->t_close = end + 5000u;        /* SYNC within a few ms of the BREAK's end */
         }
         return;
     }
     c->last_baud = baud;
     if (!pe || !s2) c->bad_frame++;
-    if (c->silent || c->disabled || c->breaks < c->need_breaks) return;
-    for (size_t i = 0; i < n; i++) feed(c, b[i]);
+    if (c->silent) return;
+    size_t i = 0;
+    if (!c->enabled) {                  /* a low pulse (0x00) at the link rate enables the UPDI */
+        if (b[0] != 0) return;
+        c->enabled = true; c->await_sync = true; c->pulses++;
+        uint32_t end = s->us + 12u * 1000000u / baud;
+        c->t_open = end + 200; c->t_close = end + 14000;
+        i = 1;
+    }
+    if (i < n && c->await_sync) {       /* the first SYNC: inside the window or the UPDI disables itself */
+        if (s->us < c->t_open || s->us > c->t_close) {
+            c->timing_viol++; c->enabled = false; c->await_sync = false; return;
+        }
+        c->await_sync = false;
+    }
+    if (c->disabled || c->breaks < c->need_breaks) return;
+    for (; i < n; i++) feed(c, b[i]);
 }
 
 static const prog_sim_model_t MODEL = { .on_uart_rx = model_rx };
@@ -361,6 +407,7 @@ static void test_model_raw(void) {
     rig_t *r = rig_new(0);
     prog_sim_t *s = &r->sim;
     const uint8_t ldcs[] = { 0x55, 0x80 };
+    r->chip.enabled = true;
     r->ops.uart_write(s, ldcs, sizeof(ldcs));
     uint8_t rx[4]; size_t n = r->ops.uart_read(s, rx, 3, 1);
     CHECK_EQ(n, 3); CHECK_EQ(rx[0], 0x55); CHECK_EQ(rx[1], 0x80); CHECK_EQ(rx[2], 0x30);
@@ -369,7 +416,7 @@ static void test_model_raw(void) {
     uint8_t b[18]; n = r->ops.uart_read(s, b, 18, 1);
     CHECK_EQ(n, 18); CHECK(!memcmp(b + 2, "tinyAVR P:0D:0-3", 16));
     free(r);
-    r = rig_new(2); r->chip.silent = true;
+    r = rig_new(2); r->chip.silent = true; r->chip.enabled = true;
     r->ops.uart_write(&r->sim, ldcs, sizeof(ldcs));
     n = r->ops.uart_read(&r->sim, rx, 3, 1);
     CHECK_EQ(n, 2);   /* only the echo */
@@ -386,6 +433,8 @@ static void check_entry(int nvm, uint8_t sig1, uint8_t sig2) {
     CHECK_EQ(r->sim.baud, 115200); CHECK(r->sim.parity_even && r->sim.stop2);
     CHECK_EQ(r->chip.breaks, 0);
     CHECK_EQ(r->chip.bad_frame, 0);
+    CHECK_EQ(r->chip.pulses, 1);                 /* one enable pulse, SYNC inside the TDebZ window */
+    CHECK_EQ(r->chip.timing_viol, 0);
     p->leave(&r->ctx, true);
     CHECK(r->chip.disabled); CHECK(!r->chip.inreset);
     free(r);
@@ -406,6 +455,7 @@ static void test_entry(void) {
     r->ctx.baud = 225000;
     CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
     CHECK_EQ(r->chip.breaks, 2);
+    CHECK_EQ(r->chip.timing_viol, 0);            /* SYNC right after the second BREAK */
     CHECK_EQ(r->sim.baud, 225000);
     CHECK_EQ(r->chip.last_baud, 225000);
     free(r);
@@ -435,6 +485,43 @@ static void test_entry(void) {
     free(r);
     r = rig_new(0); r->ctx.baud = 300000;
     CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_ARGS);
+    free(r);
+}
+
+static bool same(const uint8_t *a, const uint8_t *b, uint32_t n) { return !memcmp(a, b, n); }
+static int do_write(rig_t *r, int mem, uint32_t addr, uint32_t len, int erase, uint16_t page);
+static int do_write_fwd(rig_t *r, uint32_t len) { return do_write(r, PROG_MEM_FLASH, 0, len, PROG_ERASE_CHIP, 64); }
+
+static void test_entry_timing(void) {
+    /* NVMPROG shows up 5 ms after the reset release: the host polls instead of reading once */
+    rig_t *r = rig_new(2); r->chip.prog_delay_us = 5000;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
+    CHECK_EQ(r->ctx.id[1], 0x97);
+    free(r);
+    /* it never shows up (unlocked, key not accepted): protocol error after the 100 ms window */
+    r = rig_new(0); r->chip.prog_delay_us = 500000;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_PROTOCOL);
+    free(r);
+    /* the key erase of a locked chip fails: ERASEFAIL is its own error, not a timeout */
+    r = rig_new(2); r->chip.locked = true; r->chip.erasefail = true; r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_LOCKED);
+    CHECK(!strcmp(r->ctx.phase, "erase"));
+    CHECK(r->chip.locked);
+    free(r);
+    /* megaAVR 0: the family string selects the 0x4000 flash base, no flag needed */
+    r = rig_new(0);
+    memcpy(r->chip.sib, "megaAVR P:0D:0-3", 16);
+    r->chip.r[R_FLASH].base = 0x4000;
+    CHECK_EQ(do_write_fwd(r, 128), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d, r->job.img, 128));
+    CHECK_EQ(r->chip.bad_access, 0);
+    free(r);
+    /* a flag overrides the family default */
+    r = rig_new(0);
+    memcpy(r->chip.sib, "megaAVR P:0D:0-3", 16);
+    r->chip.r[R_FLASH].base = 0x8000; r->ctx.flags = 0x8000;
+    CHECK_EQ(do_write_fwd(r, 128), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d, r->job.img, 128));
     free(r);
 }
 
@@ -491,8 +578,6 @@ static int do_write(rig_t *r, int mem, uint32_t addr, uint32_t len, int erase, u
     if (rc) return rc;
     return run(&r->ctx, p->write);
 }
-
-static bool same(const uint8_t *a, const uint8_t *b, uint32_t n) { return !memcmp(a, b, n); }
 
 static void test_write(void) {
     rig_t *r;
@@ -561,15 +646,27 @@ static void test_write(void) {
     CHECK_EQ(do_write(r, PROG_MEM_EEPROM, 10, 37, PROG_ERASE_NONE, 1), PROG_OK);
     CHECK(same(r->chip.r[R_EE].d + 10, r->job.img, 37));
     CHECK_EQ(r->ctx.total, 37);
+    CHECK_EQ(r->chip.drops, 0);                  /* ACKed byte stores: none lost to the 10 ms writes */
+    CHECK_EQ(r->chip.st_words, 0);               /* no word streaming */
+    free(r);
+    /* AVR DA: eeprom in 16-byte chunks: several 10 ms byte writes per command, must not drop bytes */
+    r = rig_new(2); fill(r->chip.r[R_EE].d, 512, 4);
+    CHECK_EQ(do_write(r, PROG_MEM_EEPROM, 10, 37, PROG_ERASE_NONE, 16), PROG_OK);
+    CHECK(same(r->chip.r[R_EE].d + 10, r->job.img, 37));
+    CHECK_EQ(r->chip.drops, 0);
+    CHECK_EQ(r->chip.bad_access, 0);
     free(r);
     r = rig_new(2);
     CHECK_EQ(do_write(r, PROG_MEM_CONFIG, 0, 9, PROG_ERASE_NONE, 0), PROG_OK);
     CHECK(same(r->chip.r[R_FUSE].d, r->job.img, 9));
+    CHECK_EQ(r->chip.drops, 0);
     free(r);
     r = rig_new(2); fill(r->chip.r[R_USER].d, 32, 6);
     CHECK_EQ(do_write(r, PROG_MEM_USER, 0, 32, PROG_ERASE_NONE, 32), PROG_OK);
     CHECK(same(r->chip.r[R_USER].d, r->job.img, 32));
     CHECK_EQ(r->chip.bad_access, 0);
+    CHECK_EQ(r->chip.drops, 0);
+    CHECK_EQ(r->chip.st_words, 0);               /* user row bytes are ACKed, not streamed */
     free(r);
     /* verify failure: the chip reads one byte back wrong */
     r = rig_new(0); r->chip.corrupt_off = 100;
@@ -675,6 +772,7 @@ static void test_refusals(void) {
 int main(void) {
     test_model_raw();
     test_entry();
+    test_entry_timing();
     test_erase();
     test_write();
     test_read();

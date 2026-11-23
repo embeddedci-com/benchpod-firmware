@@ -16,7 +16,9 @@
 #define ASI_KEY_STAT 0x07
 #define ASI_RESET    0x08
 #define ASI_SYS_STAT 0x0B
-/* CTRLA: IBDLY, RSD (no ACK on stores), GTVAL = 2 cycles */
+#define SYS_ERASEFAIL 0x40   /* ASI_SYS_STATUS bit 6, chip erase key failed */
+/* CTRLA: IBDLY, RSD (no ACK on stores), GTVAL = 2 cycles. RSD is only for streams the chip can take
+   at line speed (flash words); EEPROM, fuse and user row bytes are ACKed, the ACK waits for the write. */
 #define CTRLA_ON     0x86
 #define CTRLA_NOACK  0x8E
 #define CTRLB_CCDETDIS 0x08
@@ -59,7 +61,8 @@ static st_t *S(prog_ctx_t *c) { return (st_t *)c->state; }
 static uint32_t now(prog_ctx_t *c) { return c->w->now_ms(c->w->io); }
 static void pause_us(prog_ctx_t *c, uint32_t us) { c->w->delay_us(c->w->io, us); }
 
-/* Write tx, read and check its echo, then read nrx reply bytes. */
+/* Write tx, read and check its echo, then read nrx reply bytes. The timeouts count 15 bit times per
+   byte (frame 12 bits with 2 stop bits, plus the inter-byte delay and some slack). */
 static int xfer(prog_ctx_t *c, const uint8_t *tx, size_t ntx, uint8_t *rx, size_t nrx) {
     const prog_wire_ops_t *w = c->w;
     uint32_t baud = S(c)->baud;
@@ -67,11 +70,11 @@ static int xfer(prog_ctx_t *c, const uint8_t *tx, size_t ntx, uint8_t *rx, size_
     uint8_t e[16];
     for (size_t i = 0; i < ntx;) {
         size_t k = ntx - i < sizeof(e) ? ntx - i : sizeof(e);
-        if (w->uart_read(w->io, e, k, 20 + (uint32_t)(k * 13000u / baud)) != k) return PROG_E_NO_ANSWER;
+        if (w->uart_read(w->io, e, k, 20 + (uint32_t)(k * 15000u / baud)) != k) return PROG_E_NO_ANSWER;
         if (memcmp(e, tx + i, k)) return PROG_E_PROTOCOL;
         i += k;
     }
-    if (nrx && w->uart_read(w->io, rx, nrx, 20 + (uint32_t)(nrx * 13000u / baud)) != nrx) return PROG_E_NO_ANSWER;
+    if (nrx && w->uart_read(w->io, rx, nrx, 20 + (uint32_t)(nrx * 15000u / baud)) != nrx) return PROG_E_NO_ANSWER;
     return PROG_OK;
 }
 
@@ -119,18 +122,36 @@ static int key(prog_ctx_t *c, const char *k) {
     return xfer(c, t, 10, NULL, 0);
 }
 
-/* A BREAK is one 0x00 at 300 baud (about 30 ms low); two in a row reset the UPDI state. */
+/* A BREAK is one 0x00 at 300 baud (a frame of about 40 ms low); two in a row reset the UPDI state.
+   The echo of the frame marks its end: the caller sends the SYNC right after it (the UPDI times out
+   on a long idle line), so no extra wait here. */
 static void brk(prog_ctx_t *c) {
     const prog_wire_ops_t *w = c->w;
     static const uint8_t z = 0;
+    uint8_t e;
     w->uart_config(w->io, 300, true, true);
     w->uart_write(w->io, &z, 1);
-    pause_us(c, 50000);
+    w->uart_read(w->io, &e, 1, 80);
     w->uart_rx_clear(w->io);
 }
 static void set_link(prog_ctx_t *c) {
     c->w->uart_config(c->w->io, S(c)->baud, true, true);
     c->w->uart_rx_clear(c->w->io);
+}
+
+/* UPDI enable (datasheet "UPDI Enable with Fuse Override"): a short low pulse (one 0x00 at the link
+   rate, as pymcuprog does), the chip pulls the line low until its clock runs, then the first SYNC
+   must start after at least 200 us and at most 14 ms (TDebZ) from the release, or the UPDI disables
+   itself again. 500 us is well inside both limits. */
+static void enable_pulse(prog_ctx_t *c) {
+    const prog_wire_ops_t *w = c->w;
+    static const uint8_t z = 0;
+    uint8_t e;
+    set_link(c);
+    w->uart_write(w->io, &z, 1);
+    w->uart_read(w->io, &e, 1, 2);
+    pause_us(c, 500);
+    w->uart_rx_clear(w->io);
 }
 
 static int link_init(prog_ctx_t *c) {
@@ -160,7 +181,7 @@ static int enter(prog_ctx_t *c) {
         memset(s, 0, sizeof(*s));
         s->baud = c->baud ? c->baud : 115200;
         if (s->baud < 4800 || s->baud > 225000) return PROG_E_ARGS;
-        set_link(c);
+        enable_pulse(c);
         if (link_init(c)) {
             brk(c); brk(c);
             set_link(c);
@@ -173,7 +194,8 @@ static int enter(prog_ctx_t *c) {
         }
         if (sib[8] != 'P' || sib[9] != ':') return PROG_E_PROTOCOL;
         s->nvm = (uint8_t)(sib[10] - '0');
-        if (s->nvm == 0) { s->asz = 1; s->flash_base = 0x8000; }
+        /* megaAVR 0 reports the family "megaAVR" and has its flash at 0x4000; tinyAVR 0/1/2 at 0x8000 */
+        if (s->nvm == 0) { s->asz = 1; s->flash_base = memcmp(sib, "megaAVR", 7) ? 0x8000 : 0x4000; }
         else if (s->nvm == 2) { s->asz = 2; s->flash_base = 0x800000; }
         else return PROG_E_UNSUPPORTED;
         if (c->flags) s->flash_base = c->flags;
@@ -189,16 +211,16 @@ static int enter(prog_ctx_t *c) {
         s->t0 = now(c);
         s->stage = 2;
         return PROG_RUNNING;
-    case 2:   /* wait for unlock, then read the ID */
+    case 2:   /* poll unlock and NVMPROG (datasheet: repeat until set), then read the ID */
         TRY(ldcs(c, ASI_SYS_STAT, &v));
-        if (!(v & 1)) {
-            if (!(v & 8)) return PROG_E_PROTOCOL;
+        if (!(v & 1) && (v & 8)) {
             c->phase = "id";
             TRY(read_id(c));
             s->stage = 5;
             return PROG_OK;
         }
         if (now(c) - s->t0 < 100) { pause_us(c, 1000); return PROG_RUNNING; }
+        if (!(v & 1)) return PROG_E_PROTOCOL;       /* unlocked, but the NVMPROG key was not accepted */
         if (c->erase != PROG_ERASE_CHIP || s->erase_tried) return PROG_E_LOCKED;
         s->stage = 3;
         return PROG_RUNNING;
@@ -214,6 +236,7 @@ static int enter(prog_ctx_t *c) {
         return PROG_RUNNING;
     case 4:
         TRY(ldcs(c, ASI_SYS_STAT, &v));
+        if (v & SYS_ERASEFAIL) { c->phase = "erase"; return PROG_E_LOCKED; }   /* key erase refused, still locked */
         if (!(v & 1)) { s->erased = 1; s->stage = 1; return PROG_RUNNING; }
         if (now(c) - s->t0 >= 500) return PROG_E_TIMEOUT;
         pause_us(c, 1000);
@@ -314,15 +337,16 @@ static int blk(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t n, bool ver
     return PROG_OK;
 }
 
-/* Stream n bytes (the first `real` come from the staged image at src offset off, the rest is 0xFF
-   padding) to data address daddr with ST ptr++, no ACKs; words = 16-bit stores. */
-static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uint32_t n, bool words) {
+/* Store n bytes (the first `real` come from the staged image at src offset off, the rest is 0xFF
+   padding) to data address daddr with ST ptr++; words = 16-bit stores. rsd: stream without ACKs
+   (flash words only); else every byte is ACKed, which waits for the chip's write (EEPROM 10 ms). */
+static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uint32_t n, bool words, bool rsd) {
     st_t *s = S(c);
     for (uint32_t d = 0; d < n;) {
         uint32_t m = n - d, mx = words ? 512 : 256;
         if (m > mx) m = mx;
         TRY(st_ptr(c, daddr + d));
-        TRY(stcs(c, CS_CTRLA, CTRLA_NOACK));
+        if (rsd) TRY(stcs(c, CS_CTRLA, CTRLA_NOACK));
         uint8_t h[5] = { SYNC, 0xA0, (uint8_t)((words ? m / 2 : m) - 1), SYNC, (uint8_t)(0x64 | words) };
         int r = xfer(c, h, 5, NULL, 0);
         for (uint32_t p = 0; !r && p < m;) {
@@ -332,11 +356,12 @@ static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uin
             if (have && c->src(c->job, off + d + p, s->buf, have)) r = PROG_E_SRC;
             else {
                 memset(s->buf + have, 0xFF, k - have);
-                r = xfer(c, s->buf, k, NULL, 0);
+                if (rsd) r = xfer(c, s->buf, k, NULL, 0);
+                else for (uint32_t i = 0; !r && i < k; i++) r = ack1(c, s->buf + i, 1);
             }
             p += k;
         }
-        int r2 = stcs(c, CS_CTRLA, CTRLA_ON);
+        int r2 = rsd ? stcs(c, CS_CTRLA, CTRLA_ON) : PROG_OK;
         if (r) return r;
         TRY(r2);
         d += m;
@@ -379,7 +404,7 @@ static int write_chunk(prog_ctx_t *c, uint32_t a, uint32_t n) {
         }
         TRY(nvm_cmd(c, V0_PBC));
         TRY(nvm_wait(c, 100));
-        TRY(store(c, a, off, n, np, fl));
+        TRY(store(c, a, off, n, np, fl, true));
         TRY(nvm_cmd(c, (fl && !page_erase) ? V0_WP : V0_ERWP));   /* eeprom and user row always erase-write */
         return nvm_wait(c, 100);
     }
@@ -391,10 +416,10 @@ static int write_chunk(prog_ctx_t *c, uint32_t a, uint32_t n) {
             TRY(nvm_cmd(c, V2_NOCMD));
         }
         TRY(nvm_cmd(c, V2_FLWR));
-        TRY(store(c, a, off, n, np, fl));
+        TRY(store(c, a, off, n, np, fl, fl));       /* flash words stream, user row bytes are ACKed */
     } else {
-        TRY(nvm_cmd(c, V2_EEERWR));      /* eeprom and fuses */
-        TRY(store(c, a, off, n, np, false));
+        TRY(nvm_cmd(c, V2_EEERWR));      /* eeprom and fuses: ACKed bytes (10 ms each) */
+        TRY(store(c, a, off, n, np, false, false));
     }
     TRY(nvm_wait(c, 100));
     return nvm_cmd(c, V2_NOCMD);
