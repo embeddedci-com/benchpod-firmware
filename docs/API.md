@@ -252,7 +252,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
-| `usb_host` | T0/T2 | Development builds only. USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `enabled`: T2) | object | no |
+| `usb_host` | T0/T2 | USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `enabled`: T2) | object | no |
 | `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
 | `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
 | `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
@@ -322,7 +322,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
-| `usb_flash` | T1 | Development builds only. Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32 | object | no |
+| `usb_flash` | T1 | Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32 | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -2606,18 +2606,27 @@ power-on-reset behaviour, or recovering a target that wedged itself.
 
 ### `usb_host` — USB host mode
 
-**Development builds only** (`make USB_HOST=1`, not in releases yet: other firmware answers
-`usb_host` as an unknown command). The pod's USB port becomes a full-speed USB host for the board under test, for a
-limited time, and reports the device that enumerates on it: IDs, strings, speed, how long
-enumeration took, the configuration and its interfaces. No class drivers yet (USB serial,
-flashing over USB and class access come later).
+Firmware `next` and later (feature `usb_host_mode`; older firmware answers `usb_host` as an
+unknown command, except development builds made with `USB_HOST=1`). The pod's USB port becomes a
+full-speed USB host for the board under test, for a limited time, and reports the device that
+enumerates on it: IDs, strings, speed, how long enumeration took, the configuration and its
+interfaces. [`usb_flash`](#usb_flash--flash-a-board-over-usb) flashes the board over it.
+
+Which port:
+
+| Pod | Port | How the board connects |
+|---|---|---|
+| digital v3r4 and later | `usb_a` (the default) | its normal USB cable in the pod's USB-A host port |
+| older pods only (no USB-A host port) | `usb_c` | the pod's own USB-C connector, through a breakout: D+, D- and GND to the board, 5 V from a supply into the pod's VBUS (the pod gives the board no VBUS: a board powered from USB gets the same 5 V) |
+
+`status` `board_rev` tells them apart (`"v3r4"` has the USB-A host port).
 
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_c", "timeout_s": 120}
 {"cmd": "usb_host"}
 {"status": "ok", "data": {
   "mode": "host", "port": "usb_c", "remaining_s": 112, "host_ms": 8011,
-  "enumerations": 1, "attached": true, "enumeration": "done",
+  "enumerations": 1, "attached": true, "enumeration": "done", "connected": true, "line_speed": "full",
   "device": {
     "vid": 11914, "pid": 3, "speed": "full", "usb": "2.10", "release": "1.00",
     "class": 239, "subclass": 2, "protocol": 1, "ep0_size": 64, "configurations": 1,
@@ -2651,6 +2660,8 @@ flashing over USB and class access come later).
 | `enumerations` | Devices that enumerated since host mode started (a replug counts again). |
 | `attached` | A device is enumerated now. |
 | `enumeration` | How far the current device got: `none` (nothing since host start or the last detach), `running` (its device descriptor arrived), `done` (enumerated), `stuck` (no enumeration 2 s after its device descriptor; the pod reads configuration descriptors of up to 1024 bytes, and a longer one stops here). A stuck device is reported until the next device sends its descriptor. |
+| `connected` | Host mode: a device's pull-up is on the port, before any enumeration. `false` while a board draws power but never shows up means its USB lines do not reach the pod. |
+| `line_speed` | `"full"` or `"low"`: the line the device pulls up (D+ or D-); `"none"` when nothing is connected. `"low"` from a full-speed board means D+ and D- are swapped. |
 | `device` | The device that enumerated last; kept after it detaches (`attached` false) until the next one. |
 | `device.vid`, `device.pid` | Vendor and product ID. |
 | `device.speed` | `"full"` or `"low"`. |
@@ -4554,9 +4565,9 @@ the C3 does not start and the pod has no copy to reinstall it from.
 
 ### `usb_flash` — flash a board over USB
 
-**Development builds only** (`make USB_HOST=1`, not in releases yet). The pod flashes a board on its
-USB host port (`usb_host`) from a file uploaded with `load_bin` and `"psram": true`, the way a
-computer would:
+Firmware `next` and later (feature `usb_flash`). The pod flashes a board on its USB host port
+([`usb_host`](#usb_host--usb-host-mode)) from a file uploaded with `load_bin` and `"psram": true`,
+the way a computer would:
 
 - `uf2`: UF2 bootloaders (Raspberry Pi Pico and Pico 2, Adafruit and Seeed boards, tinyuf2) take
   the UF2 file's blocks on the drive they show.

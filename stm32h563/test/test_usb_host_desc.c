@@ -122,13 +122,15 @@ static void test_reply(void)
     memset(&i, 0, sizeof(i));
     size_t n = usb_host_reply_json(&i, out, sizeof(out));
     CHECK(n > 0 && !strcmp(out, "{\"mode\":\"device\",\"port\":\"none\",\"remaining_s\":0,\"host_ms\":0,"
-                                "\"enumerations\":0,\"attached\":false,\"enumeration\":\"none\"}"));
+                                "\"enumerations\":0,\"attached\":false,\"enumeration\":\"none\","
+                                "\"connected\":false,\"line_speed\":\"none\"}"));
 
     /* Worst case: every number at its widest, full strings, a full interface list. */
     i.mode = USB_HOST_MODE_STOPPING; i.port = USB_HOST_PORT_USB_A;
     i.remaining_s = 4294967295u; i.host_ms = 4294967295u; i.enumerations = 65535;
     i.attached = i.seen = true; i.speed = 1;
     i.enumeration = USB_HOST_ENUM_RUNNING;   /* the longest state name */
+    i.connected = true;
     i.vid = i.pid = 65535; i.bcd_usb = i.bcd_device = 0xFFFF;
     i.dev_class = i.dev_subclass = i.dev_protocol = i.ep0_size = i.num_configs = 255;
     i.descriptor_ms = i.mounted_ms = 4294967295u;

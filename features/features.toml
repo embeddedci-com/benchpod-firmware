@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 13
+revision = 14
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -893,7 +893,8 @@ rev = 10
 firmware = "4.0.0"
 docs = "API.md#usb_host--usb-host-mode"
 dated = "code"
-note = "Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."
+status = "retired"
+note = "Retired: replaced by usb_host_mode (rev 14), the first release that has it. Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."
 
 [features.dac_pinout_guard]
 rev = 11
@@ -915,3 +916,17 @@ firmware = "4.0.1"
 docs = "API.md#lan_clients--paired-computers"
 dated = "code"
 note = "LAN pairing, on by default and on every pod updated from older firmware: a computer on Ethernet or Wi-Fi gets only ping, status, diag, cloud_status, identity_public and lan_tls (reads) until its TLS client certificate's public key (SHA-256 of the DER SubjectPublicKeyInfo) is on the pod's list; everything else is refused with BP0081 lan_not_paired (args cmd). lan_clients lists (12 a reply, offset), adds (add name, spki_sha256), removes (remove name or 8+ hex digits) and clears, changes over the USB link or the cloud only; BP0082 lan_clients_full (args max). lan_policy pairing true|false (USB, USB link or cloud). status has lan_pairing and lan_paired (null when the connection needs no pairing). Port 8443 asks every client for a certificate (optional). SCPI on the external LAN needs a paired TLS connection. Console: lan-pairing, lan-clients. Rolled back to 4.0.0, the pod keeps its certificate (a version 1 copy of the record is written as the newest) and forgets its paired computers."
+
+[features.usb_host_mode]
+rev = 14
+firmware = "next"
+docs = "API.md#usb_host--usb-host-mode"
+dated = "code"
+note = "USB host mode: the pod hosts the board's USB port at full speed for timeout_s (1 to 3600, default 60) and reports what enumerates: IDs, strings (47 characters, ASCII), speed, timing, the first configuration (up to 1024 bytes, 8 interfaces listed, all counted, truncated and malformed flags) and enumeration (none, running, done, stuck). Port usb_a (the USB-A host port, digital v3r4) or usb_c (the pod's own USB-C connector through a breakout, on pods without a USB-A host port; the pod supplies no VBUS there). Refused over the pod's own USB (BP0076); BP0077 no such port, BP0078 no crystal, BP0079 already on the other port."
+
+[features.usb_flash]
+rev = 14
+firmware = "next"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+dated = "code"
+note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives, FAT12/FAT16), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."

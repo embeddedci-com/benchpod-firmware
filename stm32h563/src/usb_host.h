@@ -74,6 +74,8 @@ typedef struct {
     uint32_t host_ms;          /* time in host mode so far */
     uint16_t enumerations;     /* devices mounted since host mode started */
     bool     attached;         /* a device is mounted now */
+    bool     connected;        /* host mode: a device's pull-up is on the port (before any enumeration) */
+    bool     line_low_speed;   /* the pull-up is on D- (a low-speed device, or D+/D- swapped) */
     usb_host_enum_t enumeration;
     /* The mounted device (valid while attached; the last one is kept after a detach until
        the next attach, `attached` false). */

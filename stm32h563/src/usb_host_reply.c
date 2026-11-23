@@ -70,10 +70,12 @@ size_t usb_host_reply_json(const usb_host_info_t *i, char *out, size_t cap)
     if (!out || cap == 0) return 0;
     jbuf_t b = { out, cap, 0, false };
     jp(&b, "{\"mode\":\"%s\",\"port\":\"%s\",\"remaining_s\":%lu,\"host_ms\":%lu,"
-           "\"enumerations\":%u,\"attached\":%s,\"enumeration\":\"%s\"",
+           "\"enumerations\":%u,\"attached\":%s,\"enumeration\":\"%s\",\"connected\":%s,"
+           "\"line_speed\":\"%s\"",
        usb_host_mode_name(i->mode), usb_host_port_name(i->port), (unsigned long)i->remaining_s,
        (unsigned long)i->host_ms, (unsigned)i->enumerations, i->attached ? "true" : "false",
-       usb_host_enum_name(i->enumeration));
+       usb_host_enum_name(i->enumeration), i->connected ? "true" : "false",
+       !i->connected ? "none" : i->line_low_speed ? "low" : "full");
     if (i->seen) {
         char usb[8], rel[8];
         bcd(usb, i->bcd_usb);
