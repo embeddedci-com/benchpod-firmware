@@ -85,6 +85,7 @@
     "spi_stream": "T1",
     "spi_flash": "T1",
     "esp_flash": "T1",
+    "prog_flash": "T1",
     "la_dir": "T1",
     "lease_acquire": "T1",
     "lease_renew": "T1",

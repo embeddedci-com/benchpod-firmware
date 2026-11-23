@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 16
+revision = 17
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -979,3 +979,11 @@ gw_const = "JTAG_MIN_GW"
 dated = "code"
 docs = "dap-over-tunnel.md#jtag"
 note = "dap_start with tck, tms, tdi and tdo (optional trst) makes the pod a CMSIS-DAP JTAG probe: DAP_JTAG_Sequence, DAP_JTAG_Configure, DAP_JTAG_IDCODE and JTAG-DP transfers; with SWD pins too, DAP_Connect switches. Loop and deep images only (not the emulation image): BP0058 / BP0059 there, BP0017 on older gateware."
+
+[features.prog_flash]
+rev = 17
+firmware = "next"
+board = "any"
+dated = "code"
+docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
+note = "prog_flash flashes a chip over its own programming pins: AVR UPDI, PIC ICSP (low-voltage entry), Silicon Labs C2, AVR TPI, XMEGA PDI. status lists the protocols this build has; a protocol that is not done yet answers not supported."

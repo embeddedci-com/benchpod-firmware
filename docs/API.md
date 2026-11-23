@@ -267,6 +267,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
 | `esp_flash` | T1 | Flash an ESP32-family target over its UART ROM bootloader | object | no |
+| `prog_flash` | T1 | Flash a chip over its programming pins: AVR UPDI, PIC ICSP, Silicon Labs C2, AVR TPI, XMEGA PDI | object | no |
 | `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
 | `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
 | `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
@@ -3252,6 +3253,74 @@ bits; a part that ships protected needs its status register written with `spi_xf
 
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
+
+## Chips without SWD or a bootloader (prog_flash)
+
+### `prog_flash` — flash a chip over its programming pins
+
+Firmware with feature `prog_flash`. The pod runs the chip's own programming protocol on its LA
+pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 or 3.3 V).
+
+| `proto` | Chips | Wiring |
+|---|---|---|
+| `updi` | AVR tinyAVR 0/1/2, megaAVR 0, AVR DA/DB/DD | UPDI on an LA pin, `data` |
+| `pic` | PIC16F1xxx, PIC16F18xxx, PIC18F Q (low-voltage entry) | ICSPCLK on `clk`, ICSPDAT on `data`, MCLR on the pod's reset pin |
+| `c2` | Silicon Labs EFM8, C8051F | C2CK on `clk`, C2D on `data` |
+| `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin |
+| `pdi` | AVR XMEGA | PDI_CLK (the chip's RESET pin) on `clk`, PDI_DATA on `data` |
+
+`status` lists the protocols the running firmware has in `protos`. A protocol that is listed but
+not finished answers `not supported` (the result).
+
+Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
+The job runs in the background: `info` and `start` answer at once and `status` reports progress.
+Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
+
+```json
+{"cmd":"prog_flash","op":"info","proto":"c2","clk":3,"data":4}
+{"cmd":"prog_flash","op":"start","proto":"c2","clk":3,"data":4,"mem":"flash","addr":0,"len":8192,
+ "page":512,"erase":"chip","expect_id":"0x30","run":true}
+{"cmd":"prog_flash","op":"status"}
+{"cmd":"prog_flash","op":"abort"}
+```
+
+| Field | Meaning |
+|---|---|
+| `op` | `info` (enter programming mode and read the chip's ID, nothing written), `start`, `status`, `abort` |
+| `proto` | `updi`, `pic`, `c2`, `tpi`, `pdi` |
+| `clk`, `data` | LA pins (1..14); `updi` takes `data` only |
+| `mem` | `flash` (default), `eeprom`, `config` (PIC configuration words, AVR fuses, C2 lock byte), `user` (AVR user row, PIC user ID) |
+| `addr` | start address in that memory, in bytes (PIC: 2 bytes per word) |
+| `len` | bytes of the staged upload to write (`start` only) |
+| `page` | the chip's write page or row in bytes (`start` only; the SDK takes it from its device table) |
+| `erase` | `chip` (also unlocks a locked chip), `page` (default: only the pages written) or `none` |
+| `expect_id` | hex bytes the chip's ID must start with; the pod stops before erasing anything when it does not |
+| `baud` | `updi` only: the link rate after entry (default 115200) |
+| `flags` | protocol options, for example the PIC command set (the SDK sets them) |
+| `run` | `true` (default): let the chip start its program at the end |
+
+Write one memory region per `start`; the SDK splits a `.hex` or `.elf` file. Every page written is
+read back and compared.
+
+`info` and `start` reply `{"started":true,"op":"start","proto":"c2"}`. `status` (and `abort`) reply:
+
+```json
+{"running":false,"op":"start","proto":"c2","phase":"done","done":16,"total":16,"id":"3001",
+ "ms":2140,"protos":["updi","pic","c2","tpi","pdi"],"result":"ok"}
+```
+
+`phase` is `enter`, `erase`, `write`, `leave` or `done` (after a failure: the step it failed in);
+`done`/`total` count pages. `id` is the chip's ID bytes in hex, in the order the chip sends them.
+`result` is `null` while running, then `ok` or: `no answer (wiring, power or I/O voltage)`,
+`wrong chip (the ID is not expect_id)`, `locked (erase the chip to unlock it)`, `verify failed`
+(with `at_addr`), `timeout (the chip stayed busy)`, `protocol error (an answer the protocol does not
+allow)`, `memory, address, length or page size not valid here`, `could not read the staged image`,
+`not supported (this chip, memory or protocol)`, `aborted`.
+
+Errors at `info`/`start`: `missing or unknown proto`, `nothing staged: load_bin with "psram":true
+first`, `len is more than the staged upload`, `BP0047` (`pod_busy`, also while a job runs), `BP0005`
+(the engine is in use by a DAP, SPI or I2C session), `BP0049` (a UART session is open, `updi`),
+`BP0031` (a pin conflict), `this pod has no reset pin, which pic needs`.
 
 ## ESP32 targets (flash over the UART ROM bootloader)
 

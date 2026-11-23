@@ -58,6 +58,7 @@ size_t dap_process(const uint8_t *req, size_t n, uint8_t *resp, size_t cap) {
     return n;
 }
 void dap_reset(void) {}
+bool prog_flash_busy(void) { return false; }   /* no prog_flash job in these tests */
 void dap_configure(unsigned size, unsigned count) { (void)size; (void)count; }
 static uint8_t g_ports, g_port;
 static dap_port_switch_fn g_switch;
