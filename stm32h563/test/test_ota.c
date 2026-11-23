@@ -700,6 +700,33 @@ static void test_xip_target(void) {
     CHECK(ota_target_from_name("xip") == -1, "xip listed next to the esp blob");
     blob_store_set_xip_listed(false);
     memset(&mock_xip_manifest, 0, sizeof(mock_xip_manifest));
+
+    /* The second image, xip_prog: the same rules, its own manifest. */
+    blob_store_set_esp_listed(false);
+    CHECK(ota_target_from_name("xip_prog") == -1, "xip_prog known where its slot is not listed");
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP_PROG, 0) != 0, "xip_prog accepted where its slot is not listed");
+    ota_abort();
+    blob_store_set_xip_listed(true);
+    CHECK(ota_target_from_name("xip_prog") == OTA_TARGET_XIP_PROG, "xip_prog not known where its slot is listed");
+    memset(&mock_xip_prog_manifest, 0, sizeof(mock_xip_prog_manifest));
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP_PROG, 0) != 0, "xip_prog accepted from a firmware without an image");
+    ota_abort();
+    /* the usb image's manifest does not make an xip_prog image valid */
+    mock_xip_manifest.len = N;
+    for (int i = 0; i < 32; i++) {
+        unsigned v;
+        sscanf(hex + 2 * i, "%2x", &v);
+        mock_xip_manifest.sha256[i] = (uint8_t)v;
+    }
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP_PROG, 0) != 0, "xip_prog accepted against the xip manifest");
+    ota_abort();
+    mock_xip_prog_manifest = mock_xip_manifest;
+    CHECK(ota_begin_target(N, hex, OTA_TARGET_XIP_PROG, 0) == 0, "this firmware's xip_prog image was refused");
+    ota_abort();
+    blob_store_set_xip_listed(false);
+    blob_store_set_esp_listed(true);
+    memset(&mock_xip_manifest, 0, sizeof(mock_xip_manifest));
+    memset(&mock_xip_prog_manifest, 0, sizeof(mock_xip_prog_manifest));
 }
 
 static void test_blob_targets(void) {

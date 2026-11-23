@@ -754,7 +754,7 @@ help:
 	@echo "  flash          : SWD flash via OpenOCD (needs a probe; verifies)"
 	@echo "  flash-dfu      : USB-DFU write of the firmware (~0.5 MB); blobs go to the W25Q separately"
 	@echo "  fetch          : build/download the ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
-	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp}.bin + blobs-manifest.json for the W25Q blob slots"
+	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp,xip,xip_prog}.bin + blobs-manifest.json for the W25Q blob slots"
 	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
 	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
 	@echo "  EMI_TEST=1     : the EMC test build into build-emi/ (activity loop from boot; never released)"

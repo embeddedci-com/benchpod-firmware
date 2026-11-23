@@ -101,8 +101,19 @@ static void test_limits(void) {
           "xip slot: 256 KB at the start of the old esp slot");
     CHECK(blob_slot_base(BLOB_XIP) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_XIP) <= 0x5FF000u,
           "xip slot reaches the C3 record sector");
+    /* xip_prog: the next 256 KB, listed with xip and never next to the esp blob */
+    CHECK(blob_listed(BLOB_XIP_PROG) && blob_from_name("xip_prog") == BLOB_XIP_PROG, "xip_prog not listed with xip");
+    CHECK(blob_slot_base(BLOB_XIP_PROG) == 0x240000u && blob_slot_capacity(BLOB_XIP_PROG) == 0x40000u - BLOB_HDR_SIZE,
+          "xip_prog slot: 256 KB after the xip slot");
+    CHECK(blob_slot_base(BLOB_XIP_PROG) >= blob_slot_base(BLOB_XIP) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_XIP) &&
+          blob_slot_base(BLOB_XIP_PROG) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_XIP_PROG) <= 0x5FF000u,
+          "xip_prog slot overlaps xip or reaches the C3 record sector");
     blob_store_set_xip_listed(false);
+    CHECK(!blob_listed(BLOB_XIP_PROG) && blob_from_name("xip_prog") == -1, "xip_prog listed without xip");
+    blob_store_set_xip_listed(true);
     blob_store_set_esp_listed(true);
+    CHECK(!blob_listed(BLOB_XIP_PROG), "xip_prog listed next to the esp blob");
+    blob_store_set_xip_listed(false);
     CHECK(blob_slot_base(BLOB_PROXY) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_PROXY) <= blob_slot_base(BLOB_GW2) &&
           blob_slot_base(BLOB_GW2) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_GW2) <= blob_slot_base(BLOB_ESP),
           "gw2 overlaps the proxy or esp slot");

@@ -3272,6 +3272,12 @@ pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 o
 `status` lists the protocols the running firmware has in `protos`. A protocol that is listed but
 not finished answers `not supported` (the result).
 
+The five protocols run from the pod's W25Q (the `xip_prog` blob, `blob-xip_prog.bin`, made by the
+same build as the firmware and installed with the other blobs), like the USB flash protocols: a
+job holds that W25Q code for its whole run, so a `usb_flash` cannot start meanwhile (it answers
+busy) and the other way round. Without the blob, or with another build's, `start` and `info` are
+refused with an error that says to install the blobs (`benchpod install-blobs`).
+
 Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
 The job runs in the background: `info` and `start` answer at once and `status` reports progress.
 Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
@@ -4621,7 +4627,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `xip_prog`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). `xip_prog` is the second such image (the `prog_flash` protocols, `blob-xip_prog.bin`) under the same rules (signing target 10). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4658,7 +4664,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` (that code: its `state` is `ok` only for the image built with the running firmware); the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` and `xip_prog` (that code, two images: their `state` is `ok` only for the image built with the running firmware); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
@@ -4913,17 +4919,22 @@ is off, for every test but `reset`).
 
 ### `xip` — code that runs from the W25Q
 
-Some rarely used code (the USB flash protocols, coming) runs straight from the pod's W25Q flash
-instead of the MCU's own flash. It is the `xip` blob (`blob-xip.bin`), made by the same build as the
-firmware and installed with the other blobs; the pod runs only the one built with its firmware.
-While it runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
-are refused with BP0048 until it ends.
+Some rarely used code runs straight from the pod's W25Q flash instead of the MCU's own flash. There
+are two images, each a blob made by the same build as the firmware and installed with the other
+blobs (the pod runs only the ones built with its firmware): `xip` (`blob-xip.bin`), the USB flash
+protocols, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash` pin programmers. Only one runs at
+a time (a `usb_flash` or a `prog_flash` job holds its image until it ends; the other waits).
+While one runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
+are refused with BP0048 until it ends. Release builds copy the running image into one shared RAM
+region of the pod, so the two images together cost no more RAM than one.
 
 ```json
 {"cmd": "xip"}
-{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"}}}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "prog_image": {"size": 98, "slot": "ok"}}}
 {"cmd": "xip", "selftest": true}
 {"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "prog_image": {"size": 98, "slot": "ok"},
   "selftest": {"ok": true, "result": 2871906233, "expected": 2871906233, "begin_us": 412, "call_us": 38}}}
 ```
 
@@ -4933,7 +4944,8 @@ are refused with BP0048 until it ends.
 | `mode` | `mapped` (the CPU runs it in place), `ram` (development builds that copy it to RAM first) or `none`. |
 | `image.size` | Bytes of W25Q code this firmware was built with. |
 | `image.slot` | The `xip` blob slot against that image: `ok`, `outdated`, `missing` or `unknown` (as `blob_status`). |
-| `selftest` | With `"selftest": true`: runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
+| `prog_image` | The same for the `xip_prog` image (`size`, `slot`). |
+| `selftest` | With `"selftest": true` (and `"image": "prog"` for the `xip_prog` image; default the `xip` image): runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
 
 Refusals: BP0083 (`xip_unavailable`, arg `why`) when the board or the slot cannot run the image,
 BP0048 while something else holds the storage bus.
