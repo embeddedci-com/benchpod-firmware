@@ -19,6 +19,13 @@
 #include "nrst_ctrl.h"       /* the entry sequence's target reset */
 #include "pico_compat.h"     /* sleep_ms */
 
+#if defined(BENCHPOD_USB_HOST)
+#include "usb_host.h"
+#include "usb_serial.h"
+#include "usb_flash.h"
+#include "usb_check.h"
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +49,10 @@ static bool            uart_plus_pending = false;/* saw "+++", awaiting the trai
 static absolute_time_t uart_last_rx_at;          /* last byte received from the client */
 static absolute_time_t uart_last_plus_at;        /* time of the most recent '+' */
 static uint8_t         uart_rx_buf[256];         /* DUT→client drain buffer */
+/* True when the session carries the hosted board's USB serial port ("port":"usb") instead of the soft
+   UART on the LA pins. The byte source and sink below are the only difference: the drain, the +++
+   escape and the close-on-socket-close are shared. */
+static bool            uart_usb = false;
 static uart_cfg_t      s_session;                /* the open session's config, kept so a gateware
                                                     reconfiguration can re-arm it (uart_rearm_poll) */
 static int             uart_rearm_conn = -1;           /* session to re-arm on the next poll     */
@@ -139,9 +150,32 @@ static bool uart_session_open(int conn_id, const uart_cfg_t *cfg) {
    claimed them, comes here; the callers disarm the UART first where they armed it. */
 static void uart_session_close(void) { uart_pins_release(&s_pins); }
 
+/* The session's byte source and sink: the soft UART, or the USB console. */
+static size_t uart_src_read(uint8_t *buf, size_t n) {
+#if defined(BENCHPOD_USB_HOST)
+    if (uart_usb) return usb_serial_con_read(buf, (uint32_t)n);
+#endif
+    return fpga_uart_read(buf, n);
+}
+
+static void uart_sink_write(const uint8_t *buf, size_t n) {
+#if defined(BENCHPOD_USB_HOST)
+    if (uart_usb) { (void)usb_serial_con_write(buf, (uint32_t)n, 20); return;   /* bytes the port cannot take in 20 ms are dropped */ }
+#endif
+    fpga_uart_write(buf, n);
+}
+
 static void uart_proxy_end(int conn_id, bool restore_json) {
-    fpga_uart_disable();
-    uart_session_close();
+#if defined(BENCHPOD_USB_HOST)
+    if (uart_usb) {
+        usb_serial_con_close();   /* DTR and RTS go low; the ring is freed */
+        uart_usb = false;
+    } else
+#endif
+    {
+        fpga_uart_disable();
+        uart_session_close();
+    }
     uart_proxy_conn   = -1;
     uart_plus_count   = 0;
     uart_plus_pending = false;
@@ -333,7 +367,58 @@ static void uart_entry_send(const uart_cfg_t *cfg) {
  *
  * The hardware order: pins claimed and the RX pull-up on, then the entry (TX low across the
  * reset), then the arm, then the static TX low cleared, then the entry's bytes and the ack. */
+#if defined(BENCHPOD_USB_HOST)
+/* {"cmd":"uart_proxy_start","port":"usb"[,"baud":115200][,"dtr":true][,"rts":true]
+    [,"parity":"none|even|odd"][,"stop_bits":1|2]}: the hosted board's USB serial port (CDC ACM, or
+   an FTDI, CP210x or CH34x chip) instead of the soft UART. No LA pin, pull-up or I/O voltage is
+   involved. Refused while a usb_flash or usb_check runs. */
+static void uart_usb_start(int conn_id, const char *json) {
+    if (uart_proxy_conn >= 0) { bp_err_uart_session_open(conn_id); return; }
+    usb_host_info_t hi;
+    usb_host_info(&hi);
+    if (hi.mode != USB_HOST_MODE_HOST) {
+        bp_err_usb_serial_no_port(conn_id, "USB host mode is off (usb_host)");
+        return;
+    }
+    if (usb_flash_busy() || usb_check_busy()) {
+        bp_err_usb_serial_busy(conn_id, "a usb_flash or usb_check is running");
+        return;
+    }
+    if (!hi.attached) { bp_err_usb_serial_no_port(conn_id, "no USB device is attached"); return; }
+    if (!usb_serial_ready()) {
+        bp_err_usb_serial_no_port(conn_id, "the attached device has no serial port (CDC ACM, FTDI, CP210x or CH34x)");
+        return;
+    }
+    usb_serial_args_t a;
+    usb_serial_arg_err_t e = usb_serial_args_parse(json, &a);
+    if (e != USB_SER_ARG_OK) { send_error(conn_id, usb_serial_arg_err_text(e)); return; }
+    int rc = usb_serial_con_open(&a);
+    if (rc == -2) { send_error(conn_id, "uart proxy failed: out of memory"); return; }
+    if (rc != 0) { bp_err_usb_serial_no_port(conn_id, "the serial port went away"); return; }
+    uart_usb = true;
+    send_ok_str(conn_id, "\"uart ready\"");
+    conn_proto_set(conn_id, PROTO_UART);
+    uart_proxy_conn   = conn_id;
+    uart_plus_count   = 0;
+    uart_plus_pending = false;
+    uart_last_rx_at   = get_absolute_time();
+    uart_last_plus_at = uart_last_rx_at;
+    if (conn_has_socket(conn_id)) at_set_tcp_nodelay(conn_id, true);
+}
+#endif
+
 void handle_uart_proxy_start(int conn_id, const char *json) {
+    char port[8] = {0};
+    if (json_get_value(json, "port", port, sizeof(port))) {
+        if (strcmp(port, "usb") != 0) { send_error(conn_id, "uart_proxy_start: port must be \"usb\" or left out"); return; }
+#if defined(BENCHPOD_USB_HOST)
+        uart_usb_start(conn_id, json);
+#else
+        bp_err_unknown_command(conn_id, "uart_proxy_start port usb");
+#endif
+        return;
+    }
+    if (uart_usb) { bp_err_uart_session_open(conn_id); return; }   /* the USB console is open */
     if (!require_la_voltage(conn_id)) return;
     uart_cfg_t cfg;
     uart_cfg_err_t err;
@@ -386,7 +471,7 @@ size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len) {
     (void)conn_id;
     absolute_time_t now = get_absolute_time();
     bool first = true;
-    fpga_uart_write(buf, len);   /* transparent passthrough */
+    uart_sink_write(buf, len);   /* transparent passthrough */
     for (size_t i = 0; i < len; i++) {
         uint8_t b = buf[i];
         int64_t idle_us = first
@@ -412,7 +497,16 @@ size_t uart_proxy_receive(int conn_id, const uint8_t *buf, size_t len) {
 
 /* command_handler_poll's UART pass: stream DUT→client and apply the +++ trailing guard. */
 void uart_proxy_poll(void) {
-    fpga_uart_tx_pump();   /* queued proxy TX bytes -> the FPGA FIFO as it drains */
+    if (!uart_usb) fpga_uart_tx_pump();   /* queued proxy TX bytes -> the FPGA FIFO as it drains */
+#if defined(BENCHPOD_USB_HOST)
+    if (uart_usb && uart_proxy_conn >= 0 && !usb_serial_con_is_open()) {
+        /* host mode ended (usb_serial.c closed the console): end the session like a vanished DUT port */
+        int c = uart_proxy_conn;
+        uart_proxy_end(c, false);
+        at_close_connection(c);
+        return;
+    }
+#endif
     if (uart_proxy_conn >= 0) {
         if (load_bin_owner() >= 0) {
             /* A DAC-replay upload is streaming in — SUSPEND the proxy for its duration.  The pod's
@@ -432,13 +526,13 @@ void uart_proxy_poll(void) {
                    so the resumed stream is fresh DUT output rather than stale/overflowed bytes. One
                    read empties the 256-deep FIFO. */
                 uart_upload_suspended = false;
-                (void)fpga_uart_read(uart_rx_buf, sizeof(uart_rx_buf));
+                (void)uart_src_read(uart_rx_buf, sizeof(uart_rx_buf));
             }
             /* Read no more than the ring takes whole (at_send_data is all or nothing): what we
                cannot send yet stays in the FIFO for the next pass instead of being lost. */
             size_t room = at_send_avail(uart_proxy_conn);
             if (room > sizeof(uart_rx_buf)) room = sizeof(uart_rx_buf);
-            size_t n = room ? fpga_uart_read(uart_rx_buf, room) : 0;
+            size_t n = room ? uart_src_read(uart_rx_buf, room) : 0;
             if (n > 0) {
                 if (at_send_data(uart_proxy_conn, uart_rx_buf, n) != 0) {
                     /* client gone — auto-stop and reclaim the slot */
@@ -465,6 +559,7 @@ void uart_proxy_poll(void) {
    command_handler_poll pass (uart_rearm_poll), not here: this hook runs right after CDONE, before
    the caller has pinged the new fabric, and it does not answer SPI yet. */
 void uart_proxy_on_gateware_reconfigured(void) {
+    if (uart_usb) return;   /* the USB console does not use the fabric */
     uart_rearm_conn = uart_proxy_conn;
 }
 

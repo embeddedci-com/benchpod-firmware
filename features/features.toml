@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 14
+revision = 15
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -934,4 +934,39 @@ rev = 14
 firmware = "4.0.3"
 docs = "API.md#usb_flash--flash-a-board-over-usb"
 dated = "code"
-note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives, FAT12/FAT16), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
+note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives and USB sticks and SD cards, FAT12/FAT16/FAT32/exFAT), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
+
+[features.usb_flash_readback]
+rev = 15
+firmware = "4.0.3"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+dated = "code"
+note = "usb_flash can read the drive back after a flash: check_fail_txt (file mode) waits for the loader's drive to come back and reports FAIL.TXT's first line as the failure reason; verify (uf2 mode) compares the loader's CURRENT.UF2 with the file when the board stays in its loader, and says so when it left. The reply has a note field."
+
+[features.uart_usb]
+rev = 15
+firmware = "4.0.3"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
+dated = "code"
+note = "uart_proxy_start with port usb: the transparent UART bridge carries the serial port of the board the pod hosts (CDC ACM, or an FTDI, CP210x or CH34x chip) instead of the soft UART on the LA pins, so a test reads the boot log over the cable the board was flashed through. baud, dtr, rts, data_bits, parity and stop_bits apply; no LA pin, pull-up or I/O voltage is used. Same raw byte stream, +++ escape and close on socket close; the session ends with host mode. usb_serial reports the port's state (read only). BP0085 no serial port, BP0086 port busy (usb_flash or usb_check). A 4 KB receive ring lives while the session is open."
+
+[features.usb_check]
+rev = 15
+firmware = "4.0.3"
+docs = "API.md#usb_check--check-the-boards-usb-firmware"
+dated = "code"
+note = "Checks of the board's own USB firmware on the USB host port, with its VBUS on eFuse 1: enumerate (power-on to pull-up, descriptor and mounted, min/avg/max over count cycles), power (eFuse 1 current against bMaxPower), suspend (suspended current against 2.5 mA, resume, still answers), reset (port resets, re-enumeration time), replug (VBUS dropouts of 5 to 500 ms). Background job (poll usb_check, abort). BP0087 refused (why), BP0088 not powered from eFuse 1."
+
+[features.usb_hid]
+rev = 15
+firmware = "4.0.3"
+dated = "code"
+docs = "API.md#usb_hid--hid-interfaces-and-input-reports"
+note = "usb_hid (T0): the HID interfaces of the board on the USB host port (the first two) with their report descriptors in hex (offset pages through a long one). capture:true starts catching input reports on all of them into one ring (each report with its instance and the milliseconds since the start, the report bytes in hex), read:true drains it (count 1 to 32, timeout_ms up to 10000 to wait for a first report, optional instance filter, dropped counts a full ring), capture:false stops it. The capture also ends when the board detaches or host mode ends. A read without a capture starts one. Refused while a usb_flash or usb_check runs."
+
+[features.usb_flash_picoboot]
+rev = 15
+firmware = "4.0.3"
+dated = "code"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+note = "usb_flash mode picoboot: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350) in BOOTSEL through its PICOBOOT interface: exclusive access, exit XIP, erase the 4 KB sectors the image covers, write 256-byte pages at address (default 0x10000000), read every page back and compare, then reboot into the program (leave false stays in BOOTSEL). Any other board is refused with BP0084."

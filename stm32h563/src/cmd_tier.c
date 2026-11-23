@@ -99,7 +99,10 @@ static const cmd_desc_t k_tiers[] = {
     { { "ota_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_status), NULL },
     { { "blob_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_blob_status), NULL },
     { { "xip", CMD_TIER_T0 }, 0, CMD_FN(handle_xip), writes_selftest },
+    { { "usb_hid", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_hid), NULL },
     { { "usb_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_usb_flash), NULL },
+    { { "usb_serial", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_serial), NULL },
+    { { "usb_check", CMD_TIER_T1 }, 0, CMD_FN(handle_usb_check), NULL },
     { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list), NULL },
     { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get), NULL },
 #if defined(BENCHPOD_EMI_TEST)

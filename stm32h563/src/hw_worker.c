@@ -16,6 +16,9 @@
 #include "esp_dut_flash.h"
 #if defined(BENCHPOD_USB_HOST)
 #include "usb_flash.h"
+#include "usb_serial.h"
+#include "usb_check.h"
+#include "usb_hid.h"
 #endif
 #include "c3_update.h"
 #if defined(BENCHPOD_WIFI_BRIDGE)
@@ -432,6 +435,9 @@ static void worker_task(void *arg) {
         esp_dut_flash_poll();     /* an ESP32 DUT flash (esp_flash): one step, never a wait */
 #if defined(BENCHPOD_USB_HOST)
         usb_flash_poll();         /* a USB drive flash (usb_flash): one step of a few sectors */
+        usb_serial_con_poll();    /* the USB serial console: bind it to a port that came back */
+        usb_hid_poll();           /* a HID capture ends with host mode */
+        usb_check_poll();         /* a USB check (usb_check): one step */
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
         wifi_bridge_ota_poll();   /* a Wi-Fi bridge update: one step, never a wait */

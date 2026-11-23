@@ -90,3 +90,7 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0082 | `lan_clients_full` | policy | 4.0.1 | The pod already has {max} paired computers |
 | BP0083 | `xip_unavailable` | firmware | 4.0.2 | The pod cannot run code from its W25Q: {why} |
 | BP0084 | `usb_flash_refused` | usb | 4.0.2 | The pod cannot flash the board over USB: {why} |
+| BP0085 | `usb_serial_no_port` | usb | 4.0.3 | The pod has no USB serial port to open: {why} |
+| BP0086 | `usb_serial_busy` | usb | 4.0.3 | The board's USB serial port is not free: {why} |
+| BP0087 | `usb_check_refused` | usb | 4.0.3 | The pod cannot run the USB check: {why} |
+| BP0088 | `usb_check_no_efuse_power` | usb | 4.0.3 | The board is not powered from target-power eFuse 1 |

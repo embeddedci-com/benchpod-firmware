@@ -322,7 +322,10 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
-| `usb_flash` | T1 | Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32 | object | no |
+| `usb_hid` | T0 | The HID interfaces of the board on the USB host port: report descriptors, and its input reports (keyboard, mouse, gamepad) | object | no |
+| `usb_flash` | T1 | Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32, RP2040 and RP2350 PICOBOOT | object | no |
+| `usb_serial` | T0 | The state of the board's USB serial port (open through `uart_proxy_start` with `"port":"usb"`) | object | no |
+| `usb_check` | T1 | Check the board's own USB firmware: enumeration time after power-on, current against bMaxPower and in suspend, bus resets, short VBUS dropouts | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -3038,6 +3041,38 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 | `de_active_low` | boolean | no | `false` | Drive `de` low while sending, for a transceiver whose enable is active low. |
 | `entry` | object | no | none | A boot-mode entry the pod runs before the ack, timed on the pod so no network delay sits between the reset and the first byte. See [boot-mode entry](#boot-mode-entry). Needs the pod's reset pin (`nrst_pin` in `caps`). |
 
+#### USB serial port (`"port":"usb"`)
+
+Firmware 4.0.3 and later (feature `uart_usb`). With `"port":"usb"` the bridge carries the serial
+port of the board the pod hosts ([`usb_host`](#usb_host--usb-host-mode) on): a CDC ACM port, or the
+FTDI, CP210x or CH34x chip of a dev kit, instead of the soft UART on LA channels. No LA channel, pull-up
+or I/O voltage is involved and none is touched. After the ack the connection is the same raw byte
+stream: client bytes go to the port, the port's bytes come back, `<1 s idle> +++ <1 s idle>` returns
+to JSON, and closing the socket ends the session. Ending the session closes the port (DTR and RTS go
+low, as when a computer closes a serial port) and frees its 4 KB receive ring.
+
+```json
+{"cmd":"uart_proxy_start","port":"usb","baud":115200,"dtr":true,"rts":true,"parity":"none","stop_bits":1}
+{"status":"ok","data":"uart ready"}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `port` | string | none | `"usb"`. Left out: the soft UART on `rx` and `tx`. |
+| `baud` | integer | 115200 | 300 to 3000000. Real on a USB-serial chip; a board's own USB port ignores it. |
+| `dtr`, `rts` | boolean | `true` | The control lines. Many boards reset or enter their loader on these: set them to what the board expects. |
+| `data_bits`, `parity`, `stop_bits` | | `8`, `"none"`, `1` | 5 to 8; `"none"`, `"even"` or `"odd"`; 1 or 2. |
+
+`rx`, `tx`, `half_duplex`, `de` and `entry` do not apply. Client bytes the port cannot take within
+20 ms are dropped; when the board resets and enumerates again the session stays open (no bytes
+meanwhile) and the pod sets baud, format and lines again once a port of the same kind is back. The
+session ends, and the pod closes the connection, when host mode ends or its timeout runs out.
+Refusals: BP0085 (`usb_serial_no_port`, arg `why`: host mode off, no device attached or no serial
+port), BP0086 (`usb_serial_busy`: a `usb_flash` or `usb_check` runs), BP0049 (`uart_session_open`:
+another UART session is open). While the port is open, `usb_flash` and `usb_check` are refused
+(BP0084 and BP0087). The SDK's UART capture (`capture_uart`) and `open_uart` take `"port":"usb"` on
+top of this command.
+
 #### Boot-mode entry
 
 Some boot ROMs pick their mode from the level of the UART pin when the chip leaves reset, then
@@ -4563,6 +4598,57 @@ updated from firmware that kept a copy in the W25Q, that copy is reported until 
 update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
 the C3 does not start and the pod has no copy to reinstall it from.
 
+### `usb_hid` — HID interfaces and input reports
+
+Firmware 4.0.3 and later (feature `usb_hid`). With [`usb_host`](#usb_host--usb-host-mode) on and a
+board mounted, this lists the board's HID interfaces (the first two of a composite device) with
+their report descriptors, and catches the input reports it sends: a keyboard's keys, a mouse, a
+gamepad, a custom HID device. The pod keeps the device's default (report) protocol and does not
+send anything to it; the reports come from its interrupt IN endpoint.
+
+A capture catches the reports. `capture` true starts it on all HID interfaces at once: every report
+goes into one ring of 64 (heap memory, freed when the capture ends), tagged with its interface and the
+milliseconds since the capture started, whether or not a `read` is running. `read` drains the ring.
+`capture` false stops it and frees the ring. The capture also ends when the board detaches (a board
+that resets and enumerates again needs a new `capture` true) and when host mode ends.
+
+```json
+{"cmd": "usb_hid"}
+{"status": "ok", "data": {"attached": true, "interfaces": [{"instance": 0, "interface": 0,
+  "protocol": "keyboard", "descriptor_len": 63, "descriptor_offset": 0, "truncated": false,
+  "descriptor": "05010906a101050719e029e715002501750195088102..."}]}}
+{"cmd": "usb_hid", "capture": true}
+{"status": "ok", "data": {"capturing": true, "buffered": 0, "dropped": 0}}
+{"cmd": "usb_hid", "read": true, "count": 8, "timeout_ms": 5000}
+{"status": "ok", "data": {"reports": [{"ms": 812, "instance": 0, "data": "0000040000000000"},
+  {"ms": 830, "instance": 1, "data": "00010000"}, {"ms": 920, "instance": 0, "data": "0000000000000000"}],
+  "count": 3, "dropped": 0, "capturing": true}}
+{"cmd": "usb_hid", "capture": false}
+{"status": "ok", "data": {"capturing": false, "buffered": 0, "dropped": 0}}
+```
+
+| Argument | Description |
+|---|---|
+| `capture` | `true` starts the capture (nothing happens when it already runs), `false` stops it and frees the ring (works in every state). |
+| `read` | `true` returns reports from the ring. Without `capture` or `read` the command lists the interfaces. |
+| `count` | With `read`: return at most this many reports, 1 to 32 (default 1). |
+| `timeout_ms` | With `read`: when the ring holds no report (of the asked instance), wait up to this long for one, 1 to 10000 (default 2000). A ring that holds a report answers at once. The reply holds what is there, possibly none. |
+| `instance` | With `read`: only the reports of this HID interface (0 or 1); the other reports stay in the ring. With the list: only this interface. By default every one. |
+| `offset` | With the list: where each report descriptor starts, in bytes (default 0). The descriptors share one reply; a long one is cut (`truncated` true) and read on with `offset`. |
+
+| Field | Description |
+|---|---|
+| `interfaces[]` | `instance` (the number to pass back), `interface` (the USB interface number), `protocol` (`keyboard`, `mouse` or `none`), `descriptor_len` (0 when the pod could not read it), `descriptor` (hex from `descriptor_offset`) and `truncated`. |
+| `reports[]` | `ms` (since the capture started), `instance` and `data` (hex of the report as sent; with several report IDs the first byte is the ID). Reports are cut at 64 bytes. |
+| `capturing` | Whether the capture runs. A `read` that comes back with `capturing` false found it ended (the board detached or host mode ended). |
+| `buffered`, `dropped` | In the reply of `capture`: the reports waiting in the ring, and the reports that arrived while the ring was full, since the capture started (a full ring drops the newest, so keys pressed while nobody reads are not lost until 64 are waiting). In the reply of `read`, `dropped` is the same running count. |
+
+A `read` while no capture runs starts one and leaves it running (the way it behaved before the
+capture existed, but now the reports between two reads are kept); stop it with `capture` false. The
+whole command is refused (plain error) when host mode is off, no HID interface is mounted, or a
+`usb_flash` or `usb_check` is running; `usb_flash` and `usb_check` are in turn refused while a capture
+runs. The pod keeps `usb_host` on only for its own timeout, so renew it for a long capture.
+
 ### `usb_flash` — flash a board over USB
 
 Firmware 4.0.3 and later (feature `usb_flash`). The pod flashes a board on its USB host port
@@ -4592,52 +4678,166 @@ the way a computer would:
   or the USB-serial chip of a dev kit (CP210x, CH34x, FTDI). The pod resets the chip into its
   loader with DTR and RTS as esptool does, writes the image at `address` (0 for a merged image) and
   checks its MD5 on the chip. A dev kit's chip runs at 460800 baud for the write.
+- `picoboot`: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350) in BOOTSEL (USB ID 2E8A:0003 or
+  2E8A:000F), through the vendor PICOBOOT interface next to its UF2 drive. The pod takes exclusive
+  access, leaves XIP mode, erases the 4 KB sectors the image covers, writes 256-byte pages, reads
+  every page back and compares it with the file, then reboots the board into the new program. Unlike
+  `uf2`, a page that did not stick fails the flash (`a page read back different from what was
+  written`). Any other board is refused (BP0084).
 
 Serial ports: CDC ACM (a board's own USB), and the FTDI, CP210x and CH34x USB-serial chips.
 
-The image for `dfu`, `teensy`, `avr`, `samd` and `esp` is a binary with its start `address` (the SDK
+The image for `dfu`, `teensy`, `avr`, `samd`, `esp` and `picoboot` is a binary with its start `address` (the SDK
 converts `.hex` and `.dfu` files). The flash runs in the background; poll `usb_flash` for its
 state.
 
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_a", "timeout_s": 120}
 {"cmd": "usb_flash", "mode": "uf2", "len": 204800}
-{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440}
+{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440, "check_fail_txt": true}
 {"cmd": "usb_flash", "mode": "dfu", "address": "0x08000000", "len": 131072}
 {"cmd": "usb_flash", "mode": "teensy", "address": 0, "len": 262144}
 {"cmd": "usb_flash", "mode": "avr", "len": 10240}
 {"cmd": "usb_flash", "mode": "samd", "address": "0x2000", "len": 51200}
 {"cmd": "usb_flash", "mode": "esp", "address": 0, "len": 1048576}
+{"cmd": "usb_flash", "mode": "picoboot", "address": "0x10000000", "len": 262144}
 {"cmd": "usb_flash"}
 {"status": "ok", "data": {"running": false, "have_result": true, "mode": "file", "name": "FIRMWARE.BIN",
   "len": 61440, "address": 0, "protocol": "", "phase": "done", "done": 120, "total": 120, "result": "ok",
-  "ok": true, "ms": 1840}}
+  "ok": true, "ms": 1840, "note": ""}}
 {"cmd": "usb_flash", "abort": true}
 ```
 
 | Argument | Description |
 |---|---|
-| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12 or FAT16 file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. `avr`, `samd`, `esp`: a binary for the board's bootloader on its USB serial port. Without `mode` the command reads the state. |
-| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). `avr`: the byte address (0 for a sketch). `samd`: the flash address (`0x2000` on a SAMD21). `esp`: the flash offset (0 for a merged image, `0x10000` for an application). A number or a `0x` string. |
+| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12, FAT16, FAT32 or exFAT file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. `avr`, `samd`, `esp`: a binary for the board's bootloader on its USB serial port. `picoboot`: a binary for an RP2040 or RP2350 in BOOTSEL. Without `mode` the command reads the state. |
+| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). `avr`: the byte address (0 for a sketch). `samd`: the flash address (`0x2000` on a SAMD21). `esp`: the flash offset (0 for a merged image, `0x10000` for an application). `picoboot`: the flash address (default `0x10000000`, the start of flash), a multiple of 4096 inside the 16 MB window. A number or a `0x` string. |
 | `block` | `teensy`: the loader's block size, 1024 (default) or 512 (Teensy LC). |
-| `leave` | `dfu`, `teensy`, `avr`, `samd`, `esp`: `false` keeps the board in its loader at the end; by default it starts the new firmware. Some bootloaders (optiboot, Caterina) start the sketch on their own after a few seconds anyway. |
+| `leave` | `dfu`, `teensy`, `avr`, `samd`, `esp`, `picoboot`: `false` keeps the board in its loader at the end (`picoboot`: in BOOTSEL, with its drive writable again); by default it starts the new firmware. Some bootloaders (optiboot, Caterina) start the sketch on their own after a few seconds anyway. |
 | `name` | With `mode` `file`: the file name, an 8.3 name such as `FIRMWARE.BIN`. A file of the same name is replaced. |
 | `len` | Bytes of the uploaded file to write. |
+| `check_fail_txt` | `file`: after the copy, wait up to 10 s for the drive to come back (a DAPLink loader re-enumerates), read `FAIL.TXT` from its root directory and, when it is there, end with the result `the loader reported a failure` and its first line in `note`. If the drive does not come back, the result stays `ok` and `note` says FAIL.TXT was not checked. Off by default. |
+| `verify` | `uf2`: after the last block, if the drive is still (or again) the loader, compare each block of the file with the drive's `CURRENT.UF2` (the loader's flash contents; Raspberry Pi RP2040 and RP2350 loaders). Only works when the loader stays in BOOTSEL after the write, as with a UF2 file that keeps it there. If the board left its loader (the normal case) the result stays `ok` and `note` says `verify skipped: the board left its bootloader`. A difference ends with `the drive's flash contents differ from the file` and the block in `note`. Off by default. |
+| `time` | `file`: seconds since 1970 (UTC, 2020 to 2099) for the dates and times of the new file's directory entry. The pod has no clock, so the client sends its own; left out, the entry says 2026-01-01 00:00:00. |
 | `abort` | `true` stops a running flash. |
 
 | Field | Description |
 |---|---|
 | `running` | A flash is in progress. While it runs, captures, DAC playback, uploads and updates are refused with BP0048. |
 | `protocol` | `avr`: the bootloader found, `avr109`, `stk500v1` or `stk500v2`. `samd`: `sam-ba`. `esp`: the chip, such as `ESP32-S3`. Empty otherwise. |
-| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done`. `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. `avr` and `samd`: `start`, `touch`, `reattach`, `reset`, `sync`, `info`, `erase`, `write`, `verify`, `leave`, `done`. `esp`: `reset`, then the ESP32 flasher's phases (`sync`, `data`, `md5`, ...). |
-| `done`, `total` | Sectors (`uf2`, `file`), blocks (`dfu`, `teensy`, `esp`) or bytes (`avr`, `samd`: written, then verified) of all. |
-| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12/FAT16 file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error, the board is not a Teensy in its loader, no bootloader answered on the serial port, what the board holds is not the image, the image would overwrite the bootloader, ...). |
+| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done` (FAT32 adds `new directory block`, `old file`, `fsinfo`; exFAT adds `new directory block`, `bitmap`, `fat`, `old file`, `entry`; the read-back adds `wait for drive`, `find file`, `read file`, `verify`). `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. `picoboot`: `start`, `descriptors`, `erase`, `write`, `verify`, `leave`, `done`. `avr` and `samd`: `start`, `touch`, `reattach`, `reset`, `sync`, `info`, `erase`, `write`, `verify`, `leave`, `done`. `esp`: `reset`, then the ESP32 flasher's phases (`sync`, `data`, `md5`, ...). |
+| `note` | What the read-back found: `FAIL.TXT`'s first line, `verified N blocks`, `verify skipped: ...`, or empty. |
+| `done`, `total` | Sectors (`uf2`, `file`), blocks (`dfu`, `teensy`, `esp`), steps (`picoboot`: sectors erased, then pages written, then pages read back) or bytes (`avr`, `samd`: written, then verified) of all. |
+| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12, FAT16, FAT32 or exFAT file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error (for `picoboot` with its status code), the board is not a Teensy in its loader, the board is not an RP2040 or RP2350 in BOOTSEL, a page read back different from what was written, no bootloader answered on the serial port, what the board holds is not the image, the image would overwrite the bootloader, ...). |
 
 The pod keeps `usb_host` on while a flash runs. The flash logic of every mode but `esp` runs from
 the pod's W25Q (`xip`), so it needs the `xip` blob of the running firmware; `esp` uses the same
 flasher as `esp_flash`, and is refused while another ESP32 flash runs. Refusals: BP0084 (`usb_flash_refused`, arg
 `why`: host mode off, no drive mounted, device or serial port attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
 code), BP0048 (the storage bus is busy).
+
+### `usb_serial` — USB serial port state
+
+Firmware 4.0.3 and later (feature `uart_usb`). The pod, hosting the board
+([`usb_host`](#usb_host--usb-host-mode)), can open the board's USB serial port like a UART: a CDC ACM
+port (the board's own USB: ESP32-S3 and C3, Pico, nRF52840, ...), or the FTDI, CP210x or CH34x chip
+of a dev kit. A test reads the boot log over the cable the board was flashed through. It is opened
+with [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) and `"port":"usb"`, and the
+bytes flow over that connection. `usb_serial` only reports the state (read only):
+
+```json
+{"cmd": "usb_serial"}
+{"status": "ok", "data": {"open": true, "baud": 115200, "frame": "8N1", "dtr": true, "rts": true,
+  "bridge": "cdc", "rx_buffered": 0, "rx_dropped": 0, "tx_total": 0, "rx_total": 0, "port_present": true}}
+```
+
+`open` is true while a `uart_proxy_start` with `"port":"usb"` session runs. `bridge` is `cdc` (the
+board's own USB) or the chip (`ftdi`, `cp210x`, `ch34x`, `pl2303`). `rx_buffered` is what waits in
+the 4 KB receive ring (heap memory, freed when the session ends). `rx_dropped` counts bytes lost
+because the ring was full, `rx_total` and `tx_total` all bytes received and sent since the open.
+`port_present` is true when the board has a serial port the pod can open (while open: while it is
+there). DTR and RTS read false when the console is closed.
+
+### `usb_check` — check the board's USB firmware
+
+Firmware 4.0.3 and later (feature `usb_check`). The pod hosts the board on its USB port
+([`usb_host`](#usb_host--usb-host-mode)) and, with the board's USB power (VBUS) wired to target-power
+eFuse 1 (the internal 5 V rail, `target_power` eFuse 1, switched on), it can measure what a computer
+cannot. A check runs in the background; poll `usb_check` for its state and result. Only one check
+runs at a time, and `usb_flash` is refused while one runs (and the other way round).
+
+```json
+{"cmd": "usb_check", "test": "enumerate", "count": 10, "off_ms": 500}
+{"cmd": "usb_check", "test": "power", "duration_ms": 3000}
+{"cmd": "usb_check", "test": "suspend", "settle_ms": 200, "duration_ms": 1000}
+{"cmd": "usb_check", "test": "reset", "count": 20}
+{"cmd": "usb_check", "test": "replug", "count": 10, "off_ms": [5, 20, 100, 500]}
+{"cmd": "usb_check"}
+{"cmd": "usb_check", "abort": true}
+```
+
+| Argument | Description |
+|---|---|
+| `test` | `enumerate`, `power`, `suspend`, `reset` or `replug` (below). Without `test` the command reads the state. |
+| `count` | `enumerate` (default 10) and `reset` (default 20): cycles, 1 to 200. `replug` (default 10): cycles per length, 1 to 100. |
+| `off_ms` | `enumerate`: how long eFuse 1 stays off, 50 to 10000, default 500. `replug`: a number or a list of up to 6 dropout lengths in ms, 1 to 5000, default `[5, 20, 100, 500]`. |
+| `timeout_ms` | `enumerate`, `reset`, `replug`: how long to wait for the board after each cycle, 500 to 30000, default 5000. |
+| `duration_ms` | `power` (default 3000) and `suspend` (default 1000): the measuring time, 200 to 60000. |
+| `settle_ms` | `suspend`: the wait after the bus is suspended before measuring, 20 to 5000, default 200. |
+| `abort` | `true` stops a running check. eFuse 1 and the bus are put back as they were. |
+
+The tests:
+
+- `enumerate`: power-cycles the board through eFuse 1 (off for `off_ms`) `count` times and times
+  power-on to its pull-up on the port (`connect_ms`), to its device descriptor (`descriptor_ms`)
+  and to mounted (`mount_ms`), each as `min`, `avg`, `max`. A cycle fails when the board never
+  shows its pull-up (`no_connect`), enumeration stalls (`stuck`) or it is not mounted within
+  `timeout_ms` (`timeout`). Times have about 2 ms resolution. If the board still sits on the bus
+  2.5 s after the rail went off, the check stops with the error `not_powered_by_efuse1`.
+- `power`: samples eFuse 1's current for `duration_ms` and compares the average (`avg_ua`) with the
+  configuration's `bMaxPower` (`limit_ma`). `verdict`: `ok`, `avg_over` (the average is above the
+  limit), `peak_over` (a sample is more than 25 % above it: USB allows a short inrush) or `no_limit`
+  (the configuration declares 0 mA). Pass is `ok`. The monitor's resolution is about 0.1 mA.
+- `suspend`: stops the SOFs so the board enters suspend, waits `settle_ms`, measures eFuse 1's
+  current for `duration_ms` and compares the average with the 2.5 mA a bus-powered device may draw
+  suspended (`limit_ua`; `current`: `ok`, `avg_over`, or `skipped` when the board's configuration
+  says it is self-powered). Then it resumes the bus and checks the board still answers a
+  GET_STATUS request. `suspend_ok` is false when the pod could not suspend the bus (`susprdy` is
+  the peripheral's report, `sof_stopped` whether the frame counter really stood still). `resume`
+  is `signaling` when resume signaling restarted the bus and `failed` when it did not; then the
+  pod resets the bus and `recovered_by_reset` says whether the board came back. Pass needs a
+  working suspend, a resume by signaling, a board that answers and the current within the limit.
+  However the test ends (pass, fail, `abort`), the pod puts the bus back first: it clears the
+  suspend and resume bits and checks that the frame counter counts again, and when the bus does
+  not come back, or the board still does not answer after a bus reset, it re-initializes the port
+  (host mode stops and starts again, like `usb_host` off and on) and says so: `port_reinit` true,
+  and `reinit_ok` whether the board enumerated and answered afterwards. When host mode ends during
+  the test, the role switch itself resets the port.
+- `reset`: issues `count` port resets to the mounted board and times each until it is mounted
+  again (`reenumerate_ms`). Failures are `timeout` and `stuck`. `identity_changed` counts boards
+  that came back with another vendor or product ID, which also fails the check.
+- `replug`: for each length in `off_ms`, switches eFuse 1 off for that long `count` times. Each
+  cycle ends `reenumerated` (the board dropped off the bus and enumerated again), `stayed` (it never
+  left the bus and still answers a GET_STATUS request: its capacitance carried it through) or
+  `failed` (not back within `timeout_ms`, stuck, or mounted for the host but not answering). Pass
+  needs no `failed`. Dropout lengths have about 2 ms of jitter.
+
+The reply (about 1 KB at most) is the same for every test:
+
+| Field | Description |
+|---|---|
+| `running`, `have_result` | A check is in progress; the last one has ended. Neither before the first check. |
+| `test`, `phase`, `done`, `total`, `ms` | The test, its phase (`power_off`, `power_on`, `gap`, `reset`, `sample`, `suspend`, `settle`, `measure`, `resume`, `check`, `recover`, `done`), progress (cycles, or ms for `power` and `suspend`) and the time so far. |
+| `pass`, `error` | When it ended: the verdict, and why it stopped early: `aborted`, `host_stopped`, `not_powered_by_efuse1`, `no_device`, `monitor_error`, `efuse_error`, `bus_busy`, `bus_timeout`. Empty when the check ran to its end. |
+| `result` | The numbers of the test (above), with the board's `vid` and `pid`. |
+
+Currents are in uA, the eFuse 1 monitor's reading (the board's own draw, not the pod's). Suspend
+uses the peripheral's own suspend and resume registers, which TinyUSB's host driver does not use;
+the bus is resumed at the end of every check. eFuse 1 is put back on if the check turned it off.
+
+Refusals: BP0087 (`usb_check_refused`, arg `why`: bad argument, host mode off, no board enumerated,
+a USB flash, another check or a power profile running), BP0088 (`usb_check_no_efuse_power`: eFuse 1
+is off, for every test but `reset`).
 
 ### `xip` — code that runs from the W25Q
 
@@ -5301,7 +5501,9 @@ Firmware 3.9.3+. See `docs/design/lan-tls.md`.
 The pod also serves this API on TCP `8443` with TLS 1.2 (ECDHE, AES-GCM or ChaCha20-Poly1305). A
 full handshake takes the pod about 0.46 s with its EC key (about 1.1 s with an RSA 2048 one); it
 resumes sessions (session tickets and a 4-entry session cache, one hour), which takes about 20 ms, so
-clients that open a connection per command should keep the session. On
+clients that open a connection per command should keep the session. A session that was set up
+without a client certificate is not resumed (the client gets a full handshake and can send its
+certificate, see [LAN pairing](design/lan-pairing.md)). On
 the first boot of firmware with LAN TLS it generates an ECDSA P-256 key and a self-signed
 certificate for `benchpod-xxxxxx` and `benchpod-xxxxxx.local` (its mDNS name), valid to 9999 (the
 pod has no clock), and keeps both in its internal config flash. `sha256` is the SHA-256 of the
