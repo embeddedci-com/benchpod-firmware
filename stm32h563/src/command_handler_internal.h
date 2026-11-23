@@ -81,6 +81,9 @@ static inline bool conn_has_socket(int conn_id) {
 /* Reply helpers (defined in command_handler.c). */
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
 void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok","data":<payload>}  */
+/* The same for a payload that may not fit send_ok_str's 256-byte reply buffer (up to
+   BP_CLOUD_REPLY_MAX - 64): the reply is built on the heap. */
+void send_ok_large(int conn_id, const char *payload_json);
 
 /* A gateware gate (a gw_caps() field): true when the running gateware has it, else the handler
    refuses with gateware_too_old (BP0017: feature needs gateware v`min`) and returns. */

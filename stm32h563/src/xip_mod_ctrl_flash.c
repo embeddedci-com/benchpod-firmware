@@ -113,8 +113,15 @@ static int dfu_descriptors(ctrl_flash_ctx_t *c)
         uint32_t dl = b[off], type = b[off + 1];
         if (dl < 2 || off + dl > total) break;
         if (type == 4 && dl >= 9) {
-            in_dfu = !found && b[off + 5] == 0xFE && b[off + 6] == 0x01 && b[off + 7] == 0x02 && b[off + 3] == 0;
-            if (in_dfu) { c->itf = b[off + 2]; c->i_string = b[off + 8]; found = true; }
+            /* The first DFU-mode interface (alternate setting 0) is the one; its functional
+               descriptor may follow its other alternate settings (STM32 ROMs: one per memory, the
+               functional descriptor after the last), so those keep in_dfu on. */
+            bool dfu = b[off + 5] == 0xFE && b[off + 6] == 0x01 && b[off + 7] == 0x02;
+            if (!found && dfu && b[off + 3] == 0) {
+                c->itf = b[off + 2]; c->i_string = b[off + 8]; found = true; in_dfu = true;
+            } else {
+                in_dfu = found && dfu && b[off + 2] == c->itf;
+            }
         } else if (type == 0x21 && in_dfu && dl >= 7) {
             xfer = rd16(b + off + 5);
             bcd = dl >= 9 ? rd16(b + off + 7) : 0x0100u;

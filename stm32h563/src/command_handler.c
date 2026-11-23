@@ -29,6 +29,7 @@
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
+#include "FreeRTOS.h"     /* pvPortMalloc: send_ok_large */
 #include "lease_gate.h"
 #include "lease_local.h"
 #include "la_pins.h"     /* LA pin ownership table */
@@ -91,6 +92,23 @@ void send_ok_str(int conn_id, const char *payload_json) {
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         at_close_connection(conn_id);   /* reclaim slot if client already left */
     }
+}
+
+/* send_ok_str for payloads larger than its stack buffer (usb_host's device report, usb_flash's
+   state with a long result): the wrapper goes around the payload in a heap buffer. Payloads up to
+   BP_CLOUD_REPLY_MAX - 64 also fit the cloud's captured reply. */
+void send_ok_large(int conn_id, const char *payload_json) {
+    static const char head[] = "{\"status\":\"ok\",\"data\":";
+    size_t n = strlen(payload_json);
+    size_t total = sizeof(head) - 1u + n + 2u;
+    char *resp = pvPortMalloc(total + 1u);
+    if (!resp) { send_error(conn_id, "out of memory for the reply"); return; }
+    memcpy(resp, head, sizeof(head) - 1u);
+    memcpy(resp + sizeof(head) - 1u, payload_json, n);
+    memcpy(resp + total - 2u, "}\n", 3u);
+    LOG_D("[cmd] -> ok  data=%s\n", payload_json);
+    if (at_send_data(conn_id, (const uint8_t *)resp, total) != 0) at_close_connection(conn_id);
+    vPortFree(resp);
 }
 
 /* Big enough for the longest message a caller can build (LA_PINS_ERR_MAX) even if bp_emit_jstr
