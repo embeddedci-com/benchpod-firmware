@@ -32,9 +32,11 @@ gw_caps_t gw_caps_for(uint8_t v, uint8_t f)
     c.uart_half_duplex    = v >= UART_HALFDUPLEX_MIN_GW;
     c.uart_de             = v >= UART_DE_MIN_GW;
     c.uart_config2        = v >= UART_CONFIG2_MIN_GW;
+    c.jtag_gw             = v >= JTAG_MIN_GW;
     c.img_control_loop    = (f & FPGA_FEATURE_CONTROL_LOOP) != 0;
     c.img_deep_replay     = (f & FPGA_FEATURE_DEEP_REPLAY) != 0;
     c.img_emulation       = (f & FPGA_FEATURE_EMULATION) != 0;
+    c.jtag                = c.jtag_gw && (f & FPGA_FEATURE_JTAG) != 0;
     return c;
 }
 

@@ -801,6 +801,10 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 61 = v60 + a JTAG MASTER as the SWD engine's fourth job (jtag_seq.v; SPI_ARM
+    // flags bit 3): TCK/TDI/TDO/TMS on the SCK/MOSI/MISO/CS slots, and SWD_FEED carries CMSIS-DAP
+    // DAP_JTAG_Sequence sequences as is, with the TDO bytes in the reply buffer.  tb_jtag.
+    // Loop and deep images only (FPGA_FEATURES bit 3): the emulation image has no room for it.
     // GATEWARE_VERSION 60 = v59 + the 2026-11 audit's gateware items.  UART_CONFIG2 (0x7D): UART_CONFIG
     // with [ext][de_ch] in front, so DE's channel has its own byte and ext is room for the next UART
     // option (UART_CONFIG's flags byte had one bit left); UART_CONFIG stays.  tb_dispatch_args,
@@ -1267,13 +1271,13 @@ module top (
     // exclusive across the two images, which the firmware swaps by reflashing).  The firmware reads it to advertise capabilities
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
-    localparam [7:0] IMG_FEATURES = 8'h02;   // deep-DAC-PSRAM-replay
+    localparam [7:0] IMG_FEATURES = 8'h0A;   // deep-DAC-PSRAM-replay + JTAG master (v61)
 `elsif USE_EMULATION
     localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54)
 `else
-    localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
+    localparam [7:0] IMG_FEATURES = 8'h09;   // closed-loop DAC control + JTAG master (v61)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd60), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd61), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

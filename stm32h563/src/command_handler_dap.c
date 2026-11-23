@@ -16,6 +16,8 @@
 #include "la_pins.h"
 #include "dap.h"
 #include "swd_ll.h"
+#include "jtag_ll.h"
+#include "gw_caps.h"
 #include "watchdog.h"
 #include "hw_worker.h"       /* hw_worker_submit_tunnel_reset (DAP send stall) */
 #include "pico_compat.h"     /* sleep_ms (yields to FreeRTOS) */
@@ -119,11 +121,36 @@ static int dap_wait_for_target(uint32_t wait_ms) {
     }
 }
 
+/* The pins of the DAP session (LA channels, 0 = none), for DAP_Connect's port switch. */
+static struct {
+    unsigned swclk, swdio;               /* SWD */
+    unsigned tck, tms, tdi, tdo, trst;   /* JTAG */
+    unsigned half;                       /* JTAG TCK half period when armed */
+} s_dap_pins;
+
+static const la_fn_t k_jtag_fns[5] = { LA_FN_JTAG_TCK, LA_FN_JTAG_TMS, LA_FN_JTAG_TDI, LA_FN_JTAG_TDO,
+                                       LA_FN_JTAG_TRST };
+
+static bool dap_pins_claimed(void) {
+    if (la_pins_mask_fn(LA_FN_SWD_CLK) || la_pins_mask_fn(LA_FN_SWD_DIO)) return true;
+    for (size_t i = 0; i < 5; i++) if (la_pins_mask_fn(k_jtag_fns[i])) return true;
+    return false;
+}
+
+static void dap_release_pins(void) {
+    if (s_dap_pins.trst) fpga_la_set(s_dap_pins.trst, 2);   /* nTRST back to high-Z */
+    la_pins_release_fn(LA_FN_SWD_CLK);
+    la_pins_release_fn(LA_FN_SWD_DIO);
+    for (size_t i = 0; i < 5; i++) la_pins_release_fn(k_jtag_fns[i]);
+    jtag_ll_set_trst_channel(0);
+    memset(&s_dap_pins, 0, sizeof(s_dap_pins));
+}
+
 void swd_disarm_and_release(void) {
     dap_stats_report();
     fpga_swd_disarm();
-    la_pins_release_fn(LA_FN_SWD_CLK);
-    la_pins_release_fn(LA_FN_SWD_DIO);
+    fpga_jtag_disarm();
+    dap_release_pins();
 }
 
 /* The connection's teardown: an SWD session releases the wire to a safe state. */
@@ -136,13 +163,61 @@ void dap_conn_closed(int conn_id) {
     if (dap_dead_conn == conn_id) dap_dead_conn = -1;
 }
 
-/* command_handler_poll's SWD pass: an SWD session that hit its inactivity backstop
-   (fpga_swd_poll was never called until now) releases its two pins. */
+/* command_handler_poll's SWD pass: a DAP session that hit its inactivity backstop
+   (fpga_swd_poll disarms the engine) releases its pins. */
 void dap_poll(void) {
     fpga_swd_poll();
-    if (!fpga_swd_armed() && la_pins_mask_fn(LA_FN_SWD_CLK)) {
-        la_pins_release_fn(LA_FN_SWD_CLK);
-        la_pins_release_fn(LA_FN_SWD_DIO);
+    if (!fpga_swd_armed() && !fpga_jtag_armed() && dap_pins_claimed()) dap_release_pins();
+}
+
+/* DAP_Connect asked for the other port: re-arm the engine on that port's pins. */
+static bool dap_switch_port(uint8_t port) {
+    if (port == DAP_PORT_JTAG) {
+        if (!s_dap_pins.tck) return false;
+        fpga_swd_disarm();
+        if (fpga_jtag_arm(s_dap_pins.tck, s_dap_pins.tms, s_dap_pins.tdi, s_dap_pins.tdo,
+                          s_dap_pins.half) == 0) return true;
+        fpga_swd_arm(s_dap_pins.swclk, s_dap_pins.swdio);
+        return false;
+    }
+    if (!s_dap_pins.swclk) return false;
+    fpga_jtag_disarm();
+    if (fpga_swd_arm(s_dap_pins.swclk, s_dap_pins.swdio) == 0) return true;
+    fpga_jtag_arm(s_dap_pins.tck, s_dap_pins.tms, s_dap_pins.tdi, s_dap_pins.tdo, s_dap_pins.half);
+    return false;
+}
+
+/* dap_wait_for_target for JTAG: Test-Logic-Reset, then the first IDCODE on the chain (nearest
+   TDO), until it reads as an IDCODE (bit 0 set, not all ones) DAP_WAIT_STABLE_OK times in a row. */
+static int dap_wait_for_target_jtag(uint32_t wait_ms) {
+    static const uint8_t seq[] = {
+        0x45, 0xFF,                    /* 5 x TMS 1: Test-Logic-Reset */
+        0x01, 0x00,                    /* TMS 0: Run-Test/Idle */
+        0x41, 0xFF,                    /* Select-DR */
+        0x02, 0x00,                    /* Capture-DR, Shift-DR */
+        0xA0, 0xFF, 0xFF, 0xFF, 0xFF,  /* 32 bits, captured */
+        0x45, 0xFF,                    /* out to Test-Logic-Reset */
+        0x01, 0x00,                    /* Run-Test/Idle */
+    };
+    if (wait_ms > DAP_WAIT_MAX_MS) wait_ms = DAP_WAIT_MAX_MS;
+    absolute_time_t t0 = get_absolute_time();
+    absolute_time_t deadline = make_timeout_time_ms(wait_ms);
+    int ok = 0;
+    for (;;) {
+        uint8_t tdo[4] = { 0 };
+        if (jtag_ll_run(seq, sizeof(seq), tdo, sizeof(tdo)) == 0) {
+            uint32_t id = (uint32_t)tdo[0] | ((uint32_t)tdo[1] << 8) | ((uint32_t)tdo[2] << 16) |
+                          ((uint32_t)tdo[3] << 24);
+            if ((id & 1u) && id != 0xFFFFFFFFu) {
+                if (++ok >= DAP_WAIT_STABLE_OK)
+                    return (int)(absolute_time_diff_us(t0, get_absolute_time()) / 1000);
+            } else {
+                ok = 0;
+            }
+        }
+        if (time_reached(deadline)) return -1;
+        watchdog_heartbeat(WD_TASK_WORKER, "dap-wait");
+        sleep_ms(ok ? DAP_WAIT_STABLE_MS : 20);
     }
 }
 
@@ -154,36 +229,96 @@ void dap_poll(void) {
    replaced by batched DAP transfers, the path that makes flashing fast over the
    internet.  The "ok" response is sent FIRST, while the connection is still
    JSON, so the client sees the ack before the byte stream switches meaning. */
+/* An optional LA channel argument: 0 when absent. */
+static unsigned json_la(const char *json, const char *key) {
+    char s[8] = {0};
+    return json_get_value(json, key, s, sizeof(s)) ? (unsigned)atoi(s) : 0u;
+}
+
 void handle_dap_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
-    char s[8] = {0};
-    if (!json_get_value(json, "swclk", s, sizeof(s))) {
-        send_error(conn_id, "missing swclk");
+    unsigned swclk = json_la(json, "swclk"), swdio = json_la(json, "swdio");
+    unsigned tck = json_la(json, "tck"), tms = json_la(json, "tms"),
+             tdi = json_la(json, "tdi"), tdo = json_la(json, "tdo"), trst = json_la(json, "trst");
+    bool any_jtag = tck || tms || tdi || tdo || trst;
+    bool have_jtag = tck && tms && tdi && tdo;
+    bool have_swd  = swclk && swdio;
+    if (any_jtag && !have_jtag) {
+        send_error(conn_id, "JTAG needs tck, tms, tdi and tdo");
         return;
     }
-    unsigned swclk = (unsigned)atoi(s);
-    if (!json_get_value(json, "swdio", s, sizeof(s))) {
-        send_error(conn_id, "missing swdio");
+    if (!have_swd && !have_jtag) {
+        send_error(conn_id, swclk ? "missing swdio" : "missing swclk");
         return;
     }
-    unsigned swdio = (unsigned)atoi(s);
-    /* Claim both pins BEFORE touching the FPGA: la_bank.v gives SWD the highest priority, so
-       arming over a running UART proxy or sensor used to silently take the line away. */
-    uint8_t clk_pin = (uint8_t)swclk, dio_pin = (uint8_t)swdio;
-    if (!la_claim_or_error(conn_id, LA_FN_SWD_CLK, &clk_pin, 1, 0)) return;
-    if (!la_claim_or_error(conn_id, LA_FN_SWD_DIO, &dio_pin, 1, 0)) return;
+    /* JTAG needs the gateware's JTAG master: gateware v61, loop or deep image. */
+    if (have_jtag && !gw_caps()->jtag) {
+        if (!have_swd) {
+            if (!gw_caps()->jtag_gw) { bp_err_gateware_too_old(conn_id, "JTAG", JTAG_MIN_GW); return; }
+            if (signal_engine_image_kind() == 2) bp_err_fpga_image_sensors_first(conn_id, "JTAG", "loop");
+            else                                 bp_err_fpga_image_required(conn_id, "JTAG", "loop");
+            return;
+        }
+        LOG_D("[dap] JTAG pins given but the running gateware has no JTAG master: SWD only\n");
+        have_jtag = false;
+        tck = tms = tdi = tdo = trst = 0;
+    }
+    /* "port": which one to arm first when both are wired (DAP_Connect can switch later). */
+    char pv[8] = {0};
+    bool jtag_first = have_jtag && (!have_swd ||
+                      (json_get_value(json, "port", pv, sizeof(pv)) && strcmp(pv, "jtag") == 0));
 
-    int rc = fpga_swd_arm(swclk, swdio);
-    if (rc == -2 && fpga_spi_armed()) {
-        bp_err_bus_engine_busy(conn_id, "swd");
+    /* Claim every pin BEFORE touching the FPGA: la_bank.v gives the engine the highest priority,
+       so arming over a running UART proxy or sensor used to silently take the line away.  A pin
+       both ports use (SWCLK = TCK and SWDIO = TMS on an ARM part) is claimed once, as SWD. */
+    if (have_swd) {
+        uint8_t clk_pin = (uint8_t)swclk, dio_pin = (uint8_t)swdio;
+        if (!la_claim_or_error(conn_id, LA_FN_SWD_CLK, &clk_pin, 1, 0)) return;
+        if (!la_claim_or_error(conn_id, LA_FN_SWD_DIO, &dio_pin, 1, 0)) return;
+    }
+    if (have_jtag) {
+        const unsigned pins[5] = { tck, tms, tdi, tdo, trst };
+        for (size_t i = 0; i < 5; i++) {
+            if (!pins[i] || (have_swd && (pins[i] == swclk || pins[i] == swdio))) continue;
+            uint8_t pin = (uint8_t)pins[i];
+            if (!la_claim_or_error(conn_id, k_jtag_fns[i], &pin, 1, 0)) return;
+        }
+    }
+
+    memset(&s_dap_pins, 0, sizeof(s_dap_pins));
+    s_dap_pins.half = SPI_HALF_MAX;   /* ~190 kHz until DAP_SWJ_Clock */
+    int rc;
+    if (jtag_first) rc = fpga_jtag_arm(tck, tms, tdi, tdo, s_dap_pins.half);
+    else            rc = fpga_swd_arm(swclk, swdio);
+    if (rc == -2 && (fpga_spi_armed() || fpga_i2c_armed())) {
+        bp_err_bus_engine_busy(conn_id, jtag_first ? "jtag" : "swd");
         return;
     }
     if (rc == -2) { bp_err_swd_session_open(conn_id); return; }
-    if (rc != 0)  { send_error(conn_id, "invalid swd la channel"); return; }
-    la_pins_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, 0, &clk_pin, 1);
-    la_pins_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, 0, &dio_pin, 1);
+    if (rc != 0)  { send_error(conn_id, jtag_first ? "invalid jtag la channel" : "invalid swd la channel"); return; }
+
+    if (have_swd) {
+        uint8_t clk_pin = (uint8_t)swclk, dio_pin = (uint8_t)swdio;
+        la_pins_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, 0, &clk_pin, 1);
+        la_pins_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, 0, &dio_pin, 1);
+        s_dap_pins.swclk = swclk; s_dap_pins.swdio = swdio;
+    }
+    if (have_jtag) {
+        const unsigned pins[5] = { tck, tms, tdi, tdo, trst };
+        for (size_t i = 0; i < 5; i++) {
+            if (!pins[i] || (have_swd && (pins[i] == swclk || pins[i] == swdio))) continue;
+            uint8_t pin = (uint8_t)pins[i];
+            la_pins_claim(k_jtag_fns[i], LA_GPIO_NONE, 0, &pin, 1);
+        }
+        s_dap_pins.tck = tck; s_dap_pins.tms = tms; s_dap_pins.tdi = tdi; s_dap_pins.tdo = tdo;
+        s_dap_pins.trst = trst;
+        if (trst) fpga_la_set(trst, 1);   /* nTRST released (high) */
+    }
 
     dap_reset();
+    dap_set_ports((uint8_t)((have_swd ? DAP_PORTS_SWD : 0u) | (have_jtag ? DAP_PORTS_JTAG : 0u)),
+                  jtag_first ? DAP_PORT_JTAG : DAP_PORT_SWD, dap_switch_port);
+    jtag_ll_set_trst_channel(trst);
     /* Opt-in larger packets / several in flight (see dap.h: the old CLI bridge breaks on them). */
     {
         char v[12];
@@ -192,7 +327,8 @@ void handle_dap_start(int conn_id, const char *json) {
         if (json_get_value(json, "packet_count", v, sizeof(v))) count = (unsigned)atoi(v);
         dap_configure(size, count);
         if (json_get_value(json, "wait_ms", v, sizeof(v)) && atoi(v) > 0) {
-            int ms = dap_wait_for_target((uint32_t)atoi(v));
+            int ms = jtag_first ? dap_wait_for_target_jtag((uint32_t)atoi(v))
+                                : dap_wait_for_target((uint32_t)atoi(v));
             if (ms >= 0) LOG_D("[dap] target answered after %d ms\n", ms);
             else         LOG_D("[dap] no target answer within %s ms; starting anyway\n", v);
         }

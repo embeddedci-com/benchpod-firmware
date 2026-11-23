@@ -48,6 +48,7 @@ SRC = src/top_v2.v            \
       src/stepper_engine.v    \
       src/swd_engine.v        \
       src/i2c_master.v        \
+      src/jtag_seq.v          \
       src/i2c_emu.v           \
       src/emu_fifo.v          \
       src/spi_target.v        \
@@ -232,7 +233,7 @@ define topbench
 	done
 endef
 
-.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest i2cmastertest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -283,11 +284,12 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# Loop image: seed 2 since v60 (clk48 55.86 MHz, clk 28.35 MHz, clk -> clk48 10.97 ns,
-# clk48 -> clk 6.33 ns; 4217 LC, 80%).  CI: 56.02 / 29.66 / 10.73 / 6.98.
-SEED_LOOP ?= 2
-# The next v60 seeds good in both toolchains, by their worst gate margin.
-SEED_LOOP_FALLBACK ?= 50 30 46 3 11
+# Loop image: seed 20 since v61 (local sweep 1-64, 56 ok: clk48 58.28 MHz, clk 27.42 MHz,
+# clk -> clk48 11.35 ns, clk48 -> clk 8.08 ns).  CI not swept yet: run ice40-seed-sweep.yml and
+# pick from both before promoting.  (v60: seed 2.)
+SEED_LOOP ?= 20
+# The next v61 seeds from the local sweep, by clk48 margin.
+SEED_LOOP_FALLBACK ?= 8 31 14 43 55
 # Deep image: seed 24 since v60 (clk48 59.26 MHz, clk 27.45 MHz, clk -> clk48 13.92 ns,
 # clk48 -> clk 5.62 ns; 3939 LC, 75%).  CI: 57.67 / 28.72 / 13.27 / 6.85.  Its clk -> clk48
 # margin to MAX_X48_NS is the smallest of the three images: re-sweep in both toolchains (the
@@ -626,8 +628,14 @@ swdqtest:
 # v55 I2C master (open drain, repeated START, NACK, clock stretching, arbitration) and SPI
 # modes 0-3, on swd_engine alone against behavioural targets.
 i2cmastertest:
-	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v
+	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v
 	vvp -n /tmp/tb_i2c_master.vvp | tee /dev/stderr | grep -q '^PASS'
+
+# v61 JTAG master: DAP_JTAG_Sequence sequences against a 2-TAP chain model (IDCODE, IR/BYPASS,
+# 64-cycle sequences, a queue that runs dry), at half periods 2, 3 and 13, on swd_engine alone.
+jtagtest:
+	iverilog -g2012 -o /tmp/tb_jtag.vvp -I src sim/tb_jtag.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v
+	vvp -n /tmp/tb_jtag.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:
@@ -656,7 +664,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest i2cmastertest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:

@@ -180,6 +180,7 @@ uint16_t fpga_dac_loop_input(void);
 #define FPGA_FEATURE_CONTROL_LOOP  0x01u
 #define FPGA_FEATURE_DEEP_REPLAY   0x02u
 #define FPGA_FEATURE_EMULATION     0x04u   /* v54: the sensor-emulation image (I2C/SPI targets, UART2) */
+#define FPGA_FEATURE_JTAG          0x08u   /* v61: the JTAG master (loop and deep images, not emulation) */
 uint8_t  signal_engine_fpga_features(void);
 /* The last FPGA_FEATURES reading, without an SPI read (gw_caps.h). */
 uint8_t  signal_engine_fpga_features_cached(void);
@@ -577,6 +578,7 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 #define SPI_MASTER_MIN_GW   45u   /* v45: bytes go out bit 0 first (fpga_spi_xfer reverses) */
 #define SPI_MODES12_MIN_GW  55u   /* v55: SPI modes 1 and 2 (SPI_ARM flags bit 1 inverts SCK) */
 #define I2C_MASTER_MIN_GW   55u   /* v55: the I2C master (SPI_ARM flags bit 2, i2c_master.v) */
+#define JTAG_MIN_GW         61u   /* v61: the JTAG master (SPI_ARM flags bit 3, jtag_seq.v; FPGA_FEATURE_JTAG) */
 #define SWD_QUEUE_MIN_GW    45u
 
 /* ---- SWD transfer queue (gateware >= SWD_QUEUE_MIN_GW; the SWD engine must be armed) ----
@@ -638,6 +640,21 @@ bool fpga_i2c_armed(void);
    holds SCL low); -3 the engine is no longer armed (gateware reconfigured); -4 no FPGA answer. */
 int  fpga_i2c_run(const uint8_t *tok, size_t n, uint8_t *reply, size_t nreply, uint32_t timeout_us,
                   bool *arb_lost);
+
+/* ---- JTAG master over the FPGA (gateware >= JTAG_MIN_GW and FPGA_FEATURE_JTAG) ----------------
+   The SWD engine's fourth job: TCK/TMS/TDI out and TDO in on four LA channels (1..14); excludes
+   SWD, SPI and I2C.  TCK = 24 MHz / (2 * half), half SPI_HALF_MIN..MAX.  The queue holds
+   DAP_JTAG_Sequence sequences (see jtag_ll.h for the layer that splits and aligns them). */
+#define JTAG_QUEUE_MAX      512u    /* sequence bytes per run, and TDO reply bytes */
+/* 0 ok; -1 bad channel; -2 SWD, SPI, I2C or JTAG already armed; -3 not in this gateware/image. */
+int  fpga_jtag_arm(unsigned tck, unsigned tms, unsigned tdi, unsigned tdo, unsigned half);
+int  fpga_jtag_set_half(unsigned half);
+void fpga_jtag_disarm(void);
+bool fpga_jtag_armed(void);
+/* Run q[0..n) (whole sequences) and read the first nreply TDO bytes.  0 ok; -1 bad args / not
+   armed; -2 not done in time; -3 the engine is no longer armed (gateware reconfigured); -4 no
+   FPGA answer. */
+int  fpga_jtag_run(const uint8_t *q, size_t n, uint8_t *reply, size_t nreply);
 /* Arm again on the same pins (releases both lines, clears the arbitration flag). */
 int  fpga_i2c_recover(unsigned sda, unsigned scl, unsigned half);
 

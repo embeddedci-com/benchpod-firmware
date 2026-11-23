@@ -13,7 +13,7 @@ module tb_i2c_master;
     reg        spi_arm_stb = 0, disarm_stb = 0, feed_begin = 0, feed_stb = 0;
     reg  [7:0] feed_byte = 0;
     reg  [6:0] half = 7'd13;
-    reg  [2:0] flags = 3'b100;
+    reg  [3:0] flags = 4'b0100;
     reg  [8:0] rd_addr = 0;
     wire [7:0] rd_data;
     wire [15:0] reply_count;

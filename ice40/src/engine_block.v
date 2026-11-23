@@ -158,7 +158,7 @@ module engine_block #(
     wire [3:0]  swd_clk_ch, swd_dio_ch;
     wire        swd_clk_val, swd_clk_oe, swd_dio_val, swd_dio_oe;
     wire        spi_arm_stb, spi_cs_stb, spi_cs_assert;
-    wire [2:0]  spi_flags;
+    wire [3:0]  spi_flags;
     wire [3:0]  spi_sck_ch, spi_mosi_ch, spi_miso_ch, spi_cs_ch_arg;
     wire [6:0]  spi_half;
     wire        spi_mode, spi_busy, swd_cs_on, swd_cs_val;
@@ -413,7 +413,12 @@ module engine_block #(
     );
 
     // ---- SWD bit-bang engine + SPI master (SWDIO / MISO sampled back via la_in[swd_in_ch]) ----
-    swd_engine #(.REPLY_AW(9)) swd_i (
+`ifdef HAS_EMULATION
+    localparam SWD_HAS_JTAG = 0;   // v61: no room for the JTAG master in the emulation image
+`else
+    localparam SWD_HAS_JTAG = 1;
+`endif
+    swd_engine #(.REPLY_AW(9), .HAS_JTAG(SWD_HAS_JTAG)) swd_i (
         .clk(clk), .rst(rst),
         .arm_stb(swd_arm_stb), .arm_clk_ch(swd_clk_ch_arg), .arm_dio_ch(swd_dio_ch_arg),
         .spi_arm_stb(spi_arm_stb), .spi_sck_ch(spi_sck_ch), .spi_mosi_ch(spi_mosi_ch),

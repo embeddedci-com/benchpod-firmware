@@ -4,6 +4,9 @@
  * leaving on a zero-length or over-long frame (and handing back the bytes after it), the
  * send-room stall that drops a peer which stopped reading, and the teardown.
  *
+ * dap_start with JTAG pins: the engine armed for JTAG, the ports handed to dap.c, SWD + JTAG
+ * together, and the refusals on gateware without the JTAG master.
+ *
  * dap_process is a fake that echoes the request with its first byte inverted; the FPGA, the
  * send ring and the clock are fakes too.
  */
@@ -16,6 +19,8 @@
 #include "signal_engine.h"
 #include "dap.h"
 #include "swd_ll.h"
+#include "jtag_ll.h"
+#include "gw_caps.h"
 #include "watchdog.h"
 #include "hw_worker.h"
 #include "pico_compat.h"
@@ -54,11 +59,34 @@ size_t dap_process(const uint8_t *req, size_t n, uint8_t *resp, size_t cap) {
 }
 void dap_reset(void) {}
 void dap_configure(unsigned size, unsigned count) { (void)size; (void)count; }
+static uint8_t g_ports, g_port;
+static dap_port_switch_fn g_switch;
+void dap_set_ports(uint8_t ports, uint8_t active, dap_port_switch_fn sw) { g_ports = ports; g_port = active; g_switch = sw; }
 int  fpga_swd_arm(unsigned clk, unsigned dio) { (void)clk; (void)dio; g_armed = true; return 0; }
 void fpga_swd_disarm(void) { g_armed = false; g_disarms++; }
 bool fpga_swd_armed(void) { return g_armed; }
 void fpga_swd_poll(void) {}
 bool fpga_spi_armed(void) { return false; }
+bool fpga_i2c_armed(void) { return false; }
+static bool     g_jarmed;
+static unsigned g_jpins[4];
+int  fpga_jtag_arm(unsigned tck, unsigned tms, unsigned tdi, unsigned tdo, unsigned half) {
+    (void)half;
+    if (g_armed || g_jarmed) return -2;
+    g_jpins[0] = tck; g_jpins[1] = tms; g_jpins[2] = tdi; g_jpins[3] = tdo;
+    g_jarmed = true; return 0;
+}
+void fpga_jtag_disarm(void) { g_jarmed = false; }
+bool fpga_jtag_armed(void) { return g_jarmed; }
+static int g_trst_level = -1;
+int  fpga_la_set(unsigned ch, int mode) { (void)ch; g_trst_level = mode; return 0; }
+static unsigned g_trst_ch;
+void jtag_ll_set_trst_channel(unsigned ch) { g_trst_ch = ch; }
+int  jtag_ll_run(const uint8_t *seq, size_t len, uint8_t *tdo, size_t cap) { (void)seq; (void)len; memset(tdo, 0, cap); return 0; }
+static gw_caps_t g_caps;
+const gw_caps_t *gw_caps(void) { return &g_caps; }
+static int g_image = 0;
+int signal_engine_image_kind(void) { return g_image; }
 uint8_t swd_ll_transfer(uint8_t req, uint32_t *data) { (void)req; *data = 0; return SWD_ACK_OK; }
 void swd_ll_seq_out(const uint8_t *d, uint32_t nbits) { (void)d; (void)nbits; }
 uint16_t la_pins_mask_fn(la_fn_t fn) { (void)fn; return 0; }
@@ -179,8 +207,57 @@ static void test_teardown_resets_reassembly(void) {
     CHECK(g_disarms == 0, "teardown of a pseudo-conn touched SWD");
 }
 
+static void jtag_start(const char *json) {
+    dap_conn_closed(0);
+    g_proto[0] = PROTO_JSON;
+    g_reply[0] = 0; g_ecode = 0;
+    handle_dap_start(0, json);
+}
+
+static void test_start_jtag(void) {
+    g_caps.jtag_gw = true; g_caps.jtag = true; g_image = 0;
+    jtag_start("{\"cmd\":\"dap_start\",\"tck\":3,\"tms\":4,\"tdi\":5,\"tdo\":6,\"trst\":7}");
+    CHECK(strcmp(g_reply, "ok:\"dap ready\"") == 0, "reply %s", g_reply);
+    CHECK(g_jarmed && !g_armed, "JTAG not armed");
+    CHECK(g_jpins[0] == 3 && g_jpins[1] == 4 && g_jpins[2] == 5 && g_jpins[3] == 6, "JTAG pins");
+    CHECK(g_ports == DAP_PORTS_JTAG && g_port == DAP_PORT_JTAG, "ports %u/%u", g_ports, g_port);
+    CHECK(g_trst_ch == 7 && g_trst_level == 1, "nTRST channel %u level %d", g_trst_ch, g_trst_level);
+    dap_conn_closed(0);
+    CHECK(!g_jarmed && g_trst_ch == 0 && g_trst_level == 2, "teardown: JTAG disarmed, nTRST released");
+
+    /* both wired: SWD first unless port says jtag; DAP_Connect switches through the callback */
+    jtag_start("{\"cmd\":\"dap_start\",\"swclk\":1,\"swdio\":2,\"tck\":1,\"tms\":2,\"tdi\":5,\"tdo\":6}");
+    CHECK(g_armed && !g_jarmed, "SWD first");
+    CHECK(g_ports == (DAP_PORTS_SWD | DAP_PORTS_JTAG) && g_port == DAP_PORT_SWD, "both ports");
+    CHECK(g_switch && g_switch(DAP_PORT_JTAG) && g_jarmed && !g_armed, "switch to JTAG");
+    CHECK(g_switch(DAP_PORT_SWD) && g_armed && !g_jarmed, "switch back to SWD");
+    dap_conn_closed(0);
+    jtag_start("{\"cmd\":\"dap_start\",\"swclk\":1,\"swdio\":2,\"tck\":1,\"tms\":2,\"tdi\":5,\"tdo\":6,\"port\":\"jtag\"}");
+    CHECK(g_jarmed && !g_armed && g_port == DAP_PORT_JTAG, "port jtag arms JTAG first");
+    dap_conn_closed(0);
+
+    /* incomplete JTAG pins */
+    jtag_start("{\"cmd\":\"dap_start\",\"tck\":3,\"tms\":4}");
+    CHECK(strstr(g_reply, "tck, tms, tdi and tdo") != NULL, "reply %s", g_reply);
+    CHECK(!g_jarmed, "armed on an incomplete set");
+
+    /* gateware without JTAG: too old, or the emulation image */
+    g_caps.jtag_gw = false; g_caps.jtag = false;
+    jtag_start("{\"cmd\":\"dap_start\",\"tck\":3,\"tms\":4,\"tdi\":5,\"tdo\":6}");
+    CHECK(g_ecode == BP_E_GATEWARE_TOO_OLD, "code %d reply %s", g_ecode, g_reply);
+    g_caps.jtag_gw = true; g_image = 2;
+    jtag_start("{\"cmd\":\"dap_start\",\"tck\":3,\"tms\":4,\"tdi\":5,\"tdo\":6}");
+    CHECK(g_ecode == BP_E_FPGA_IMAGE_SENSORS_FIRST, "code %d reply %s", g_ecode, g_reply);
+    /* ... while SWD is wired too: SWD only */
+    jtag_start("{\"cmd\":\"dap_start\",\"swclk\":1,\"swdio\":2,\"tck\":1,\"tms\":2,\"tdi\":5,\"tdo\":6}");
+    CHECK(g_armed && !g_jarmed && g_ports == DAP_PORTS_SWD, "SWD only without the JTAG master");
+    dap_conn_closed(0);
+    g_image = 0;
+}
+
 int main(void) {
     test_start();
+    test_start_jtag();
     test_reassembly();
     test_leave();
     test_stall();
