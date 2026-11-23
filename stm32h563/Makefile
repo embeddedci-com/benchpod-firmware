@@ -37,8 +37,8 @@ AS      := $(PREFIX)gcc -x assembler-with-cpp
 CP      := $(PREFIX)objcopy
 SZ      := $(PREFIX)size
 NM      := $(PREFIX)nm
-HEX     := $(CP) -O ihex -R .xip
-BIN     := $(CP) -O binary -S -R .xip
+HEX     := $(CP) -O ihex -R .xip -R .xip_prog
+BIN     := $(CP) -O binary -S -R .xip -R .xip_prog
 
 #######################################
 # SDK / library paths
@@ -221,6 +221,7 @@ C_SOURCES := \
   src/blob_manifest.c \
   src/xip_image.c \
   src/xip_mod_core.c \
+  src/xip_prog_mod.c \
   src/xip_mod_msc_flash.c \
   src/msc_flash_names.c \
   src/xip_mod_ctrl_flash.c \
@@ -464,18 +465,24 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
 # (FAT12/16/32 and exFAT), is optimized for size: -Os saves 0.8 KB there, and at -O2 the compiler also
 # puts literal-pool addresses of flash data into it, which check_xip_refs.py refuses.
 $(BUILD_DIR)/xip_mod_msc_flash.o: CFLAGS += -Os
+# The pin programmers are linked into the second W25Q image (the .xip_prog section, by object name
+# in the linker script); PROG_XIP leaves out their host-test structs of function pointers, which
+# the image may not hold (xip_image.h).
+$(BUILD_DIR)/xip_prog_mod.o $(BUILD_DIR)/prog_updi.o $(BUILD_DIR)/prog_pic.o $(BUILD_DIR)/prog_c2.o \
+$(BUILD_DIR)/prog_tpi.o $(BUILD_DIR)/prog_pdi.o: CFLAGS += -DPROG_XIP=1
 
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
 
-# XIP_RAM=1: the image at a 20 KB RAM region, the top 20 KB of the 640 KB of RAM (the defines are set above, with USB_HOST).
+# XIP_RAM=1: both images (xip_image.h) at ONE 20 KB RAM region (an overlay), the top 20 KB of the 640 KB of RAM (the defines are set above, with USB_HOST).
 ifeq ($(XIP_RAM),1)
 XIP_RAM_LD := $(BUILD_DIR)/xip_ram.ld
 $(XIP_RAM_LD): $(LDSCRIPT) | $(BUILD_DIR)
 	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 620K|' \
-	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' $< > $@
-	@grep -q 'LENGTH = 620K' $@ && grep -q '0x2009B000' $@ || { echo "xip_ram.ld: the linker script's RAM or XIP line changed"; rm -f $@; exit 1; }
+	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' \
+	     -e 's|^  XIP_PROG    (rx)    : ORIGIN = 0x90241000,   LENGTH = 252K|  XIP_PROG    (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' $< > $@
+	@test "$$(grep -c '0x2009B000' $@)" = 2 && grep -q 'LENGTH = 620K' $@ || { echo "xip_ram.ld: the linker script's RAM, XIP or XIP_PROG line changed"; rm -f $@; exit 1; }
 $(BUILD_DIR)/$(TARGET).elf: $(XIP_RAM_LD)
 LDSCRIPT := $(XIP_RAM_LD)
 endif
@@ -747,7 +754,7 @@ help:
 	@echo "  flash          : SWD flash via OpenOCD (needs a probe; verifies)"
 	@echo "  flash-dfu      : USB-DFU write of the firmware (~0.5 MB); blobs go to the W25Q separately"
 	@echo "  fetch          : build/download the ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
-	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp}.bin + blobs-manifest.json for the W25Q blob slots"
+	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp,xip,xip_prog}.bin + blobs-manifest.json for the W25Q blob slots"
 	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
 	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
 	@echo "  EMI_TEST=1     : the EMC test build into build-emi/ (activity loop from boot; never released)"

@@ -290,8 +290,4 @@ static void pdi_leave(prog_ctx_t *c, bool run) {
     w->delay_us(w->io, 100);                     /* clock stays high */
 }
 
-const prog_proto_t prog_proto_pdi = {
-    .name = "pdi", .uart = false, .uses_nrst = false,
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER),
-    .enter = pdi_enter, .erase = pdi_erase, .write = pdi_write, .read = pdi_read, .leave = pdi_leave,
-};
+PROG_PROTO(pdi, pdi_enter, pdi_erase, pdi_write, pdi_read, pdi_leave, PROG_INFO_PDI)

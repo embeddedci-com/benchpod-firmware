@@ -305,8 +305,4 @@ static void pic_leave(prog_ctx_t *c, bool run) {
     }
 }
 
-const prog_proto_t prog_proto_pic = {
-    .name = "pic", .uart = false, .uses_nrst = true,
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER),
-    .enter = pic_enter, .erase = pic_erase, .write = pic_write, .read = pic_read, .leave = pic_leave,
-};
+PROG_PROTO(pic, pic_enter, pic_erase, pic_write, pic_read, pic_leave, PROG_INFO_PIC)

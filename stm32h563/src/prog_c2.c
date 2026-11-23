@@ -393,9 +393,4 @@ static int c2_read(prog_ctx_t *ctx) {
 }
 
 
-const prog_proto_t prog_proto_c2 = {
-    .name = "c2", .uart = false, .uses_nrst = false,
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG),
-    .enter = c2_enter, .erase = c2_erase, .write = c2_write, .read = c2_read,
-    .leave = c2_leave,
-};
+PROG_PROTO(c2, c2_enter, c2_erase, c2_write, c2_read, c2_leave, PROG_INFO_C2)

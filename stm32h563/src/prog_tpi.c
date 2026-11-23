@@ -199,8 +199,4 @@ static void tpi_leave(prog_ctx_t *c, bool run) {
     w->nrst(w->io, false);
 }
 
-const prog_proto_t prog_proto_tpi = {
-    .name = "tpi", .uart = false, .uses_nrst = true,
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG),
-    .enter = tpi_enter, .erase = tpi_erase, .write = tpi_write, .read = tpi_read, .leave = tpi_leave,
-};
+PROG_PROTO(tpi, tpi_enter, tpi_erase, tpi_write, tpi_read, tpi_leave, PROG_INFO_TPI)

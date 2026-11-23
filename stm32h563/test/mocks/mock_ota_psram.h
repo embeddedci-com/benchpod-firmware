@@ -19,5 +19,6 @@ void mock_ota_psram_reset(void);
 /* The xip image the firmware was "linked with" (blob_manifest(BLOB_XIP)). */
 #include "blob_store.h"
 extern blob_manifest_t mock_xip_manifest;
+extern blob_manifest_t mock_xip_prog_manifest;   /* the same for BLOB_XIP_PROG */
 
 #endif /* MOCK_OTA_PSRAM_H */

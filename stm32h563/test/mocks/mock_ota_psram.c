@@ -68,4 +68,8 @@ void signal_engine_quiesce_psram_masters(void) { mock_quiesce_calls++; }
 /* The firmware's generated blob manifest is not linked into the host tests; the xip entry (what
    the post-link step patches into the firmware) is set by the test. */
 blob_manifest_t mock_xip_manifest;
-const blob_manifest_t *blob_manifest(blob_id_t id) { return id == BLOB_XIP ? &mock_xip_manifest : NULL; }
+blob_manifest_t mock_xip_prog_manifest;
+const blob_manifest_t *blob_manifest(blob_id_t id)
+{
+    return id == BLOB_XIP ? &mock_xip_manifest : id == BLOB_XIP_PROG ? &mock_xip_prog_manifest : NULL;
+}

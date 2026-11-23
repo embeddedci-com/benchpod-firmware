@@ -442,8 +442,4 @@ static int read(prog_ctx_t *c) {
     return PROG_OK;
 }
 
-const prog_proto_t prog_proto_updi = {
-    .name = "updi", .uart = true, .uses_nrst = false,
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER),
-    .enter = enter, .erase = erase, .write = write, .read = read, .leave = leave,
-};
+PROG_PROTO(updi, enter, erase, write, read, leave, PROG_INFO_UPDI)
