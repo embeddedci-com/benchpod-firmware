@@ -9,6 +9,7 @@
 #include "prog_sim.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
@@ -325,8 +326,40 @@ static void clean(rig_t *r, const char *what) {
     }
 }
 
+static void test_entry_id(void) {
+    for (int k = K_A; k <= K_B18; k++) {
+        rig_t *r = calloc(1, sizeof *r);
+        rig_init(r, k);
+        int rc = P()->enter(&r->ctx);
+        CHECK(rc == PROG_OK);
+        CHECK(r->chip.prog && r->chip.entries == 1 && r->chip.last_key == KEY);
+        CHECK(r->ctx.id_len == 4);
+        CHECK((r->ctx.id[0] | r->ctx.id[1] << 8) == r->chip.dev);
+        CHECK((r->ctx.id[2] | r->ctx.id[3] << 8) == r->chip.rev);
+        P()->leave(&r->ctx, true);
+        CHECK(!r->sim.nrst_low && r->chip.ran == 1 && !r->chip.prog);
+        clean(r, "entry");
+        free(r);
+    }
+}
+
+static void test_no_answer(void) {
+    for (int k = K_A; k <= K_B18; k++) {
+        rig_t *r = calloc(1, sizeof *r);
+        rig_init(r, k);
+        r->chip.key ^= 1;                       /* only the right key enters */
+        CHECK(P()->enter(&r->ctx) == PROG_E_NO_ANSWER);
+        CHECK(!r->chip.prog && r->chip.last_key == KEY);
+        P()->leave(&r->ctx, false);
+        CHECK(r->sim.nrst_low);                 /* run = false keeps the chip in reset */
+        clean(r, "no answer");
+        free(r);
+    }
+}
+
 int main(void) {
-    CHECK(P()->name != NULL);
+    test_entry_id();
+    test_no_answer();
     printf("test_prog_pic: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }
