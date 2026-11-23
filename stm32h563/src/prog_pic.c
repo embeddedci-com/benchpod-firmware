@@ -3,13 +3,17 @@
 #include "prog_flash.h"
 #include "prog_pic.h"
 
-#define PIC_KEY   0x4D434850u   /* "MCHP", MSB first */
+#define PIC_KEY   0x4D434850u   /* "MCHP": 8-bit command sets send it MSb first (32 clocks), the 6-bit set LSb first (33) */
 #define HOLD      3             /* feed bytes per clock phase: >= 120 ns, spec minimum is 100 ns */
 #define T_ENTS_US 1000          /* MCLR low before the key */
-#define T_ENTH_US 500           /* key to first command (spec 250 us) */
+#define T_ENTH_US 500           /* key to first command (spec 250 us; PIC18 Q: 1 ms) */
+#define T_ENTHQ_US 1200         /* TENTH of PIC18 Q */
 #define T_PROG_US 6000          /* flash row (spec 2.8 ms) */
 #define T_PROGN_US 12000        /* config, user ID, EEPROM word */
-#define T_ERASE_US 30000        /* bulk and row erase */
+#define T_PINT_US 100           /* PIC18 Q Program Data (TPINT: 50 us Q43, 75 us Q84, 65 us Q10) */
+#define T_PDFM_US 12000         /* PIC18 Q EEPROM and Q43/Q84 config bytes (TPDFM 11 ms) */
+#define T_ERASE_US 30000        /* bulk and row erase (TERAB 5 to 11 ms, Q10 75 ms) */
+#define T_ERASEQ10_US 80000     /* PIC18 Q10 bulk erase (TERAB 75 ms) */
 #define BLOCK     64u           /* read bytes per call */
 
 typedef struct {
@@ -25,8 +29,9 @@ _Static_assert(sizeof(pic_st_t) <= PROG_STATE_BYTES, "pic state");
 
 static bool s8(const prog_ctx_t *c)  { return c->flags & PIC_F_SET8; }
 static bool byt(const prog_ctx_t *c) { return s8(c) && (c->flags & PIC_F_BYTEPC); }
-/* one image byte per location: EEPROM, and config / user ID on PIC18 */
-static bool nar(const prog_ctx_t *c) { return c->mem == PROG_MEM_EEPROM || (byt(c) && c->mem != PROG_MEM_FLASH); }
+static bool q10(const prog_ctx_t *c) { return byt(c) && (c->flags & PIC_F_Q10); }
+/* one image byte per location: EEPROM, and the config bytes of PIC18 Q43/Q84 (user ID and Q10 config are 16-bit words) */
+static bool nar(const prog_ctx_t *c) { return c->mem == PROG_MEM_EEPROM || (byt(c) && !q10(c) && c->mem == PROG_MEM_CONFIG); }
 static uint32_t emask(const prog_ctx_t *c) { return nar(c) ? 0xFFu : byt(c) ? 0xFFFFu : 0x3FFFu; }
 static uint32_t pcstep(const prog_ctx_t *c) { return byt(c) && !nar(c) ? 2u : 1u; }
 static uint32_t pcof(const prog_ctx_t *c, uint32_t a) { return nar(c) || byt(c) ? a : a / 2u; }
@@ -100,6 +105,7 @@ static int xfer(prog_ctx_t *c, uint8_t cmd, int mode, uint32_t d, uint32_t *out)
 #define B_RDINC 0xFE
 #define B_INC   0xF8
 #define B_BEGIN 0xE0
+#define B_PROGI 0xE0   /* PIC18 Q: Program Data, 24-bit payload, PC += n after */
 #define B_BULK  0x18
 #define B_ROWER 0xF0
 
@@ -163,20 +169,31 @@ static int pic_enter(prog_ctx_t *c) {
     c->phase = "enter";
     w->data_drive(w->io, true);
     w->set(w->io, 0, 0);
+    TRY(fl(c));                             /* clock and data low before MCLR falls (TENTS) */
     w->nrst(w->io, true);
     TRY(wait(c, T_ENTS_US));
-    sendv(w, PIC_KEY, 32, true);
+    bool lsb = !s8(c) != !!(c->flags & PIC_F_KEY_FLIP);
+    sendv(w, PIC_KEY, 32, !lsb);            /* 6-bit set: LSb first and a 33rd clock (DS41439 fig. 8-8) */
+    if (lsb) wbit(w, 0);
     w->set(w->io, 0, 0);
-    TRY(wait(c, T_ENTH_US));
+    TRY(wait(c, byt(c) ? T_ENTHQ_US : T_ENTH_US));
     c->phase = "id";
     c->mem = PROG_MEM_FLASH;                /* the ID words are full-width words */
-    uint32_t rev, dev, rpc = byt(c) ? 0x3FFFFCu : 0x8005u;
-    int r = rdel(c, rpc, &dev);             /* revision first, then device ID (next word) */
-    rev = dev;
-    if (!r) r = rdel(c, rpc + (byt(c) ? 2u : 1u), &dev);
+    uint32_t rev, dev, raw, rpc = byt(c) ? 0x3FFFFCu : 0x8005u;
+    bool one = !s8(c) && !(c->flags & PIC_F_ID_SPLIT);
+    int r;
+    if (one) {                              /* DEV<8:0> in bits 13:5 and REV<4:0> of the word at 0x8006 */
+        r = rdel(c, 0x8006u, &raw);
+        dev = raw >> 5; rev = raw & 31u;
+    } else {
+        r = rdel(c, rpc, &dev);             /* revision first, then device ID (next word) */
+        rev = dev;
+        if (!r) r = rdel(c, rpc + (byt(c) ? 2u : 1u), &dev);
+        raw = dev;
+    }
     c->mem = m;
     TRY(r);
-    if (dev == 0 || dev == (byt(c) ? 0xFFFFu : 0x3FFFu)) return PROG_E_NO_ANSWER;
+    if (raw == 0 || raw == (byt(c) ? 0xFFFFu : 0x3FFFu)) return PROG_E_NO_ANSWER;
     c->id[0] = (uint8_t)dev; c->id[1] = (uint8_t)(dev >> 8);
     c->id[2] = (uint8_t)rev; c->id[3] = (uint8_t)(rev >> 8);
     c->id_len = 4;
@@ -204,16 +221,27 @@ static int er(prog_ctx_t *c) {
     if (c->erase == PROG_ERASE_NONE) return PROG_OK;
     c->phase = "erase";
     if (c->erase == PROG_ERASE_CHIP) {      /* from config space: also clears code protection */
-        if (s8(c)) {
-            TRY(seek(c, byt(c) ? 0x300000u : 0x8000u));
+        if (q10(c)) {                       /* no payload: the PC picks the regions (Table 3-2) */
+            TRY(seek(c, 0x300000u));        /* flash, user ID, config */
             TRY(xfer(c, B_BULK, 0, 0, 0));
+            TRY(wait(c, T_ERASEQ10_US));
+            TRY(seek(c, 0x310000u));        /* data EEPROM only */
+            TRY(xfer(c, B_BULK, 0, 0, 0));
+            TRY(wait(c, T_ERASEQ10_US));
+        } else if (byt(c)) {                /* Q43/Q84: payload bits 0..3 = EEPROM, flash, user ID, config */
+            TRY(xfer(c, B_BULK, 1, 0x0Fu, 0));
+            TRY(wait(c, T_ERASE_US));
+        } else if (s8(c)) {
+            TRY(seek(c, 0x8000u));
+            TRY(xfer(c, B_BULK, 0, 0, 0));
+            TRY(wait(c, T_ERASE_US));
         } else {
             TRY(seek(c, 0x8000u));
             TRY(xfer(c, A_BULKP, 0, 0, 0));
             TRY(wait(c, T_ERASE_US));
             if (c->flags & PIC_F_HAS_EE) TRY(xfer(c, A_BULKD, 0, 0, 0));
+            TRY(wait(c, T_ERASE_US));
         }
-        TRY(wait(c, T_ERASE_US));
         s->pc = -1; s->locked = 0;
         c->done = c->total = 1;
         return PROG_OK;
@@ -243,6 +271,14 @@ static int wr(prog_ctx_t *c) {
         TRY(seek(c, start));
         for (uint32_t i = 0; i < nel; i++) {
             bool more = i + 1 < nel;
+            if (byt(c)) {                   /* PIC18 Q: one Program Data per word, the chip times it */
+                if (off + i * es >= c->len) break;
+                TRY(getel(c, off + i * es, &v));
+                TRY(xfer(c, B_PROGI, 1, v, 0));
+                s->pc += (int32_t)st;
+                TRY(wait(c, nar(c) ? T_PDFM_US : T_PINT_US));
+                continue;
+            }
             TRY(getel(c, off + i * es, &v));
             if (s8(c)) {
                 TRY(xfer(c, more ? B_LDINC : B_LD, 1, v, 0));
@@ -251,9 +287,11 @@ static int wr(prog_ctx_t *c) {
                 if (more) { TRY(xfer(c, A_INC, 0, 0, 0)); s->pc++; }
             }
         }
-        if (s8(c)) s->pc = (int32_t)(start + (nel - 1) * st);
-        TRY(xfer(c, s8(c) ? B_BEGIN : A_BEGIN, 0, 0, 0));
-        TRY(wait(c, c->mem == PROG_MEM_FLASH ? T_PROG_US : T_PROGN_US));
+        if (!byt(c)) {
+            if (s8(c)) s->pc = (int32_t)(start + (nel - 1) * st);
+            TRY(xfer(c, s8(c) ? B_BEGIN : A_BEGIN, 0, 0, 0));
+            TRY(wait(c, c->mem == PROG_MEM_FLASH ? T_PROG_US : T_PROGN_US));
+        }
         c->done = ++s->idx;
         if (s->idx == units) { s->stage = 2; s->idx = 0; c->done = 0; c->phase = "verify"; }
         return PROG_RUNNING;
@@ -300,6 +338,7 @@ static void pic_leave(prog_ctx_t *c, bool run) {
     (void)fl(c);
     w->data_drive(w->io, false);
     if (run) {
+        (void)fl(c);
         w->delay_us(w->io, 10);
         w->nrst(w->io, false);
     }
