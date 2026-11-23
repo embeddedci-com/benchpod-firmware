@@ -1,4 +1,4 @@
-/* xip_mod_core.c — runs from the W25Q (xip_image.h): the table and the self-test.
+/* xip_mod_core.c — runs from the W25Q (xip_image.h): the usb image's table and the self-test.
  *
  * The self-test proves a session end to end: the table is read from the mapped image, the code
  * runs from it, its constants are read from it, and it calls back into internal flash (a long

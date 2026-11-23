@@ -19,6 +19,10 @@
 #include <string.h>
 
 #define FEED_MAX    192u
+/* A set() with the clock high flushes once the queue holds this much, so the automatic flush
+   (which push() falls back to at FEED_MAX) lands with the clock high, never inside a C2 strobe's
+   low phase. The headroom is for the bytes between two high levels (a strobe queues < 8). */
+#define FEED_SOFT   (FEED_MAX - 16u)
 #define SAMPLES_MAX 128u
 
 typedef struct {
@@ -32,6 +36,7 @@ typedef struct {
     la_pull_token_t data_pull;
     uart_pins_t uart_pins;
     uint32_t baud;
+    uint8_t  reset_ch;           /* 0 = the pod's reset pin, else an LA pin (open drain) */
 } wire_t;
 _Static_assert(sizeof(wire_t) <= PROG_WIRE_MEM, "PROG_WIRE_MEM too small for wire_t");
 
@@ -64,6 +69,7 @@ static void op_set(void *io, int clk, int data)
 {
     wire_t *w = io;
     push(w, (uint8_t)('d' + (clk ? 2 : 0) + (data ? 1 : 0)));
+    if (clk && w->nfeed >= FEED_SOFT) feed_now(w);
 }
 
 static void op_drive(void *io, bool drive) { push((wire_t *)io, drive ? 'O' : 'o'); }
@@ -80,7 +86,20 @@ static int op_flush(void *io, uint8_t *samples, size_t cap)
     return (int)n;
 }
 
-static void op_nrst(void *io, bool low) { (void)io; nrst_ctrl_assert(low); }
+static void op_nrst(void *io, bool low)
+{
+    wire_t *w = io;
+    if (!w->reset_ch) { nrst_ctrl_assert(low); return; }
+    if (w->two_wire && w->nfeed) feed_now(w);   /* reset moves after what is queued */
+    la_pins_set_level(w->reset_ch, low ? 0 : 1);  /* open drain: 0 drives low, 1 releases */
+    (void)fpga_la_set(w->reset_ch, la_pins_drive(w->reset_ch));
+}
+
+void prog_wire_reset_pin(prog_wire_ops_t *ops, unsigned la)
+{
+    wire_t *w = ops->io;
+    if (w) w->reset_ch = (uint8_t)la;
+}
 
 static void op_delay_us(void *io, uint32_t us)
 {

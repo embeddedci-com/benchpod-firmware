@@ -3264,13 +3264,35 @@ pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 o
 | `proto` | Chips | Wiring |
 |---|---|---|
 | `updi` | AVR tinyAVR 0/1/2, megaAVR 0, AVR DA/DB/DD | UPDI on an LA pin, `data` |
-| `pic` | PIC16F1xxx, PIC16F18xxx, PIC18F Q (low-voltage entry) | ICSPCLK on `clk`, ICSPDAT on `data`, MCLR on the pod's reset pin |
+| `pic` | PIC16F1xxx, PIC16F18xxx, PIC18F Q (low-voltage entry) | ICSPCLK on `clk`, ICSPDAT on `data`, MCLR on the pod's reset pin or an LA pin (`reset`) |
 | `c2` | Silicon Labs EFM8, C8051F | C2CK on `clk`, C2D on `data` |
-| `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin |
+| `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin or an LA pin (`reset`) |
 | `pdi` | AVR XMEGA | PDI_CLK (the chip's RESET pin) on `clk`, PDI_DATA on `data` |
 
 `status` lists the protocols the running firmware has in `protos`. A protocol that is listed but
 not finished answers `not supported` (the result).
+
+The five protocols run from the pod's W25Q (the `xip_prog` blob, `blob-xip_prog.bin`, made by the
+same build as the firmware and installed with the other blobs), like the USB flash protocols: a
+job holds that W25Q code for its whole run, so a `usb_flash` cannot start meanwhile (it answers
+busy) and the other way round. Without the blob, or with another build's, `start` and `info` are
+refused with an error that says to install the blobs (`benchpod install-blobs`).
+
+AVR TPI and XMEGA PDI notes:
+
+- Voltage: the ATtiny4/5/9/10, 20 and 40 can be programmed at 5 V only (their datasheets say
+  "Apply 5V", 4.75-5.5 V). The pod's 1.8 and 3.3 V I/O cannot program them: use the board's own 5 V
+  with a level shifter. The ATtiny102/104 datasheet contradicts itself (1.8-5.5 V
+  in one place, 5 V in another): try it. XMEGA: 3.3 V is fine, 1.8 V when BODLEVEL is below VCC.
+- `tpi` `flags` (the SDK sets them from its device table): bits 0-2 = words per flash write (0 or 1:
+  ATtiny4/5/9/10 and 102/104; 2: ATtiny20; 4: ATtiny40), bit 3 (8) = the chip has a page erase
+  (ATtiny102/104). `page` must be a multiple of the write size (2, 4 or 8 bytes). The chips erase
+  flash only as a whole code section, so `erase: "page"` is one section erase before the first page
+  (the whole code section is gone, also outside the written range); with the page-erase flag it
+  erases each page it writes. Use `erase: "chip"` when in doubt.
+- `pdi`: needs no flags. The PDI turns itself off when its clock runs slower than about 10 kHz; the
+  pod keeps the clock running while it waits and re-enters programming mode when a pause between
+  two steps of a job switched it off. The chip may start its program for a moment in such a pause.
 
 Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
 The job runs in the background: `info` and `start` answer at once and `status` reports progress.
@@ -3289,6 +3311,7 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 | `op` | `info` (enter programming mode and read the chip's ID, nothing written), `start`, `status`, `abort` |
 | `proto` | `updi`, `pic`, `c2`, `tpi`, `pdi` |
 | `clk`, `data` | LA pins (1..14); `updi` takes `data` only |
+| `reset` | `pic` and `tpi`: `"nrst"` (default, the pod's reset pin) or an LA pin, driven open-drain |
 | `mem` | `flash` (default), `eeprom`, `config` (PIC configuration words, AVR fuses, C2 lock byte), `user` (AVR user row, PIC user ID) |
 | `addr` | start address in that memory, in bytes (PIC: 2 bytes per word) |
 | `len` | bytes of the staged upload to write (`start` only) |
@@ -3301,6 +3324,17 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 
 Write one memory region per `start`; the SDK splits a `.hex` or `.elf` file. Every page written is
 read back and compared.
+
+`pic` `flags` (the SDK sets them from its device table; bit values in `stm32h563/src/prog_pic.h`):
+bit 0 8-bit command set (PIC16F18xxx, PIC18 Q), bit 1 PIC18 Q (byte PC), bit 2 chip erase also
+clears the data EEPROM (6-bit set), bit 3 code-protect bit is 1 when protected, bits 8..11 the
+code-protect bit number, bit 4 PIC18 Q10 (bulk erase without a region payload, 16-bit config
+words, 80 ms erase), bit 5 6-bit chip with separate revision (0x8005) and device ID (0x8006) words
+(default: both packed in 0x8006, device ID in `id[0..1]`, revision in `id[2..3]`), bit 6 entry key in
+the other command set's order. PIC18 Q user ID is 16-bit words and the Q43/Q84 config is bytes
+(Q10: words). Chip erase on PIC18 Q also clears the EEPROM. Bulk erase needs VDD above the chip's
+brown-out level (about 2.7 to 2.85 V on most; PIC18 Q10 about 1.9 V): at 1.8 V the erase can be
+ignored.
 
 `info` and `start` reply `{"started":true,"op":"start","proto":"c2"}`. `status` (and `abort`) reply:
 
@@ -3320,7 +3354,8 @@ allow)`, `memory, address, length or page size not valid here`, `could not read 
 Errors at `info`/`start`: `missing or unknown proto`, `nothing staged: load_bin with "psram":true
 first`, `len is more than the staged upload`, `BP0047` (`pod_busy`, also while a job runs), `BP0005`
 (the engine is in use by a DAP, SPI or I2C session), `BP0049` (a UART session is open, `updi`),
-`BP0031` (a pin conflict), `this pod has no reset pin, which pic needs`.
+`BP0031` (a pin conflict), `this pod has no reset pin: wire the chip's reset to an LA pin and pass reset`,
+`reset must be another pin than clk and data`.
 
 ## ESP32 targets (flash over the UART ROM bootloader)
 
@@ -4619,7 +4654,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `xip_prog`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). `xip_prog` is the second such image (the `prog_flash` protocols, `blob-xip_prog.bin`) under the same rules (signing target 10). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4656,7 +4691,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` (that code: its `state` is `ok` only for the image built with the running firmware); the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` and `xip_prog` (that code, two images: their `state` is `ok` only for the image built with the running firmware). From this firmware on, every board lists `xip` and `xip_prog`, also pods with the ESP32-C3: they use the W25Q space where older firmware kept a copy of the C3's image (`esp` now goes straight into the C3); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
@@ -4911,17 +4946,22 @@ is off, for every test but `reset`).
 
 ### `xip` — code that runs from the W25Q
 
-Some rarely used code (the USB flash protocols, coming) runs straight from the pod's W25Q flash
-instead of the MCU's own flash. It is the `xip` blob (`blob-xip.bin`), made by the same build as the
-firmware and installed with the other blobs; the pod runs only the one built with its firmware.
-While it runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
-are refused with BP0048 until it ends.
+Some rarely used code runs straight from the pod's W25Q flash instead of the MCU's own flash. There
+are two images, each a blob made by the same build as the firmware and installed with the other
+blobs (the pod runs only the ones built with its firmware): `xip` (`blob-xip.bin`), the USB flash
+protocols, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash` pin programmers. Only one runs at
+a time (a `usb_flash` or a `prog_flash` job holds its image until it ends; the other waits).
+While one runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
+are refused with BP0048 until it ends. Release builds copy the running image into one shared RAM
+region of the pod, so the two images together cost no more RAM than one.
 
 ```json
 {"cmd": "xip"}
-{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"}}}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "prog_image": {"size": 98, "slot": "ok"}}}
 {"cmd": "xip", "selftest": true}
 {"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "prog_image": {"size": 98, "slot": "ok"},
   "selftest": {"ok": true, "result": 2871906233, "expected": 2871906233, "begin_us": 412, "call_us": 38}}}
 ```
 
@@ -4931,7 +4971,8 @@ are refused with BP0048 until it ends.
 | `mode` | `mapped` (the CPU runs it in place), `ram` (development builds that copy it to RAM first) or `none`. |
 | `image.size` | Bytes of W25Q code this firmware was built with. |
 | `image.slot` | The `xip` blob slot against that image: `ok`, `outdated`, `missing` or `unknown` (as `blob_status`). |
-| `selftest` | With `"selftest": true`: runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
+| `prog_image` | The same for the `xip_prog` image (`size`, `slot`). |
+| `selftest` | With `"selftest": true` (and `"image": "prog"` for the `xip_prog` image; default the `xip` image): runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
 
 Refusals: BP0083 (`xip_unavailable`, arg `why`) when the board or the slot cannot run the image,
 BP0048 while something else holds the storage bus.

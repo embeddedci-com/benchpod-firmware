@@ -254,6 +254,10 @@ const char *bus_busy_reason(void) {
     if (esp_rom_flash_busy())
         return bp_tag_storage_bus_busy("busy: the ESP32-C3 is being flashed (about 2 minutes); try again "
                                        "when it ends", "the Wi-Fi chip is being flashed");
+    /* before the session test: a prog_flash job holds an XIP session for its whole run */
+    if (prog_flash_busy())
+        return bp_tag_storage_bus_busy("busy: a chip is being flashed over its programming pins (prog_flash); "
+                                       "try again when it ends", "a target is being flashed (prog_flash)");
     if (xip_session_active())
         return bp_tag_storage_bus_busy("busy: the pod is running code from its W25Q (a flash over USB); try "
                                        "again when it ends", "a flash over USB is running");
@@ -262,9 +266,6 @@ const char *bus_busy_reason(void) {
         return bp_tag_storage_bus_busy("busy: a board on the USB host port is being flashed (usb_flash); "
                                        "try again when it ends", "a flash over USB is running");
 #endif
-    if (prog_flash_busy())
-        return bp_tag_storage_bus_busy("busy: a chip is being flashed over its programming pins (prog_flash); "
-                                       "try again when it ends", "a target is being flashed (prog_flash)");
     if (esp_dut_flash_busy())
         return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
                                        "it ends", "a target is being flashed (esp_flash)");

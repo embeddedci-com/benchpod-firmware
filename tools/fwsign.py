@@ -58,7 +58,7 @@ CONTEXT = b"benchpod-fw-sign:v1\x00"
 MANIFEST_LEN = 128
 SIGNED_LEN = 64
 # ota_target_t numbering in the firmware (4 ca and 5 tls are configuration, never signed).
-TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6, "gw2": 7, "bridge-id": 8, "xip": 9}
+TARGETS = {"firmware": 0, "gw0": 1, "gw1": 2, "esp": 3, "bridge": 6, "gw2": 7, "bridge-id": 8, "xip": 9, "xip_prog": 10}
 FW_INFO_OFFSET = 0x400
 FW_INFO_MAGIC = 0x57465042  # "BPFW"
 

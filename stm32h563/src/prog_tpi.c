@@ -1,9 +1,21 @@
 /* prog_tpi.c — AVR TPI (ATtiny4/5/9/10/20/40/102/104) for prog_flash (prog_flash.h).
  *
- * TPICLK = clk, TPIDATA = data, the chip's RESET = the pod's reset pin (held low for the whole
- * session). 12-bit frames: prog_avr12.h. The pod knows no device tables: the host passes the
- * erase/write page size in ctx->page (bytes, even), addr is relative to the memory's base.
- * Flash is written one word (2 bytes, low first) at a time; every word is followed by an NVMBSY poll.
+ * TPICLK = clk, TPIDATA = data, the chip's RESET = the pod's reset pin or an LA pin (held low for
+ * the whole session). 12-bit frames: prog_avr12.h. The pod knows no device tables: the host
+ * passes the write page size in ctx->page (bytes, a multiple of the write group) and, in
+ * ctx->flags, the chip's write width and erase kind (TPI_F_* in prog_avr12.h); addr is relative
+ * to the memory's base.
+ *
+ * Voltage: the ATtiny4/5/9/10, 20 and 40 can only be programmed at 5 V (datasheets: "Apply 5V",
+ * 4.75-5.5 V in the programming tables). The pod's I/O is 1.8 or 3.3 V and cannot do that: those
+ * chips need the 5 V module or their own 5 V supply with a level shifter. The ATtiny102/104 say
+ * 1.8-5.5 V in one section and 5 V in another (datasheet contradicts itself): bench test it.
+ *
+ * Flash is written in groups of 1 (default), 2 (ATtiny20) or 4 (ATtiny40) words, low byte first,
+ * padded with 0xFF to a whole group, an IDLE character between the words of a group, and one
+ * NVMBSY poll per group. The chips erase flash only as a whole code section (SECTION_ERASE),
+ * so PROG_ERASE_PAGE is one section erase before the first page (ATtiny102/104 with
+ * TPI_F_PAGE_ERASE: one PAGE_ERASE per page).
  */
 #include "prog_flash.h"
 #include "prog_avr12.h"
@@ -11,10 +23,12 @@
 
 enum { OP_SLD = 0x20, OP_SLD_INC = 0x24, OP_SST = 0x60, OP_SST_INC = 0x64, OP_SSTPR = 0x68,
        OP_SLDCS = 0x80, OP_SSTCS = 0xC0, OP_SKEY = 0xE0 };
-enum { REG_TPISR = 0x00, REG_TPIPCR = 0x02 };
+enum { REG_TPISR = 0x00, REG_TPIPCR = 0x02, REG_TPIIR = 0x0F };
+#define TPIIR_ID     0x80u
+#define NVMEN_TRIES  10u
 #define TPISR_NVMEN  0x02u
 #define TPIPCR_GT2   0x06u        /* guard time: 2 idle bits */
-enum { NVM_NOOP = 0x00, NVM_CHIP_ERASE = 0x10, NVM_SECTION_ERASE = 0x14, NVM_WORD_WRITE = 0x1D };
+enum { NVM_CHIP_ERASE = 0x10, NVM_SECTION_ERASE = 0x14, NVM_PAGE_ERASE = 0x18, NVM_WORD_WRITE = 0x1D };
 #define NVMCSR       0x0032u
 #define NVMCMD       0x0033u
 #define NVMBSY       0x80u
@@ -94,12 +108,20 @@ static int tpi_enter(prog_ctx_t *c) {
     w->delay_us(w->io, 1000);
     avr12_idle(w, 20);
     avr12_tx(w, OP_SSTCS | REG_TPIPCR); avr12_tx(w, TPIPCR_GT2);
-    avr12_tx(w, OP_SKEY);
-    for (unsigned i = 0; i < 8; i++) avr12_tx(w, k_nvm_key[i]);
-    avr12_tx(w, OP_SLDCS | REG_TPISR);
-    uint8_t sr;
+    avr12_tx(w, OP_SLDCS | REG_TPIIR);                 /* a TPI there answers 0x80 */
+    uint8_t sr = 0;
     int rc = avr12_rx(w, &sr);
     if (rc) return rc;
+    if (sr != TPIIR_ID) return PROG_E_NO_ANSWER;
+    avr12_tx(w, OP_SKEY);
+    for (unsigned i = 0; i < 8; i++) avr12_tx(w, k_nvm_key[i]);
+    sr = 0;
+    for (unsigned i = 0; i < NVMEN_TRIES && !(sr & TPISR_NVMEN); i++) {   /* NVMEN comes up a little later */
+        if (i) avr12_idle(w, 8);
+        avr12_tx(w, OP_SLDCS | REG_TPISR);
+        rc = avr12_rx(w, &sr);
+        if (rc) return rc;
+    }
     if (!(sr & TPISR_NVMEN)) return PROG_E_PROTOCOL;   /* the chip did not take the key */
     c->phase = "id";
     c->id_len = 3;
@@ -123,7 +145,9 @@ static int next_chunk(prog_ctx_t *c, uint8_t kind, uint16_t *base, uint32_t *n) 
     tpi_st_t *st = ST(c);
     bool cfg = c->mem == PROG_MEM_CONFIG;
     if (c->mem != PROG_MEM_FLASH && !cfg) return PROG_E_ARGS;
-    if ((c->addr & 1u) || c->page == 0 || (c->page & 1u) || c->page > MAX_PAGE) return PROG_E_ARGS;
+    unsigned gs = 2u * (c->flags & TPI_F_WORDS_MASK ? c->flags & TPI_F_WORDS_MASK : 1u);   /* bytes per write */
+    if ((c->flags & ~0xFu) || (gs != 2u && gs != 4u && gs != 8u)) return PROG_E_ARGS;
+    if ((c->addr & 1u) || c->page == 0 || c->page % gs || c->page > MAX_PAGE) return PROG_E_ARGS;
     if (cfg ? (c->addr + c->len > 2u) : (c->addr + c->len > 0x10000u - ADDR_FLASH)) return PROG_E_ARGS;
     if (!st->active || st->mem != c->mem || st->kind != kind || st->addr != c->addr || st->len != c->len) {
         st->active = 1; st->mem = c->mem; st->kind = kind; st->addr = c->addr; st->len = c->len; st->pos = 0;
@@ -145,20 +169,28 @@ static int tpi_write(prog_ctx_t *c) {
     uint16_t base; uint32_t n;
     int rc = next_chunk(c, 1, &base, &n);
     if (rc <= 0) return rc < 0 ? rc : PROG_OK;
-    uint8_t buf[MAX_PAGE + 1], chk[MAX_PAGE];
+    uint8_t buf[MAX_PAGE], chk[MAX_PAGE];
+    unsigned gs = 2u * (c->flags & TPI_F_WORDS_MASK ? c->flags & TPI_F_WORDS_MASK : 1u);
+    uint32_t lead = base % gs, tot = (lead + n + gs - 1u) / gs * gs;   /* whole groups, 0xFF padded */
     c->phase = "write";
-    if (c->src(c->job, st->pos, buf, n) != 0) return PROG_E_SRC;
-    uint32_t nw = (n + 1u) & ~1u;
-    if (nw > n) buf[n] = 0xFF;
-    if (c->mem == PROG_MEM_CONFIG || c->erase == PROG_ERASE_PAGE) {
-        rc = nvm_erase(w, NVM_SECTION_ERASE, base);
+    memset(buf, 0xFF, tot);
+    if (c->src(c->job, st->pos, buf + lead, n) != 0) return PROG_E_SRC;
+    uint8_t er = 0;                      /* the config section is always erased first */
+    if (c->mem == PROG_MEM_CONFIG) { if (!st->pos) er = NVM_SECTION_ERASE; }
+    else if (c->erase == PROG_ERASE_PAGE)
+        er = (c->flags & TPI_F_PAGE_ERASE) ? NVM_PAGE_ERASE : (st->pos ? 0 : NVM_SECTION_ERASE);
+    if (er) {
+        rc = nvm_erase(w, er, base);
         if (rc) return rc;
     }
     sst(w, NVMCMD, NVM_WORD_WRITE);
-    for (uint32_t i = 0; i < nw; i += 2) {
-        sstpr(w, (uint16_t)(base + i));
-        avr12_tx(w, OP_SST_INC); avr12_tx(w, buf[i]);
-        avr12_tx(w, OP_SST_INC); avr12_tx(w, buf[i + 1]);
+    for (uint32_t i = 0; i < tot; i += gs) {
+        sstpr(w, (uint16_t)(base - lead + i));
+        for (unsigned k = 0; k < gs; k += 2) {
+            if (k) avr12_idle(w, 12);    /* IDLE character between the words of a group */
+            avr12_tx(w, OP_SST_INC); avr12_tx(w, buf[i + k]);
+            avr12_tx(w, OP_SST_INC); avr12_tx(w, buf[i + k + 1]);
+        }
         rc = avr12_commit(w);
         if (!rc) rc = nvm_wait(w);
         if (rc) return rc;
@@ -167,7 +199,7 @@ static int tpi_write(prog_ctx_t *c) {
     rc = ld(w, base, chk, n);
     if (rc) return rc;
     for (uint32_t i = 0; i < n; i++)
-        if (chk[i] != buf[i]) { c->at_addr = c->addr + st->pos + i; return PROG_E_VERIFY; }
+        if (chk[i] != buf[lead + i]) { c->at_addr = c->addr + st->pos + i; return PROG_E_VERIFY; }
     st->pos += n;
     c->done = (st->pos + c->page - 1u) / c->page;
     return st->pos >= c->len ? (st->active = 0, PROG_OK) : PROG_RUNNING;
@@ -199,8 +231,4 @@ static void tpi_leave(prog_ctx_t *c, bool run) {
     w->nrst(w->io, false);
 }
 
-const prog_proto_t prog_proto_tpi = {
-    .name = "tpi", .uart = false, .uses_nrst = true,
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG),
-    .enter = tpi_enter, .erase = tpi_erase, .write = tpi_write, .read = tpi_read, .leave = tpi_leave,
-};
+PROG_PROTO(tpi, tpi_enter, tpi_erase, tpi_write, tpi_read, tpi_leave, PROG_INFO_TPI)

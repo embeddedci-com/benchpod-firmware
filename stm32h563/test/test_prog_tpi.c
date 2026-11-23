@@ -1,6 +1,7 @@
 /* Host test for prog_tpi.c against a bit-level model of an ATtiny10 (prog_sim.h). */
 #include "prog_flash.h"
 #include "prog_sim.h"
+#include "../src/prog_avr12.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -24,7 +25,13 @@ typedef struct {
     uint8_t op; int need; uint8_t args[8]; int nargs;
     /* transmit side */
     uint8_t out[32]; int outn, outi, cur;
+    /* the group write buffer (ATtiny20: 2 words, ATtiny40: 4 words, others 1) */
+    unsigned nwords, wcnt, idle_run, frame_idle, op_idle;
+    uint16_t wbase;
+    uint8_t wbuf[8];
     /* test knobs */
+    bool has_page_erase;
+    unsigned nvmen_delay, keys, idle_missing, misaligned, bad_ident;
     bool key_flip, silent, parity_err, stuck_busy, nrst_low, corrupt;
     uint32_t corrupt_addr;
     unsigned frames_rx, parity_bad;
@@ -47,25 +54,43 @@ static uint8_t mem_read(prog_sim_t *s, tiny_t *t, uint16_t a) {
 static void mem_write(prog_sim_t *s, tiny_t *t, uint16_t a, uint8_t v, bool inc_word) {
     (void)inc_word;
     if (!t->nvmen) return;
-    if (a == 0x33) { t->nvmcmd = v; return; }
+    if (a == 0x33) { t->nvmcmd = v; t->wcnt = 0; return; }
     bool fl = a >= FLASH_BASE && a < FLASH_BASE + FLASH_SIZE;
-    bool cf = a == 0x3F40 || a == 0x3F41;
+    bool cf = a >= 0x3F40 && a < 0x3F48;
     if (!fl && !cf) return;
     if (t->nvmcmd == 0x10 && fl && (a & 1u)) {              /* chip erase: dummy write to a high byte */
         memset(t->flash, 0xFF, sizeof t->flash); t->config = 0xFF; t->lock = 0xFF;
         t->busy_until = s->us + 15000;
-    } else if (t->nvmcmd == 0x14) {                          /* section erase */
-        if (fl) { uint16_t b = (uint16_t)((a - FLASH_BASE) / PG * PG); memset(&t->flash[b], 0xFF, PG); }
+    } else if (t->nvmcmd == 0x14 && (a & 1u)) {              /* section erase: the WHOLE section */
+        if (fl) memset(t->flash, 0xFF, sizeof t->flash);
         else t->config = 0xFF;
         t->busy_until = s->us + 4000;
-    } else if (t->nvmcmd == 0x1D) {                          /* word write: ANDs into the erased cell */
+    } else if (t->nvmcmd == 0x18 && fl && t->has_page_erase && (a & 1u)) {   /* page erase (t102/104) */
+        uint16_t b = (uint16_t)((a - FLASH_BASE) / PG * PG); memset(&t->flash[b], 0xFF, PG);
+        t->busy_until = s->us + 4000;
+    } else if (t->nvmcmd == 0x1D) {                          /* word write: the group latches, ANDs into the erased cells */
         if (locked(t)) return;
-        if (fl) {
-            uint32_t o = a - FLASH_BASE;
-            if (t->corrupt && o == t->corrupt_addr) v ^= 0x01;
-            t->flash[o] &= v;
-        } else if (a == 0x3F40) t->config &= v;
-        if (a & 1u) t->busy_until = s->us + 4000;
+        unsigned gb = 2 * t->nwords;
+        if (t->wcnt == 0) {
+            if (a % gb) { t->misaligned++; return; }
+            t->wbase = a;
+        } else if (a != t->wbase + t->wcnt) { t->wcnt = 0; t->misaligned++; return; }
+        if (t->wcnt && t->wcnt % 2 == 0 && t->op_idle < 12) {   /* the next word needs an IDLE character */
+            t->idle_missing++; t->wcnt = 0; return;
+        }
+        t->wbuf[t->wcnt++] = v;
+        if (t->wcnt == gb) {
+            for (unsigned i = 0; i < gb; i++) {
+                uint32_t o = t->wbase - FLASH_BASE + i;
+                if (fl) {
+                    uint8_t b = t->wbuf[i];
+                    if (t->corrupt && o == t->corrupt_addr) b ^= 0x01;
+                    t->flash[o] &= b;
+                } else if (t->wbase + i == 0x3F40) t->config &= t->wbuf[i];
+            }
+            t->wcnt = 0;
+            t->busy_until = s->us + 4000;
+        }
     }
 }
 
@@ -84,18 +109,23 @@ static void rx_byte(prog_sim_t *s, tiny_t *t, uint8_t b) {
             break;
         case 0xE0: {
             static const uint8_t key[8] = { 0xFF, 0x88, 0xD8, 0xCD, 0x45, 0xAB, 0x89, 0x12 };
+            t->keys++;
             if (!t->key_flip && memcmp(t->args, key, 8) == 0) { t->nvmen = true; t->cs_tpisr |= 2; }
             break;
         }
         }
         return;
     }
-    t->op = b; t->nargs = 0;
+    t->op = b; t->nargs = 0; t->op_idle = t->frame_idle;   /* idle bits before the instruction */
     uint8_t reply = 0; bool answer = false;
     if ((b & 0xFB) == 0x20) { reply = mem_read(s, t, t->ptr); if (b & 4) t->ptr++; answer = true; }
     else if ((b & 0xFB) == 0x60) t->need = 1;
     else if ((b & 0xFE) == 0x68) t->need = 1;
-    else if ((b & 0xF0) == 0x80) { reply = ((b & 0xF) == 0) ? t->cs_tpisr : (b & 0xF) == 2 ? t->cs_pcr : 0; answer = true; }
+    else if ((b & 0xF0) == 0x80) {
+        reply = ((b & 0xF) == 0) ? t->cs_tpisr : (b & 0xF) == 2 ? t->cs_pcr : (b & 0xF) == 0xF ? (uint8_t)(0x80 ^ t->bad_ident) : 0;
+        if ((b & 0xF) == 0 && (reply & 2) && t->nvmen_delay) { t->nvmen_delay--; reply &= (uint8_t)~2u; }   /* NVMEN comes up late */
+        answer = true;
+    }
     else if ((b & 0xF0) == 0xC0) t->need = 1;
     else if (b == 0xE0) t->need = 8;
     if (answer && !t->silent) {
@@ -117,7 +147,10 @@ static void on_pins(prog_sim_t *s, int clk, int pod) {
     if (t->prev_clk == 1 && clk == 0) {                          /* falling edge: the chip changes its output */
         t->cur = t->outi < t->outn ? t->out[t->outi++] : -1;
     } else if (t->prev_clk == 0 && clk == 1 && pod >= 0) {       /* rising edge: the chip samples */
-        if (!t->inframe) { if (pod == 0) { t->inframe = true; t->rxn = 0; t->rxv = 0; } }
+        if (!t->inframe) {
+            if (pod == 0) { t->inframe = true; t->rxn = 0; t->rxv = 0; t->frame_idle = t->idle_run; t->idle_run = 0; }
+            else t->idle_run++;
+        }
         else {
             t->rxv |= (uint16_t)(pod << t->rxn);
             if (++t->rxn == 11) {                                /* 8 data + parity + 2 stop */
@@ -146,7 +179,7 @@ static void setup(void) {
     memset(&chip, 0, sizeof chip);
     memset(chip.flash, 0xFF, sizeof chip.flash);
     chip.config = 0xFF; chip.lock = 0xFF; chip.sig[0] = 0x1E; chip.sig[1] = 0x90; chip.sig[2] = 0x03;
-    chip.cur = -1; chip.prev_clk = 1;
+    chip.cur = -1; chip.prev_clk = 1; chip.nwords = 1;
     prog_sim_model_t m = { .on_pins = on_pins, .chip_data = chip_data, .on_nrst = on_nrst, .on_time = on_time };
     prog_sim_init(&sim, &ops, &m, &chip);
     memset(&ctx, 0, sizeof ctx);
@@ -195,13 +228,81 @@ int main(void) {
     p->leave(&ctx, true);
     CHECK(sim.contention == 0);
 
-    /* page erase mode rewrites over existing data; no erase would leave 1->0 only */
+    /* erase "page" on these chips is one section erase before the first page (the section is the
+       whole code area): a dirty flash is rewritten, and a multi-page write keeps every page */
     setup();
-    memset(chip.flash, 0x00, 32);
+    memset(chip.flash, 0x00, 256);
     CHECK(p->enter(&ctx) == PROG_OK);
-    ctx.mem = PROG_MEM_FLASH; ctx.erase = PROG_ERASE_PAGE; ctx.addr = 16; ctx.len = 16;
+    ctx.mem = PROG_MEM_FLASH; ctx.erase = PROG_ERASE_PAGE; ctx.addr = 16; ctx.len = 100;
     CHECK(run(p->write) == PROG_OK);
-    CHECK(memcmp(chip.flash + 16, job.src, 16) == 0 && chip.flash[0] == 0x00 && chip.flash[32] == 0xFF);
+    CHECK(memcmp(chip.flash + 16, job.src, 100) == 0 && chip.flash[0] == 0xFF && chip.flash[116] == 0xFF);
+    p->leave(&ctx, true);
+
+    /* ATtiny102/104: PAGE_ERASE (flag) erases only the pages written */
+    setup();
+    chip.has_page_erase = true;
+    memset(chip.flash, 0x00, 256);
+    CHECK(p->enter(&ctx) == PROG_OK);
+    ctx.mem = PROG_MEM_FLASH; ctx.erase = PROG_ERASE_PAGE; ctx.addr = 16; ctx.len = 32; ctx.flags = TPI_F_PAGE_ERASE;
+    CHECK(run(p->write) == PROG_OK);
+    CHECK(memcmp(chip.flash + 16, job.src, 32) == 0 && chip.flash[0] == 0x00 && chip.flash[15] == 0x00 && chip.flash[48] == 0x00);
+    p->leave(&ctx, true);
+
+    /* ATtiny20 (2 words per write) and ATtiny40 (4 words): grouped, 0xFF padded, IDLE between words,
+       odd length and a start inside a group */
+    for (unsigned nw = 2; nw <= 4; nw += 2) {
+        setup();
+        chip.nwords = nw;
+        memset(chip.flash, 0x00, 256);
+        CHECK(p->enter(&ctx) == PROG_OK);
+        ctx.mem = PROG_MEM_FLASH; ctx.erase = PROG_ERASE_PAGE; ctx.addr = 2; ctx.len = 99; ctx.flags = nw;
+        CHECK(run(p->write) == PROG_OK);
+        CHECK(memcmp(chip.flash + 2, job.src, 99) == 0 && chip.flash[0] == 0xFF && chip.flash[101] == 0xFF);
+        CHECK(chip.idle_missing == 0 && chip.misaligned == 0);
+        CHECK(run(p->read) == PROG_OK && memcmp(job.dst, job.src, 99) == 0);
+        /* config: the word, then dummy words to fill the group */
+        job.src[0] = 0xFE;
+        ctx.mem = PROG_MEM_CONFIG; ctx.addr = 0; ctx.len = 1; ctx.erase = PROG_ERASE_NONE;
+        CHECK(run(p->write) == PROG_OK && chip.config == 0xFE);
+        CHECK(chip.idle_missing == 0 && chip.misaligned == 0);
+        p->leave(&ctx, true);
+    }
+    /* a chip that wants 2 words and gets 1 loses the write */
+    setup();
+    chip.nwords = 2;
+    CHECK(p->enter(&ctx) == PROG_OK);
+    ctx.mem = PROG_MEM_FLASH; ctx.erase = PROG_ERASE_CHIP; ctx.addr = 0; ctx.len = 16; ctx.flags = 0;
+    CHECK(p->erase(&ctx) == PROG_OK);
+    CHECK(run(p->write) == PROG_E_VERIFY);
+    p->leave(&ctx, true);
+
+    /* flags: only the words and page-erase bits, words 1/2/4, page a multiple of the group */
+    setup();
+    CHECK(p->enter(&ctx) == PROG_OK);
+    ctx.mem = PROG_MEM_FLASH; ctx.erase = PROG_ERASE_NONE; ctx.addr = 0; ctx.len = 16;
+    ctx.flags = 3;  CHECK(run(p->write) == PROG_E_ARGS);
+    ctx.flags = 0x10; CHECK(run(p->write) == PROG_E_ARGS);
+    ctx.flags = 4; ctx.page = 6; CHECK(run(p->write) == PROG_E_ARGS);
+    p->leave(&ctx, true);
+
+    /* NVMEN is polled: it may take a few reads; never: protocol error */
+    setup();
+    chip.nvmen_delay = 3;
+    CHECK(p->enter(&ctx) == PROG_OK && chip.nvmen);
+    p->leave(&ctx, true);
+    setup();
+    chip.nvmen_delay = 1000;
+    CHECK(p->enter(&ctx) == PROG_E_PROTOCOL);
+    p->leave(&ctx, true);
+
+    /* TPIIR (0x80) is read before the key goes out */
+    setup();
+    chip.bad_ident = 1;
+    CHECK(p->enter(&ctx) == PROG_E_NO_ANSWER);
+    CHECK(chip.keys == 0);
+    p->leave(&ctx, true);
+    setup();
+    CHECK(p->enter(&ctx) == PROG_OK && chip.keys == 1);
     p->leave(&ctx, true);
 
     /* verify failure reports the address */

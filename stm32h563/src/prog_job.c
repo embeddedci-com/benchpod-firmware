@@ -9,6 +9,7 @@
 #include "psram.h"
 #include "bp_log.h"
 #include "dap.h"
+#include "xip_session.h"
 #include "stm32h5xx_hal.h"
 
 #include <stdio.h>
@@ -30,6 +31,10 @@ void prog_flash_status(prog_status_t *st) { memset(st, 0, sizeof(*st)); }
 const char *prog_rc_str(int rc) { (void)rc; return "error"; }
 #else
 
+/* The protocol code runs from the W25Q (the "prog" image, xip_prog_mod.c): the job holds one XIP
+   session from prog_flash_start until the job ends, so a USB flash (the other image) cannot start
+   meanwhile and the other way round. */
+
 typedef enum { J_IDLE, J_ENTER, J_ERASE, J_WRITE, J_LEAVE } jst_t;
 
 /* The working state, only while a job runs: in the DAP's idle scratch (dap_scratch), so the job
@@ -46,7 +51,7 @@ typedef struct {
 static jst_t   s_st;
 static work_t *wk;
 static struct {
-    const prog_proto_t *proto;
+    const prog_proto_info_t *proto;
     const char *phase;
     uint32_t    done, total, at_addr, ms;
     int         rc;
@@ -69,6 +74,23 @@ static int src_read(void *job, uint32_t off, uint8_t *buf, uint32_t n)
 
 bool prog_flash_busy(void) { return s_st != J_IDLE; }
 
+int prog_xip_call(prog_ctx_t *ctx, unsigned proto, unsigned op)
+{
+    return xip_session_call_ctx2(XIP_PROG_FN_CALL, ctx, proto, op);
+}
+
+/* Why a session for the prog image was refused, in the words of the command's error. */
+static void xip_refused(xip_err_t xe, char *err, size_t cap)
+{
+    if (xe == XIP_ERR_ACTIVE) {
+        snprintf(err, cap, "busy: %s", xip_session_image() == XIP_IMG_USB
+                 ? "a flash over USB (usb_flash) is running; try again when it ends"
+                 : "another pin programmer job is running");
+    } else {
+        snprintf(err, cap, "prog_flash needs the xip_prog image: %s", xip_img_err_text(XIP_IMG_PROG, xe));
+    }
+}
+
 static void release_pins(void)
 {
     prog_wire_close(&j.ops);
@@ -76,13 +98,22 @@ static void release_pins(void)
         la_pins_release_fn(LA_FN_SWD_CLK);
         la_pins_release_fn(LA_FN_SWD_DIO);
     }
-    if (j.p.proto->uses_nrst) nrst_ctrl_assert(false);
+    if (j.p.proto->uses_nrst) {
+        uint8_t rst = j.p.reset;
+        if (rst) {
+            la_pins_set_level(rst, 1);
+            la_pins_release(rst);
+            (void)fpga_la_set(rst, la_pins_drive(rst));   /* back to high-Z */
+        } else {
+            nrst_ctrl_assert(false);
+        }
+    }
 }
 
 int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
 {
     if (s_st != J_IDLE) { bp_note_pod_busy(err, cap); return -1; }
-    const prog_proto_t *pr = p->proto;
+    const prog_proto_info_t *pr = p->proto;
     /* A DAP, SPI or I2C session holds the engine (and the DAP its scratch, which the job borrows). */
     if (fpga_swd_armed() || la_pins_mask_fn(LA_FN_SWD_CLK) || la_pins_mask_fn(LA_FN_JTAG_TCK) ||
         la_pins_mask_fn(LA_FN_SPI_SCK) || la_pins_mask_fn(LA_FN_I2CM_SCL)) {
@@ -93,9 +124,16 @@ int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
     _Static_assert(sizeof(work_t) <= 1024u, "work_t must fit the DAP scratch");
     if (scratch_len < sizeof(work_t)) { snprintf(err, cap, "no room for the job"); return -1; }
     if (!(pr->mems & (1u << p->mem))) { snprintf(err, cap, "%s cannot write that memory", pr->name); return -1; }
-    if (pr->uses_nrst && !nrst_ctrl_supported()) {
-        snprintf(err, cap, "this pod has no reset pin, which %s needs", pr->name); return -1;
+    if (pr->uses_nrst && !p->reset && !nrst_ctrl_supported()) {
+        snprintf(err, cap, "this pod has no reset pin: wire the chip's reset to an LA pin and pass reset");
+        return -1;
     }
+    uint8_t rst = pr->uses_nrst ? p->reset : 0;
+    if (rst && (rst == p->data || (!pr->uart && rst == p->clk))) {
+        snprintf(err, cap, "reset must be another pin than clk and data"); return -1;
+    }
+    if (rst && !la_pins_check_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, &rst, 1, 0, la_pull_mask_now(), err, cap))
+        return -1;
     uint32_t base = 0, staged = 0;
     if (p->op == PROG_OP_START) {
         if (p->len == 0) { snprintf(err, cap, "len must be more than 0"); return -1; }
@@ -105,20 +143,30 @@ int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
         if (p->len > staged) { snprintf(err, cap, "len is more than the staged upload"); return -1; }
     }
 
+    if (!pr->uart) {
+        if (p->clk == p->data) { snprintf(err, cap, "clk and data must be different pins"); return -1; }
+        uint8_t c = p->clk, d = p->data;
+        if (!la_pins_check_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, &c, 1, 0, la_pull_mask_now(), err, cap) ||
+            !la_pins_check_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, &d, 1, 0, la_pull_mask_now(), err, cap))
+            return -1;
+    }
+
+    /* The last check: the protocol code. Every return below this line ends the session. */
+    xip_err_t xe = xip_session_begin(XIP_IMG_PROG);
+    if (xe != XIP_OK) { xip_refused(xe, err, cap); return -1; }
+
     wk = scratch;
     memset(wk, 0, sizeof(*wk));
     j.p = *p;
     if (pr->uart) {
         if (prog_wire_open_uart(&j.ops, j.wire, p->data, err, cap) != 0) {
             if (!err[0]) bp_note_uart_session_open(err, cap);
+            wk = NULL;
+            xip_session_end();
             return -1;
         }
     } else {
-        if (p->clk == p->data) { snprintf(err, cap, "clk and data must be different pins"); return -1; }
         uint8_t c = p->clk, d = p->data;
-        if (!la_pins_check_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, &c, 1, 0, la_pull_mask_now(), err, cap) ||
-            !la_pins_check_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, &d, 1, 0, la_pull_mask_now(), err, cap))
-            return -1;
         la_pins_claim(LA_FN_SWD_CLK, LA_GPIO_NONE, 0, &c, 1);
         la_pins_claim(LA_FN_SWD_DIO, LA_GPIO_NONE, 0, &d, 1);
         int rc = prog_wire_open_2w(&j.ops, j.wire, p->clk, p->data);
@@ -127,8 +175,14 @@ int prog_flash_start(const prog_params_t *p, char *err, size_t cap)
             la_pins_release_fn(LA_FN_SWD_DIO);
             if (rc == -2) bp_note_bus_engine_busy(err, cap, "prog_flash");
             else          snprintf(err, cap, "invalid clk or data pin");
+            wk = NULL;
+            xip_session_end();
             return -1;
         }
+    }
+    if (rst) {
+        la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, &rst, 1);   /* claimed released (high) */
+        prog_wire_reset_pin(&j.ops, rst);
     }
     if (p->op == PROG_OP_START) signal_engine_quiesce_psram_masters();
 
@@ -161,6 +215,7 @@ static void finish(int rc)
     memcpy(r.id, s_ctx.id, r.id_len);
     log_printf("[prog] %s: %s (%lu ms)\n", j.p.proto->name, prog_rc_str(rc), (unsigned long)r.ms);
     release_pins();
+    xip_session_end();               /* the W25Q code is not needed after leave() */
     s_st = J_IDLE;
     wk = NULL;                       /* the scratch goes back to the DAP */
 }
@@ -170,7 +225,7 @@ static void finish(int rc)
 static void fail(int rc)
 {
     const char *at = s_ctx.phase;
-    j.p.proto->leave(&s_ctx, false);
+    (void)prog_xip_call(&s_ctx, j.p.proto->id, PROG_XOP_LEAVE);
     s_ctx.phase = at;
     finish(rc);
 }
@@ -178,13 +233,13 @@ static void fail(int rc)
 void prog_flash_poll(void)
 {
     if (s_st == J_IDLE) return;
-    const prog_proto_t *pr = j.p.proto;
+    const prog_proto_info_t *pr = j.p.proto;
     int rc;
     switch (s_st) {
     case J_IDLE:
         return;
     case J_ENTER:
-        rc = pr->enter(&s_ctx);
+        rc = prog_xip_call(&s_ctx, pr->id, PROG_XOP_ENTER);
         if (rc == PROG_RUNNING) return;
         if (rc < 0) { fail(rc); return; }
         if (j.p.expect_len && (s_ctx.id_len < j.p.expect_len ||
@@ -197,21 +252,21 @@ void prog_flash_poll(void)
         return;
     case J_ERASE:
         s_ctx.phase = "erase";
-        rc = pr->erase(&s_ctx);
+        rc = prog_xip_call(&s_ctx, pr->id, PROG_XOP_ERASE);
         if (rc == PROG_RUNNING) return;
         if (rc < 0) { fail(rc); return; }
         s_ctx.done = s_ctx.total = 0;
         s_st = J_WRITE;
         return;
     case J_WRITE:
-        rc = pr->write(&s_ctx);
+        rc = prog_xip_call(&s_ctx, pr->id, PROG_XOP_WRITE);
         if (rc == PROG_RUNNING) return;
         if (rc < 0) { fail(rc); return; }
         s_st = J_LEAVE;
         return;
     case J_LEAVE:
         s_ctx.phase = "leave";
-        pr->leave(&s_ctx, j.p.run);
+        (void)prog_xip_call(&s_ctx, pr->id, j.p.run ? PROG_XOP_LEAVE_RUN : PROG_XOP_LEAVE);
         s_ctx.phase = "done";
         finish(PROG_OK);
         return;
