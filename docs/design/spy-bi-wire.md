@@ -498,7 +498,7 @@ Sampling after the rise would depend on the bus keeper (item 13) and is not used
 | the same with a gateware engine at 1 us per cycle (section 15) | | 3 s for 16 KB, 50 s for 256 KB |
 
 Flush overhead (one SPI transaction and a reply read per 96 to 176 bytes) adds roughly 10 to 15 %; not
-measured. Slow for large parts, fine for the LaunchPad class the bench has (FR2433, 16 KB).
+measured. Slow for large parts, fine for LaunchPad-class parts (FR2433, 16 KB).
 
 ### 14.3 Which sequences need a guaranteed short low phase
 
@@ -605,7 +605,7 @@ Makefile; text+rodata of the object, 2026-11-23):
 | **prog_sbw (FRAM parts, this change)** | **2 752** |
 | image with SBW | 15 881 of the 20 KB region (4.1 KB left) |
 
-The plan's guess was about 8 KB for the JTAG routines (`later.md`); the FRAM-only code is a third of that because it
+The earlier estimate was about 8 KB for the JTAG routines; the FRAM-only code is a third of that because it
 uses only the documented word access (`ReadMem`, `WriteMem`) and one mailbox erase. **It fits in the existing
 `xip_prog` image**, which has room for 7 KB. What it does not include and what each would add (estimates, not
 measured): quick reads and the mailbox write funclet (0.5 to 1 KB), password unlock and the MPU BOR dance (0.7 KB),
@@ -619,7 +619,7 @@ Options (a prog_flash job holds one session and runs one protocol, so protocols 
 | a. **SBW FRAM into `xip_prog` now** (a `dispatch` case, the enum and metadata entry, the Makefile object list, the linker script's object list) | cheapest, 4.1 KB headroom afterwards. **Recommended for the FRAM scope.** |
 | b. Third XIP image `prog2` (slot `xip_prog2`, own table, hash record, `xip_finish.py` and `check_xip_refs.py` entries, `XIP_IMG_PROG2`, dispatch by protocol id), same 20 KB overlay region | when flash parts, the funclet paths or SWIM/cJTAG firmware arrive and the 4.1 KB is gone; move SBW there at that time (the code does not change) |
 | c. Internal flash | spends the code budget XIP saved |
-| d. Grow the region beyond 20 KB | the region is RAM shared with the usb image; static RAM is at 99 % (plan.md) |
+| d. Grow the region beyond 20 KB | the region is RAM shared with the usb image, and static RAM is nearly full |
 
 The wiring layer has two gaps, both in `prog_wire.c` and out of scope here: (1) `prog_wire_close()` leaves the clock
 **high**, which on an MSP430 re-enables SBW and disables its RST function (section 12): SBW needs a way to leave TEST low

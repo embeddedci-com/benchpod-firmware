@@ -382,7 +382,8 @@ static int erase_chip(prog_ctx_t *c)
     c->total = 1; c->done = 0;
     if (st->jid == 0) return PROG_E_PROTOCOL;
     w->data_drive(w->io, true);
-    w->set(w->io, 0, 0); w->delay_us(w->io, 200000);
+    w->set(w->io, 0, 1); w->set(w->io, 0, 0);                  /* TEST low, then RST low: never both in one command */
+    w->delay_us(w->io, 200000);
     sbw_entry(c, true);
     tap_reset(c);
     int rc = jmb_write32(c, 0xA55A, 0x1A1A);
