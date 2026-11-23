@@ -14,6 +14,22 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(BENCHPOD_EMI_TEST)
+/* The EMC test build has no RAM to spare (it runs its own activity loop) and no use for the pin
+   programmers: prog_flash answers that it is not in this build. */
+int  prog_flash_start(const prog_params_t *p, char *err, size_t cap)
+{
+    (void)p;
+    snprintf(err, cap, "prog_flash is not in the EMI test build");
+    return -1;
+}
+void prog_flash_poll(void) {}
+void prog_flash_abort(void) {}
+bool prog_flash_busy(void) { return false; }
+void prog_flash_status(prog_status_t *st) { memset(st, 0, sizeof(*st)); }
+const char *prog_rc_str(int rc) { (void)rc; return "error"; }
+#else
+
 typedef enum { J_IDLE, J_ENTER, J_ERASE, J_WRITE, J_LEAVE } jst_t;
 
 /* The working state, only while a job runs: in the DAP's idle scratch (dap_scratch), so the job
@@ -251,3 +267,5 @@ void prog_flash_status(prog_status_t *st)
     st->result = prog_rc_str(r.rc);
     st->ms = r.ms;
 }
+
+#endif /* BENCHPOD_EMI_TEST */
