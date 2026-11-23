@@ -376,8 +376,71 @@ static void test_model_raw(void) {
     free(r);
 }
 
+static void check_entry(int nvm, uint8_t sig1, uint8_t sig2) {
+    rig_t *r = rig_new(nvm);
+    const prog_proto_t *p = &prog_proto_updi;
+    CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+    CHECK_EQ(r->ctx.id_len, 3);
+    CHECK_EQ(r->ctx.id[0], 0x1E); CHECK_EQ(r->ctx.id[1], sig1); CHECK_EQ(r->ctx.id[2], sig2);
+    CHECK(r->chip.prog);
+    CHECK_EQ(r->sim.baud, 115200); CHECK(r->sim.parity_even && r->sim.stop2);
+    CHECK_EQ(r->chip.breaks, 0);
+    CHECK_EQ(r->chip.bad_frame, 0);
+    p->leave(&r->ctx, true);
+    CHECK(r->chip.disabled); CHECK(!r->chip.inreset);
+    free(r);
+    /* run = false keeps the chip in reset with UPDI still enabled */
+    r = rig_new(nvm);
+    CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+    p->leave(&r->ctx, false);
+    CHECK(!r->chip.disabled); CHECK(r->chip.inreset);
+    free(r);
+}
+
+static void test_entry(void) {
+    check_entry(0, 0x94, 0x21);
+    check_entry(2, 0x97, 0x0A);
+    /* the chip needs a break first: double break at 300 baud, then the link baud again */
+    rig_t *r = rig_new(0);
+    r->chip.need_breaks = 1;
+    r->ctx.baud = 225000;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
+    CHECK_EQ(r->chip.breaks, 2);
+    CHECK_EQ(r->sim.baud, 225000);
+    CHECK_EQ(r->chip.last_baud, 225000);
+    free(r);
+    /* silent chip */
+    r = rig_new(0); r->chip.silent = true;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_NO_ANSWER);
+    CHECK_EQ(r->chip.breaks, 2);   /* the pod tried the double break before giving up */
+    prog_proto_updi.leave(&r->ctx, true);   /* never linked: sends nothing */
+    free(r);
+    /* locked, no chip erase asked */
+    r = rig_new(2); r->chip.locked = true;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_LOCKED);
+    CHECK(r->chip.locked);
+    prog_proto_updi.leave(&r->ctx, false);
+    free(r);
+    /* locked, chip erase asked: unlocks, erases, reads the ID */
+    r = rig_new(0); r->chip.locked = true; fill(r->chip.r[R_FLASH].d, 256, 3);
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
+    CHECK(!r->chip.locked); CHECK(r->chip.prog);
+    CHECK_EQ(r->chip.r[R_FLASH].d[5], 0xFF);
+    CHECK_EQ(r->ctx.id[1], 0x94);
+    free(r);
+    /* unsupported NVM version, wrong baud */
+    r = rig_new(0); memcpy(r->chip.sib, "AVR     P:3D:1-3", 16);
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_UNSUPPORTED);
+    free(r);
+    r = rig_new(0); r->ctx.baud = 300000;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_E_ARGS);
+    free(r);
+}
+
 int main(void) {
     test_model_raw();
+    test_entry();
     if (fails) { printf("%d of %d checks FAILED\n", fails, checks); return 1; }
     printf("test_prog_updi: %d checks passed\n", checks);
     return 0;
