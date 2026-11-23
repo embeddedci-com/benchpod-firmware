@@ -360,6 +360,12 @@ endif
 #   XIP_BODGE_PB6=1  the W25Q's chip-select is PB6 (a wire from PB6 to the W25Q's /CS, PE3 left an
 #                    input): the real memory-mapped mode on a board before digital v3r4 (with
 #                    XIP_RAM=0). Development only.
+# The EMC test build (EMI_TEST=1) has its own activity loop and no room for these: it keeps
+# building without USB host mode and with the memory-mapped image, as before (both can be set).
+ifeq ($(EMI_TEST),1)
+USB_HOST ?= 0
+XIP_RAM ?= 0
+endif
 XIP_RAM ?= 1
 ifeq ($(XIP_BODGE_PB6),1)
 XIP_RAM := 0

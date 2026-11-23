@@ -14,6 +14,8 @@
 
 #include <string.h>
 
+#include "host/hcd.h"   /* hcd_port_connect_status, hcd_port_speed_get */
+
 static volatile usb_host_port_t s_want_port;   /* NONE: device mode wanted */
 static volatile uint32_t        s_deadline;    /* HAL tick the request expires */
 static volatile usb_host_port_t s_active_port; /* what the usb task runs: NONE = device */
@@ -105,6 +107,10 @@ void usb_host_info(usb_host_info_t *out)
     out->remaining_s = (want != USB_HOST_PORT_NONE && left > 0) ? ((uint32_t)left + 999u) / 1000u : 0;
     out->host_ms = act != USB_HOST_PORT_NONE ? now - since : 0;
     out->enumeration = usb_host_enum_state(out->seen, out->attached, s_enum_open, now - s_enum_tick);
+    /* What the port sees on the wire, before any enumeration (one flag and one register: safe to read
+       from any task while the usb task hosts). */
+    out->connected = act != USB_HOST_PORT_NONE && want == act && hcd_port_connect_status(0);
+    out->line_low_speed = out->connected && hcd_port_speed_get(0) == TUSB_SPEED_LOW;
 }
 
 /* ---- TinyUSB host callbacks (usb task) ---------------------------------------------- */
