@@ -15,14 +15,11 @@ const blob_manifest_t *blob_manifest(blob_id_t id)
 {
     if (id < BLOB_COUNT) return &k_manifest[id];
     if (id == BLOB_XIP || id == BLOB_XIP_PROG) {
-        /* The W25Q images this firmware was linked with (patched in after the link). */
-        static blob_manifest_t xip[XIP_IMG_COUNT];
-        const xip_img_t img = id == BLOB_XIP ? XIP_IMG_USB : XIP_IMG_PROG;
-        const xip_hash_t *h = xip_image_expected_of(img);
-        xip[img].len = h->magic == XIP_HASH_MAGIC ? h->len : 0u;
-        xip[img].version = 0u;
-        memcpy(xip[img].sha256, h->sha256, 32);
-        return &xip[img];
+        /* The W25Q images this firmware was linked with: the record patched in after the link
+           (xip_hash_t holds the manifest entry itself, in internal flash). */
+        static const blob_manifest_t none;
+        const xip_hash_t *h = xip_image_expected_of(id == BLOB_XIP ? XIP_IMG_USB : XIP_IMG_PROG);
+        return h->magic == XIP_HASH_MAGIC ? &h->m : &none;
     }
     return id == BLOB_GW2 ? &k_manifest[BLOB_COUNT] : NULL;
 }

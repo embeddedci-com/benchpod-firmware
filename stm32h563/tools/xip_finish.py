@@ -30,7 +30,7 @@ def finish(elf, blobs, name, section, hash_section):
     data = open(out, "rb").read()
     sha = hashlib.sha256(data).digest()
     with tempfile.NamedTemporaryFile(delete=False) as t:
-        t.write(struct.pack("<II", MAGIC, len(data)) + sha)
+        t.write(struct.pack("<III", MAGIC, len(data), 0) + sha)   # magic, len, version 0, sha256
     try:
         subprocess.run([OBJCOPY, "--update-section", hash_section + "=" + t.name, elf], check=True)
     finally:

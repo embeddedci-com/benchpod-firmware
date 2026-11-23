@@ -42,8 +42,8 @@ void handle_xip(int conn_id, const char *json)
 {
     const xip_hash_t *want = xip_image_expected();
     const xip_hash_t *want_p = xip_image_expected_of(XIP_IMG_PROG);
-    const uint32_t len = want->magic == XIP_HASH_MAGIC ? want->len : 0u;
-    const uint32_t len_p = want_p->magic == XIP_HASH_MAGIC ? want_p->len : 0u;
+    const uint32_t len = want->magic == XIP_HASH_MAGIC ? want->m.len : 0u;
+    const uint32_t len_p = want_p->magic == XIP_HASH_MAGIC ? want_p->m.len : 0u;
     const xip_mode_t mode = xip_mode();
     char st[256] = "";
     if (bp_json_flag(json, "selftest")) {

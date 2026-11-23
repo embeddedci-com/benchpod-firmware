@@ -147,7 +147,7 @@ static xip_err_t check_image(const xip_image_t *im, uint32_t len)
 {
     uint8_t sha[32];
     if (mbedtls_sha256((const uint8_t *)(uintptr_t)im->table, len, sha, 0) != 0 ||
-        memcmp(sha, im->expected->sha256, 32) != 0) return XIP_ERR_HASH;
+        memcmp(sha, im->expected->m.sha256, 32) != 0) return XIP_ERR_HASH;
     const xip_table_t *t = (const xip_table_t *)(uintptr_t)im->table;
     if (t->magic != XIP_TABLE_MAGIC || t->abi != im->abi || t->count != im->count) return XIP_ERR_TABLE;
     return XIP_OK;
@@ -162,9 +162,9 @@ xip_err_t xip_session_begin(xip_img_t img)
     const xip_mode_t mode = xip_mode();
     if (mode == XIP_MODE_NONE || !blob_listed(im->blob)) return XIP_ERR_UNSUPPORTED;
     const xip_hash_t *want = im->expected;
-    if (want->magic != XIP_HASH_MAGIC || want->len == 0) return XIP_ERR_NO_IMAGE;
+    if (want->magic != XIP_HASH_MAGIC || want->m.len == 0) return XIP_ERR_NO_IMAGE;
     const blob_info_t *have = blob_store_info(im->blob);
-    if (!have || !have->present || have->len != want->len || memcmp(have->sha256, want->sha256, 32) != 0)
+    if (!have || !have->present || have->len != want->m.len || memcmp(have->sha256, want->m.sha256, 32) != 0)
         return XIP_ERR_SLOT;
 
     if (w25q_session_open() != 0) { w25q_session_close(); return XIP_ERR_BUS; }
@@ -172,7 +172,7 @@ xip_err_t xip_session_begin(xip_img_t img)
     s_img = img;
     xip_err_t rc = XIP_OK;
 #if defined(BENCHPOD_XIP_RAM)
-    rc = load_into_ram(im, want->len);
+    rc = load_into_ram(im, want->m.len);
     w25q_session_close();   /* the copy runs without the bus; the session keeps others off it */
 #else
     if (map_w25q() != 0) {
@@ -183,7 +183,7 @@ xip_err_t xip_session_begin(xip_img_t img)
         xspi_guard_set_mapped(&k_hooks);
     }
 #endif
-    if (rc == XIP_OK) rc = check_image(im, want->len);
+    if (rc == XIP_OK) rc = check_image(im, want->m.len);
     if (rc != XIP_OK) {
         LOG_W("[xip] %s session refused: %s\n", im->name, xip_err_text(rc));
         xip_session_end();

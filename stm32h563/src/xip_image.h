@@ -76,9 +76,8 @@ typedef struct {
 /* In internal flash: what the post-link step found in an image. len 0 = no image (not patched). */
 #define XIP_HASH_MAGIC 0x48504958u      /* "XIPH" */
 typedef struct {
-    uint32_t magic;
-    uint32_t len;
-    uint8_t  sha256[32];
+    uint32_t        magic;
+    blob_manifest_t m;           /* len and sha256 of the image (version 0): the blob's manifest entry */
 } xip_hash_t;
 
 /* What the firmware knows about an image (xip_image.c). */

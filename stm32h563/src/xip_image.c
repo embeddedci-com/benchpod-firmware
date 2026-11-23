@@ -5,9 +5,9 @@
 /* Patched after the link by tools/xip_finish.py (objcopy --update-section .xip_hash and
    .xip_prog_hash). */
 __attribute__((section(".xip_hash"), used))
-const xip_hash_t xip_expected = { XIP_HASH_MAGIC, 0u, { 0 } };
+const xip_hash_t xip_expected = { XIP_HASH_MAGIC, { 0u, 0u, { 0 } } };
 __attribute__((section(".xip_prog_hash"), used))
-const xip_hash_t xip_prog_expected = { XIP_HASH_MAGIC, 0u, { 0 } };
+const xip_hash_t xip_prog_expected = { XIP_HASH_MAGIC, { 0u, 0u, { 0 } } };
 
 static const xip_image_t k_images[XIP_IMG_COUNT] = {
     [XIP_IMG_USB]  = { "usb",  BLOB_XIP,      &xip_table,      __xip_region_end,      &xip_expected,
