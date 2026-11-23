@@ -2812,9 +2812,10 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
 
 static bool spi_armed_local = false;   /* the same engine in SPI mode (below) */
 static bool i2c_armed_local = false;   /* the engine runs the I2C master (gw v55) */
+static bool jtag_armed_local = false;  /* the engine runs the JTAG master (gw v61) */
 
 int fpga_swd_arm(unsigned swclk, unsigned swdio) {
-    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int clk_idx = la_wire_index(swclk);
     int dio_idx = la_wire_index(swdio);
     if (clk_idx < 0 || dio_idx < 0 || clk_idx == dio_idx) return -1;
@@ -2842,10 +2843,11 @@ void fpga_swd_disarm(void) {
 bool fpga_swd_armed(void) { return swd_armed_local; }
 
 void fpga_swd_poll(void) {
-    if (!swd_armed_local) return;
+    if (!swd_armed_local && !jtag_armed_local) return;
     if (time_reached(swd_deadline)) {
         LOG_D("[swd] inactivity timeout — disarming\n");
         fpga_swd_disarm();
+        fpga_jtag_disarm();
     }
 }
 
@@ -3008,7 +3010,7 @@ uint32_t fpga_spi_hz_for_half(unsigned half) {
 int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                  unsigned half, unsigned mode) {
     if (!gw_caps()->spi_master) return -3;
-    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int w[4] = { la_wire_index(sck), la_wire_index(mosi), la_wire_index(miso), la_wire_index(cs) };
     for (int i = 0; i < 4; i++) {
         if (w[i] < 0) return -1;
@@ -3113,7 +3115,7 @@ uint32_t fpga_i2c_hz_for_half(unsigned half) {
 
 int fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half) {
     if (!gw_caps()->i2c_master) return -3;
-    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int ws = la_wire_index(sda), wc = la_wire_index(scl);
     if (ws < 0 || wc < 0 || ws == wc) return -1;
     if (half < I2C_HALF_MIN) half = I2C_HALF_MIN;
@@ -3164,6 +3166,94 @@ int fpga_i2c_run(const uint8_t *tok, size_t n, uint8_t *reply, size_t nreply, ui
     spi_cmd_read(CMD_SWD_READ, args, sizeof(args), reply, want);
     memmove(reply, reply + 1, nreply);
     return 0;
+}
+
+/* ===========================================================================
+ * JTAG master: the SWD engine's fourth job (gateware >= JTAG_MIN_GW, jtag_seq.v; loop and deep
+ * images only, FPGA_FEATURES bit 3).
+ *
+ * SPI_ARM with flags bit 3: TCK on the sck slot, TDI on mosi, TDO on miso, TMS on cs, all driven,
+ * TCK resting low.  SWD_FEED queues CMSIS-DAP DAP_JTAG_Sequence sequences as the host sends them
+ * (info byte + TDI bytes), SPI_STATUS bit 1 says when they are done, and SWD_READ returns the TDO
+ * bytes of the capturing ones.  In a capturing sequence's last byte of k < 8 bits the TDO bits are
+ * the top k bits: jtag_ll.c right-aligns them.  The inactivity backstop is the SWD one.
+ * ========================================================================== */
+
+static uint8_t jtag_args[6];   /* the SPI_ARM payload of the armed session */
+
+int fpga_jtag_arm(unsigned tck, unsigned tms, unsigned tdi, unsigned tdo, unsigned half) {
+    if (!gw_caps()->jtag) return -3;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
+    int w[4] = { la_wire_index(tck), la_wire_index(tdi), la_wire_index(tdo), la_wire_index(tms) };
+    for (int i = 0; i < 4; i++) {
+        if (w[i] < 0) return -1;
+        for (int j = 0; j < i; j++) if (w[i] == w[j]) return -1;
+    }
+    if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
+    if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
+    /* [sck=TCK][mosi=TDI][miso=TDO][cs=TMS][half][flags: bit3 JTAG] */
+    uint8_t args[6] = { (uint8_t)w[0], (uint8_t)w[1], (uint8_t)w[2], (uint8_t)w[3], (uint8_t)half, 0x08u };
+    spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
+    memcpy(jtag_args, args, sizeof(jtag_args));
+    jtag_armed_local = true;
+    swd_deadline     = make_timeout_time_ms(SWD_INACTIVITY_MS);
+    LOG_D("[jtag] armed  TCK=LA%u TMS=LA%u TDI=LA%u TDO=LA%u %lu Hz\n",
+          tck, tms, tdi, tdo, (unsigned long)fpga_spi_hz_for_half(half));
+    return 0;
+}
+
+/* A new TCK rate on the armed engine: SPI_ARM again with the same channels.  That re-arm sets
+   TMS and TDI high with TCK low; the TAP state does not move without a TCK edge, so the DAP layer
+   calls this between sequences only (DAP_SWJ_Clock). */
+int fpga_jtag_set_half(unsigned half) {
+    if (!jtag_armed_local) return -1;
+    if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
+    if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
+    if (jtag_args[4] == half) return 0;
+    jtag_args[4] = (uint8_t)half;
+    spi_cmd_write(CMD_SPI_ARM, jtag_args, sizeof(jtag_args));
+    return 0;
+}
+
+void fpga_jtag_disarm(void) {
+    if (!jtag_armed_local) return;
+    spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
+    jtag_armed_local = false;
+    LOG_D("[jtag] disarmed\n");
+}
+
+bool fpga_jtag_armed(void) { return jtag_armed_local; }
+
+int fpga_jtag_run(const uint8_t *q, size_t n, uint8_t *reply, size_t nreply) {
+    if (!jtag_armed_local || !q || n == 0 || n > JTAG_QUEUE_MAX || nreply > JTAG_QUEUE_MAX) return -1;
+    swd_deadline = make_timeout_time_ms(SWD_INACTIVITY_MS);
+    uint8_t hdr[3] = { CMD_SWD_FEED, (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };
+    cs_select();
+    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    spi_write_blocking(SPI_PORT, q, n);
+    cs_deselect();
+
+    absolute_time_t deadline = make_timeout_time_us(SPI_IDLE_TIMEOUT_US);
+    for (;;) {
+        uint8_t st = 0xFF;
+        spi_cmd_read(CMD_SPI_STATUS, NULL, 0, &st, 1);
+        if (st & 0xFC) return -4;                 /* MISO stuck high: the iCE40 is not answering */
+        if (!(st & SPI_STATUS_ARMED)) { jtag_armed_local = false; return -3; }
+        if (!(st & SPI_STATUS_BUSY)) break;
+        if (time_reached(deadline)) return -2;
+    }
+    if (nreply == 0 || !reply) return 0;
+    /* SWD_READ repeats reply byte 0: ask for one more, read the lead byte apart and drop it
+       (as emu_read does), so no bounce buffer is needed. */
+    size_t want = nreply + 1;
+    uint8_t rhdr[3] = { CMD_SWD_READ, (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    uint8_t lead;
+    cs_select();
+    int rc = spi_write_blocking(SPI_PORT, rhdr, sizeof(rhdr));
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, &lead, 1);
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, reply, nreply);
+    cs_deselect();
+    return rc == 0 ? 0 : -4;
 }
 
 /* After a stuck or lost transfer: arm again, which releases both lines and clears the flags. */

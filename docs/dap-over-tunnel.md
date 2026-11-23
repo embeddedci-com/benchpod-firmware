@@ -44,7 +44,9 @@ firmware gains a CMSIS-DAP brain, and the host gains a thin pyOCD probe.
 
 A connection enters DAP mode exactly like SWD mode does today:
 
-1. Host sends JSON `{"cmd":"dap_start","swclk":<la>,"swdio":<la>}`, optionally with
+1. Host sends JSON `{"cmd":"dap_start","swclk":<la>,"swdio":<la>}` for SWD, or
+   `{"cmd":"dap_start","tck":<la>,"tms":<la>,"tdi":<la>,"tdo":<la>}` for JTAG (optional
+   `"trst":<la>`, see [JTAG](#jtag)), or both sets, optionally with
    `"packet_size":1024,"packet_count":4` (see [Packet size](#packet-size)) and `"wait_ms":N`
    (up to 10000): before acking, the pod repeats a line reset + DP IDR read until the target
    answers or N ms pass, and logs `[dap] target answered after <ms> ms`.  Send it right after
@@ -82,25 +84,50 @@ The frame length is the only thing we add on top of standard CMSIS-DAP; the
 payload is a verbatim CMSIS-DAP v1 command/response. So the same firmware could
 later be exposed to OpenOCD's `cmsis-dap` driver or probe-rs.
 
-## Firmware: supported CMSIS-DAP commands (SWD only)
+## Firmware: supported CMSIS-DAP commands
 
 | ID | Command | Notes |
 |----|---------|-------|
-| 0x00 | `DAP_Info` | caps=SWD, packet size 256 and count 1 unless `dap_start` asked for more, empty strings |
+| 0x00 | `DAP_Info` | caps: SWD and/or JTAG, as `dap_start` armed pins for them; packet size 256 and count 1 unless `dap_start` asked for more, empty strings |
 | 0x01 | `DAP_HostStatus` | LED — acked, ignored |
-| 0x02 | `DAP_Connect` | SWD only (port 1); JTAG rejected |
+| 0x02 | `DAP_Connect` | port 1 SWD, 2 JTAG, 0 the one armed; a port without pins fails (0); switching re-arms the engine |
 | 0x03 | `DAP_Disconnect` | |
 | 0x04 | `DAP_TransferConfigure` | idle cycles, wait-retry, match-retry |
 | 0x05 | `DAP_Transfer` | posted AP reads + trailing RDBUFF, match value/mask |
 | 0x06 | `DAP_TransferBlock` | block read primes + final RDBUFF; block write |
-| 0x08 | `DAP_WriteABORT` | |
+| 0x08 | `DAP_WriteABORT` | JTAG: the ABORT instruction of the device given |
 | 0x09 | `DAP_Delay` | |
 | 0x0A | `DAP_ResetTarget` | returns "no device-specific sequence" |
-| 0x10 | `DAP_SWJ_Pins` | nRESET (bit7) via the FPGA reset line |
-| 0x11 | `DAP_SWJ_Clock` | acked (rate is SPI-bound, see Perf) |
-| 0x12 | `DAP_SWJ_Sequence` | line reset / JTAG→SWD select |
+| 0x10 | `DAP_SWJ_Pins` | nRESET (bit7) on the pod's reset pin; JTAG: nTRST (bit5) on the `trst` channel |
+| 0x11 | `DAP_SWJ_Clock` | SWCLK of the SWD queue; JTAG: TCK, 24 MHz / (2 x half), 190 kHz to 6 MHz |
+| 0x12 | `DAP_SWJ_Sequence` | SWD: line reset / JTAG→SWD select; JTAG: the bits on TMS, TDI high |
 | 0x13 | `DAP_SWD_Configure` | turnaround period, data phase |
-| 0x1D | `DAP_SWD_Sequence` | generic in/out sequences |
+| 0x14 | `DAP_JTAG_Sequence` | JTAG: run in the gateware as sent, TDO bytes back |
+| 0x15 | `DAP_JTAG_Configure` | the chain: up to 8 devices, their IR lengths (device 0 nearest TDO) |
+| 0x16 | `DAP_JTAG_IDCODE` | JTAG: loads the ARM IDCODE instruction (0xE) and reads the device's DR |
+| 0x1D | `DAP_SWD_Sequence` | SWD only: generic in/out sequences |
+
+DAP_Transfer and DAP_TransferBlock over JTAG are JTAG-DP scans (`dap_jtag.c`, after ARM's
+CMSIS-DAP reference): DPACC/APACC 35-bit DR scans, every other device in BYPASS, reads posted
+and flushed through RDBUFF, a packet that ends with a write checks it with an RDBUFF read, WAIT
+retried as DAP_TransferConfigure says.
+
+## JTAG
+
+Gateware v61 and later carry a JTAG master in the loop and deep images (not in the emulation
+image, which has no room for it; `dap_start` with JTAG pins refuses there with BP0059 or BP0058).
+`dap_start` takes four LA channels, `tck`, `tms`, `tdi` and `tdo`, and an optional `trst`
+(nTRST, driven as an output, released high); nRESET stays on the pod's own reset pin. With both
+the SWD and the JTAG pins, the pod arms SWD first (or JTAG with `"port":"jtag"`), and
+DAP_Connect switches; a pin both use (SWCLK = TCK, SWDIO = TMS on an ARM part) is claimed once.
+`wait_ms` with JTAG first waits for the chain's first IDCODE after Test-Logic-Reset.
+
+The gateware runs DAP_JTAG_Sequence sequences as the host sends them (info byte, TDI bytes):
+TDI and TMS change while TCK is low, TDO is taken at the end of TCK high, TCK rests low. A DAP
+packet's sequences go to the gateware in runs of up to 512 bytes. OpenOCD's cmsis-dap driver
+does everything with DAP_JTAG_Sequence; pyOCD and Keil use DAP_JTAG_Configure, IDCODE and the
+JTAG-DP transfers. Each JTAG-DP scan is one gateware run (its ACK decides what comes next), so
+ARM over JTAG is slower than over SWD, whose transfers queue in the gateware.
 
 Unknown commands return `0xFF` (DAP_Invalid), matching the spec.
 
@@ -181,6 +208,5 @@ STM32 -> iCE40 link; neither affects internet latency.
 
 ## What this is NOT
 
-- SWD/DAP is ARM-Cortex (CoreSight) only. ESP32 (Xtensa / RISC-V) and RISC-V
-  parts need a different transport — out of scope here.
-- No gateware change, no server change. Firmware + host library only.
+- SWD/DAP is ARM-Cortex (CoreSight) only. Other JTAG targets (RISC-V, the classic ESP32, FPGAs,
+  boundary scan) go through OpenOCD's JTAG layer, which only needs DAP_JTAG_Sequence.

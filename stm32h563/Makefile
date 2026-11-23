@@ -98,6 +98,8 @@ C_SOURCES := \
   src/xfer.c \
   src/dma_wait.c \
   src/dap.c \
+  src/dap_jtag.c \
+  src/jtag_ll.c \
   src/swd_ll.c \
   src/i2c_bus.c \
   src/la_pull.c \

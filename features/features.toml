@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 15
+revision = 16
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -970,3 +970,12 @@ firmware = "4.0.3"
 dated = "code"
 docs = "API.md#usb_flash--flash-a-board-over-usb"
 note = "usb_flash mode picoboot: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350) in BOOTSEL through its PICOBOOT interface: exclusive access, exit XIP, erase the 4 KB sectors the image covers, write 256-byte pages at address (default 0x10000000), read every page back and compare, then reboot into the program (leave false stays in BOOTSEL). Any other board is refused with BP0084."
+
+[features.jtag]
+rev = 16
+firmware = "next"
+gateware = 61
+gw_const = "JTAG_MIN_GW"
+dated = "code"
+docs = "dap-over-tunnel.md#jtag"
+note = "dap_start with tck, tms, tdi and tdo (optional trst) makes the pod a CMSIS-DAP JTAG probe: DAP_JTAG_Sequence, DAP_JTAG_Configure, DAP_JTAG_IDCODE and JTAG-DP transfers; with SWD pins too, DAP_Connect switches. Loop and deep images only (not the emulation image): BP0058 / BP0059 there, BP0017 on older gateware."

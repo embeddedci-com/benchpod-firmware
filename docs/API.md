@@ -2230,6 +2230,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `gpio` | [`gpio`](#gpio--use-la-pins-as-gpio) with mode `input` / `output` / `open_drain` | `gpio` mode `off` |
 | `uart_rx`, `uart_tx`, `uart_hd`, `uart_de` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
+| `jtag_tck`, `jtag_tms`, `jtag_tdi`, `jtag_tdo`, `jtag_trst` | `dap_start` with JTAG pins (gateware v61+, see [dap-over-tunnel.md](dap-over-tunnel.md#jtag)) | the same as SWD |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
 | `step`, `step_dir` | the [`la_step` train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |

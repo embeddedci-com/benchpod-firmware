@@ -30,7 +30,8 @@ SENSORMGR_SRCS := test_sensor_mgr.c fake_fpga_emu.c $(SENSORDEF_CORE) ../src/sen
                   ../src/la_pins.c ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/board_caps.c ../src/bp_json.c ../src/bp_errors.c
 SENSORDEF_FUZZ_SRCS := test_sensor_def_fuzz.c $(SENSORDEF_CORE)
 SANITIZE := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
-DAP_SRCS      := test_dap.c ../src/dap.c mocks/mock_swd_ll.c
+DAP_SRCS      := test_dap.c ../src/dap.c ../src/dap_jtag.c mocks/mock_swd_ll.c mocks/mock_jtag_ll.c
+DAPJ_SRCS     := test_dap_jtag.c ../src/dap.c ../src/dap_jtag.c mocks/mock_swd_ll.c mocks/mock_jtag_ll.c
 SWDLL_SRCS    := test_swd_ll.c ../src/gw_caps.c ../src/swd_ll.c
 NET_DHCP_SRCS := test_net_dhcp.c ../src/net_dhcp.c
 NET_ROUTE_SRCS := test_net_route.c ../src/net_route.c
@@ -208,9 +209,13 @@ build/test_sensor_def_fuzz: $(SENSORDEF_FUZZ_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -O1 -g -ffp-contract=off $(SANITIZE) $(SENSORDEF_FUZZ_SRCS) -lm -o $@
 
-build/test_dap: $(DAP_SRCS) mocks/mock_swd_ll.h
+build/test_dap: $(DAP_SRCS) mocks/mock_swd_ll.h mocks/mock_jtag_ll.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(DAP_SRCS) -lm -o $@
+
+build/test_dap_jtag: $(DAPJ_SRCS) mocks/mock_swd_ll.h mocks/mock_jtag_ll.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(DAPJ_SRCS) -lm -o $@
 
 build/test_swd_ll: $(SWDLL_SRCS)
 	@mkdir -p build
@@ -648,7 +653,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_xspi_guard build/test_msc_flash build/test_usb_flash_wait build/test_ctrl_flash build/test_ser_flash build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_usb_host_desc build/test_usb_check build/test_picoboot build/test_usb_hid build/test_usb_serial_con build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_dac_link build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_lan_clients build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_mdns_nsec build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status build/test_lan_tls_resume $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_dap_jtag build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_xspi_guard build/test_msc_flash build/test_usb_flash_wait build/test_ctrl_flash build/test_ser_flash build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_usb_host_desc build/test_usb_check build/test_picoboot build/test_usb_hid build/test_usb_serial_con build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_dac_link build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_lan_clients build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_mdns_nsec build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status build/test_lan_tls_resume $(OTA_TARGET)
 
 TESTS += build/test_bp_log build/test_log_level build/test_console_prompt build/test_emi_log build/test_emi_http build/test_recovery
 
@@ -662,6 +667,7 @@ run: $(TESTS)
 	@./build/test_sensor_def_fuzz
 	@./build/test_gps
 	@./build/test_dap
+	@./build/test_dap_jtag
 	@./build/test_swd_ll
 	@./build/test_net_dhcp
 	@./build/test_net_route
