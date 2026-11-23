@@ -70,15 +70,17 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
 - **XIP_RAM=0 (memory-mapped, digital v3r4):** each image at its own W25Q address (usb
   `0x90201000`, prog `0x90241000`), no copy. The linker script keeps three regions for this: `XIP`,
   `XIP_PROG`, and the RAM build's sed swaps both for the same RAM region.
-- Moving the protocols out of internal flash saved 10,136 B of code in both builds:
+- Moving the protocols out of internal flash saved about 10 KB of code in both builds, and no static RAM:
 
 | Build | Internal flash before | after | Static RAM before | after |
 |---|---|---|---|---|
-| release (`make RELEASE=1`) | 896,884 B (97.75%) | 886,748 B (96.65%) | 630,152 B | 630,216 B (+64) |
-| dev (`make`) | 910,412 B (99.23%) | 900,276 B (98.12%) | 634,472 B | 634,568 B (+96) |
+| release (`make RELEASE=1`) | 896,884 B (97.75%) | 886,708 B (96.64%) | 630,152 B | 630,152 B |
+| dev (`make`) | 910,412 B (99.23%) | 900,228 B (98.12%) | 634,472 B | 634,472 B |
 
-  (`prog_flash` branch `claude/prog-xip-ec5da4`, on top of PR 239, 2026-11-23. The static RAM
-  difference is the second image's table descriptor and the job's session bookkeeping.)
+  (Measured 2026-11-23 on the branch that adds the second image, on top of the `reset` pin
+  change of PR 239. The expected-hash records of the two images are in internal flash and are
+  also the blobs' manifest entries, so the image bookkeeping takes no RAM.) The EMC test build
+  (`EMI_TEST=1`) overflows its RAM by 24 B before and after this change.
 - What stays in internal flash: the protocol metadata (`prog_flash.c`: name, uart, uses_nrst,
   mems), `prog_job.c`, `prog_wire.c` (its functions are the callbacks the job stores in
   `prog_wire_ops_t`, and internal code may not hold pointers to XIP functions) and the command.
