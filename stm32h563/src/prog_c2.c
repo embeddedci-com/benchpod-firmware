@@ -299,11 +299,103 @@ static int c2_erase(prog_ctx_t *ctx) {
     return rc ? rc : erase_page(ctx);
 }
 
-static int c2_unsupported(prog_ctx_t *ctx) { (void)ctx; return PROG_E_UNSUPPORTED; }
+/* ---- block write (verified) and block read ---- */
+
+/* Length of the block at image offset off: up to 256 bytes, inside one flash page. */
+static uint32_t block_len(const prog_ctx_t *ctx, uint32_t off, bool paged) {
+    uint32_t n = ctx->len - off;
+    if (n > BLOCK_MAX) n = BLOCK_MAX;
+    if (paged && ctx->page) {
+        uint32_t room = ctx->page - (ctx->addr + off) % ctx->page;
+        if (n > room) n = room;
+    }
+    return n;
+}
+
+/* Block command header: command, status, address (hi, lo), length (0 = 256), status. */
+static int block_open(prog_ctx_t *ctx, uint8_t cmd, uint32_t a, uint32_t n) {
+    int rc = fpi_put(ctx, cmd);
+    if (!rc) rc = fpi_status(ctx);
+    if (rc) return rc == E_STAT ? PROG_E_LOCKED : rc;   /* a locked chip refuses flash access */
+    rc = fpi_put(ctx, (uint8_t)(a >> 8));
+    if (!rc) rc = fpi_put(ctx, (uint8_t)a);
+    if (!rc) rc = fpi_put(ctx, (uint8_t)n);
+    if (!rc) rc = fpi_status(ctx);
+    return rc == E_STAT ? PROG_E_PROTOCOL : rc;
+}
+
+/* Read n bytes of the block just opened; to dst (off) or compared against the image. */
+static int block_stream_read(prog_ctx_t *ctx, uint32_t off, uint32_t n, bool verify) {
+    uint8_t buf[PIECE], ref[PIECE];
+    for (uint32_t i = 0; i < n; i += PIECE) {
+        uint32_t k = n - i < PIECE ? n - i : PIECE;
+        if (verify && ctx->src(ctx->job, off + i, ref, k) != 0) return PROG_E_SRC;
+        for (uint32_t j = 0; j < k; j++) {
+            int rc = fpi_get(ctx, &buf[j]);
+            if (rc) return rc;
+        }
+        if (verify) {
+            for (uint32_t j = 0; j < k; j++)
+                if (buf[j] != ref[j]) { ctx->at_addr = ctx->addr + off + i + j; return PROG_E_VERIFY; }
+        } else if (ctx->dst(ctx->job, off + i, buf, k) != 0) return PROG_E_SRC;
+    }
+    return PROG_OK;
+}
+
+static int c2_write(prog_ctx_t *ctx) {
+    c2_state_t *st = ST(ctx);
+    int rc = range_ok(ctx);
+    if (rc) return rc;
+    if (!st->w_init) {
+        st->w_init = 1; st->pos = 0; ctx->done = 0; ctx->total = 0;
+        for (uint32_t o = 0; o < ctx->len; o += block_len(ctx, o, true)) ctx->total++;
+    }
+    uint32_t off = st->pos, n = block_len(ctx, off, true), a = ctx->addr + off;
+    ctx->phase = "write";
+    rc = block_open(ctx, FPI_BLOCK_WR, a, n);
+    for (uint32_t i = 0; !rc && i < n;) {
+        uint8_t buf[PIECE];
+        uint32_t k = n - i < PIECE ? n - i : PIECE;
+        if (ctx->src(ctx->job, off + i, buf, k) != 0) { rc = PROG_E_SRC; break; }
+        for (uint32_t j = 0; !rc && j < k; j++) rc = fpi_put(ctx, buf[j]);
+        i += k;
+    }
+    if (!rc) { rc = fpi_status(ctx); if (rc == E_STAT) rc = PROG_E_PROTOCOL; }
+    if (!rc && ctx->mem == PROG_MEM_FLASH) {   /* the lock byte is not read back: once set, reads are refused */
+        ctx->phase = "verify";
+        rc = block_open(ctx, FPI_BLOCK_RD, a, n);
+        if (!rc) rc = block_stream_read(ctx, off, n, true);
+    }
+    if (rc) { st->w_init = 0; return rc; }
+    st->pos = off + n;
+    ctx->done++;
+    if (st->pos >= ctx->len) { st->w_init = 0; return PROG_OK; }
+    return PROG_RUNNING;
+}
+
+static int c2_read(prog_ctx_t *ctx) {
+    c2_state_t *st = ST(ctx);
+    int rc = range_ok(ctx);
+    if (rc) return rc;
+    if (!st->r_init) {
+        st->r_init = 1; st->pos = 0; ctx->done = 0;
+        ctx->total = (ctx->len + BLOCK_MAX - 1u) / BLOCK_MAX;
+    }
+    uint32_t off = st->pos, n = block_len(ctx, off, false);
+    ctx->phase = "read";
+    rc = block_open(ctx, FPI_BLOCK_RD, ctx->addr + off, n);
+    if (!rc) rc = block_stream_read(ctx, off, n, false);
+    if (rc) { st->r_init = 0; return rc; }
+    st->pos = off + n;
+    ctx->done++;
+    if (st->pos >= ctx->len) { st->r_init = 0; return PROG_OK; }
+    return PROG_RUNNING;
+}
+
 
 const prog_proto_t prog_proto_c2 = {
     .name = "c2", .uart = false, .uses_nrst = false,
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG),
-    .enter = c2_enter, .erase = c2_erase, .write = c2_unsupported, .read = c2_unsupported,
+    .enter = c2_enter, .erase = c2_erase, .write = c2_write, .read = c2_read,
     .leave = c2_leave,
 };

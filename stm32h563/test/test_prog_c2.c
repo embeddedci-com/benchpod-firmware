@@ -412,6 +412,136 @@ static void test_erase_page(void) {
     free(r);
 }
 
+static void test_write_read(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK);
+
+    /* 1000 bytes at 0x100: blocks stop at the 512 byte page ends (0x100..0x1FF, 0x200..0x3FF, 0x400..0x4E7) */
+    r->ctx.mem = PROG_MEM_FLASH; r->ctx.addr = 0x100; r->ctx.len = 1000;
+    unsigned calls = 0;
+    CHECK(run(PROTO.write, &r->ctx, &calls) == PROG_OK);
+    CHECK(calls == 4 && r->ctx.total == 4 && r->ctx.done == 4);   /* 256 + 256 + 256 + 232 */
+    CHECK(memcmp(&r->chip.flash[0x100], r->img, 1000) == 0);
+    CHECK(r->chip.flash[0xFF] == 0xFF && r->chip.flash[0x100 + 1000] == 0xFF);
+    CHECK(r->chip.early_fpdat == 0);
+
+    /* read it back, through dst */
+    r->ctx.addr = 0x100; r->ctx.len = 1000;
+    CHECK(run(PROTO.read, &r->ctx, &calls) == PROG_OK);
+    CHECK(calls == 4 && r->ctx.total == 4 && r->ctx.done == 4);
+    CHECK(memcmp(r->rd, &r->chip.flash[0x100], 1000) == 0);
+
+    /* a short odd-sized range, not page aligned */
+    r->ctx.addr = 0x7FD; r->ctx.len = 7;
+    CHECK(run(PROTO.read, &r->ctx, &calls) == PROG_OK);
+    CHECK(calls == 1 && memcmp(r->rd, &r->chip.flash[0x7FD], 7) == 0);
+    check_pins(r);
+    free(r);
+
+    /* 256-byte block with length byte 0, and the top of the 16 bit space */
+    r = malloc(sizeof *r); rig_init(r);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 256; r->ctx.page = 0;     /* page 0: no page limit, one block */
+    CHECK(run(PROTO.write, &r->ctx, &calls) == PROG_OK && calls == 1);
+    CHECK(memcmp(r->chip.flash, r->img, 256) == 0);
+    r->ctx.addr = 0xFFFF; r->ctx.len = 1;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_OK && r->rd[0] == 0xFF);
+    r->ctx.addr = 0xFFFF; r->ctx.len = 2;
+    CHECK(PROTO.read(&r->ctx) == PROG_E_ARGS);
+    r->ctx.addr = 0; r->ctx.len = 0;
+    CHECK(PROTO.write(&r->ctx) == PROG_E_ARGS);
+    r->ctx.mem = PROG_MEM_USER; r->ctx.len = 4;
+    CHECK(PROTO.write(&r->ctx) == PROG_E_ARGS);
+    CHECK(PROTO.read(&r->ctx) == PROG_E_ARGS);
+    check_pins(r);
+    free(r);
+}
+
+static void test_verify_fail(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->chip.corrupt_at = 0x240;                       /* reads back with bit 0 flipped */
+    r->ctx.addr = 0x200; r->ctx.len = 0x100;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_E_VERIFY);
+    CHECK(r->ctx.at_addr == 0x240);
+    check_pins(r);
+    free(r);
+
+    /* writing over programmed flash without an erase: bits cannot go back to 1 */
+    r = malloc(sizeof *r); rig_init(r);
+    r->chip.flash[0x305] = 0x00;
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0x300; r->ctx.len = 16;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == (r->img[5] == 0 ? PROG_OK : PROG_E_VERIFY));
+    CHECK(r->img[5] != 0 && r->ctx.at_addr == 0x305);
+    free(r);
+
+    /* the staged image or the read-back area fails */
+    r = malloc(sizeof *r); rig_init(r);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 64;
+    r->fail_src = 1;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_E_SRC);
+    r->fail_src = 0; r->fail_dst = 1;
+    PROTO.leave(&r->ctx, true);                    /* a failed job leaves: the chip drops the half-sent block */
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 64;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_E_SRC);
+    /* a failed call leaves the state ready for a new one */
+    r->fail_dst = 0;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_OK);
+    check_pins(r);
+    free(r);
+}
+
+static void test_lock(void) {
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK);
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK);
+    r->ctx.addr = 0; r->ctx.len = 512;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
+    /* lock byte last, as the config memory: written without read-back (it would be refused) */
+    r->ctx.mem = PROG_MEM_CONFIG; r->ctx.addr = LOCK_ADDR; r->ctx.len = 1;
+    r->img[0] = 0x00;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->chip.locked && r->chip.flash[LOCK_ADDR] == 0x00);
+    PROTO.leave(&r->ctx, true);
+
+    /* a new session: the ID still reads, flash access is refused */
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK && r->ctx.id[0] == 0x32);
+    r->ctx.mem = PROG_MEM_FLASH; r->ctx.addr = 0; r->ctx.len = 64;
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_E_LOCKED);
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_E_LOCKED);
+    r->ctx.erase = PROG_ERASE_PAGE;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_E_LOCKED);
+    CHECK(r->chip.locked);
+    CHECK(r->chip.flash[0] != 0xFF);                   /* nothing was erased */
+
+    /* only a device erase unlocks */
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK(run(PROTO.erase, &r->ctx, NULL) == PROG_OK);
+    CHECK(!r->chip.locked);
+    CHECK(run(PROTO.read, &r->ctx, NULL) == PROG_OK);
+    CHECK(r->rd[0] == 0xFF && r->rd[63] == 0xFF);
+    check_pins(r);
+    free(r);
+}
+
+static void test_busy_chip(void) {
+    /* a chip that keeps WAIT low a long time (but not forever) still works */
+    rig_t *r = malloc(sizeof *r); rig_init(r);
+    r->chip.wait_cycles = 40;
+    CHECK(run(PROTO.enter, &r->ctx, NULL) == PROG_OK && r->ctx.id[0] == 0x32);
+    r->ctx.addr = 0; r->ctx.len = 40;
+    CHECK(run(PROTO.write, &r->ctx, NULL) == PROG_OK);
+    CHECK(memcmp(r->chip.flash, r->img, 40) == 0);
+    check_pins(r);
+    free(r);
+}
+
 int main(void) {
     CHECK(strcmp(PROTO.name, "c2") == 0);
     test_enter();
@@ -419,6 +549,10 @@ int main(void) {
     test_leave();
     test_erase_device();
     test_erase_page();
+    test_write_read();
+    test_verify_fail();
+    test_lock();
+    test_busy_chip();
     printf("test_prog_c2: %s\n", failures ? "FAILED" : "ok");
     return failures ? 1 : 0;
 }
