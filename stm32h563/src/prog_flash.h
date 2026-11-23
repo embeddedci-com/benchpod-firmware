@@ -75,38 +75,107 @@ typedef struct {
 } prog_ctx_t;
 #define PROG_STATE_BYTES 192u
 
+/* What the pod knows about a protocol without running it: the request checks in prog_flash and the
+   job read these. Internal flash (prog_flash.c). The protocol code itself runs from the W25Q
+   (xip_image.h, image "prog"): internal code reaches it only through prog_xip_call(). */
 typedef struct {
     const char *name;        /* "updi", "pic", "c2", "tpi", "pdi" */
     bool        uart;        /* true: one pin over the UART engine (UPDI); false: clk + data */
     bool        uses_nrst;   /* true: the pod's reset pin is part of the wiring (PIC MCLR, TPI RESET) */
     uint8_t     mems;        /* bit mask of prog_mem_t it supports */
-    /* Enter programming mode and read the ID into ctx->id. */
+    uint8_t     id;          /* prog_proto_id_t: the protocol's number in the XIP dispatch */
+} prog_proto_info_t;
+
+typedef enum { PROG_PROTO_UPDI = 0, PROG_PROTO_PIC, PROG_PROTO_C2, PROG_PROTO_TPI, PROG_PROTO_PDI,
+               PROG_PROTO_COUNT } prog_proto_id_t;
+
+/* The metadata, once per protocol: used by prog_flash.c's table and by the protocol's own source. */
+#define PROG_INFO_UPDI .name = "updi", .uart = true,  .uses_nrst = false, .id = PROG_PROTO_UPDI, \
+    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER)
+#define PROG_INFO_PIC  .name = "pic",  .uart = false, .uses_nrst = true,  .id = PROG_PROTO_PIC, \
+    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER)
+#define PROG_INFO_C2   .name = "c2",   .uart = false, .uses_nrst = false, .id = PROG_PROTO_C2, \
+    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG)
+#define PROG_INFO_TPI  .name = "tpi",  .uart = false, .uses_nrst = true,  .id = PROG_PROTO_TPI, \
+    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG)
+#define PROG_INFO_PDI  .name = "pdi",  .uart = false, .uses_nrst = false, .id = PROG_PROTO_PDI, \
+    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER)
+
+/* What a protocol does, by operation: the `op` of prog_xip_call(). The job owns the sequence. */
+typedef enum {
+    PROG_XOP_ENTER = 0,   /* enter programming mode and read the ID into ctx->id */
+    PROG_XOP_ERASE,       /* the erase ctx->erase asks for */
+    PROG_XOP_WRITE,       /* next page of [addr, addr+len) from src, verified */
+    PROG_XOP_READ,        /* next block of [addr, addr+len) to dst */
+    PROG_XOP_LEAVE,       /* leave programming mode, the chip stays in reset or idle */
+    PROG_XOP_LEAVE_RUN,   /* leave programming mode and let the chip start its program */
+} prog_xop_t;
+
+/* Run one operation of protocol `proto` (prog_proto_id_t): the protocol code in the "prog" XIP
+   image, so a session for that image must be active (the job holds it from start to end). Returns
+   what the protocol call returns (PROG_RUNNING, PROG_OK, prog_rc_t error); leave returns PROG_OK.
+   Defined in prog_job.c; on the pod it calls the image's table entry XIP_PROG_FN_CALL. */
+int prog_xip_call(prog_ctx_t *ctx, unsigned proto, unsigned op);
+
+/* The metadata table (prog_flash.c): one entry per protocol built in. */
+const prog_proto_info_t *prog_proto_find(const char *name);
+size_t prog_proto_count(void);
+const prog_proto_info_t *prog_proto_at(size_t i);
+
+/* Each prog_<proto>.c defines its entry, which the XIP image's dispatch (xip_mod_prog.c) calls:
+   `op` is a prog_xop_t. Plain C, so host tests link the sources directly. */
+int prog_updi_call(prog_ctx_t *ctx, unsigned op);
+int prog_pic_call(prog_ctx_t *ctx, unsigned op);
+int prog_c2_call(prog_ctx_t *ctx, unsigned op);
+int prog_tpi_call(prog_ctx_t *ctx, unsigned op);
+int prog_pdi_call(prog_ctx_t *ctx, unsigned op);
+
+/* Host tests (and nothing on the pod) call a protocol's steps through this struct: every
+   prog_<proto>.c defines one with PROG_PROTO() unless the firmware build says PROG_XIP (the
+   function pointers would sit inside the XIP image, which the rules in xip_image.h forbid). */
+typedef struct {
+    const char *name;
+    bool        uart;
+    bool        uses_nrst;
+    uint8_t     mems;
+    uint8_t     id;
     int (*enter)(prog_ctx_t *ctx);
-    int (*erase)(prog_ctx_t *ctx);        /* the erase ctx->erase asks for */
-    int (*write)(prog_ctx_t *ctx);        /* next page of [addr, addr+len) from src, verified */
-    int (*read)(prog_ctx_t *ctx);         /* next block of [addr, addr+len) to dst */
-    /* Leave programming mode; run = let the chip start its program. Always called, also after errors. */
+    int (*erase)(prog_ctx_t *ctx);
+    int (*write)(prog_ctx_t *ctx);
+    int (*read)(prog_ctx_t *ctx);
     void (*leave)(prog_ctx_t *ctx, bool run);
 } prog_proto_t;
 
-/* The table (prog_flash.c): one entry per protocol built in. */
-const prog_proto_t *prog_proto_find(const char *name);
-size_t prog_proto_count(void);
-const prog_proto_t *prog_proto_at(size_t i);
-
-/* One line per protocol; each prog_<proto>.c defines its symbol. */
-extern const prog_proto_t prog_proto_updi;
-extern const prog_proto_t prog_proto_pic;
-extern const prog_proto_t prog_proto_c2;
-extern const prog_proto_t prog_proto_tpi;
-extern const prog_proto_t prog_proto_pdi;
+/* At the end of prog_<proto>.c: the XIP entry (always) and the test struct (host builds). */
+#define PROG_PROTO(nm, fenter, ferase, fwrite, fread, fleave, INFO)                              \
+    int prog_##nm##_call(prog_ctx_t *c, unsigned op)                                             \
+    {                                                                                            \
+        switch (op) {                                                                            \
+        case PROG_XOP_ENTER:     return fenter(c);                                               \
+        case PROG_XOP_ERASE:     return ferase(c);                                               \
+        case PROG_XOP_WRITE:     return fwrite(c);                                               \
+        case PROG_XOP_READ:      return fread(c);                                                \
+        case PROG_XOP_LEAVE:     fleave(c, false); return PROG_OK;                               \
+        case PROG_XOP_LEAVE_RUN: fleave(c, true);  return PROG_OK;                               \
+        default:                 return PROG_E_ARGS;                                             \
+        }                                                                                        \
+    }                                                                                            \
+    PROG_PROTO_STRUCT(nm, fenter, ferase, fwrite, fread, fleave, INFO)
+#if defined(PROG_XIP)
+#define PROG_PROTO_STRUCT(nm, fenter, ferase, fwrite, fread, fleave, ...)
+#else
+#define PROG_PROTO_STRUCT(nm, fenter, ferase, fwrite, fread, fleave, ...)                       \
+    const prog_proto_t prog_proto_##nm = { __VA_ARGS__, .enter = fenter, .erase = ferase,               \
+        .write = fwrite, .read = fread, .leave = fleave };
+#endif
+extern const prog_proto_t prog_proto_updi, prog_proto_pic, prog_proto_c2, prog_proto_tpi, prog_proto_pdi;
 
 /* ---- the job (prog_flash.c), on the hw worker ---- */
 
 typedef enum { PROG_OP_INFO = 0, PROG_OP_START } prog_op_t;
 
 typedef struct {
-    const prog_proto_t *proto;
+    const prog_proto_info_t *proto;
     uint8_t  op;              /* prog_op_t */
     uint8_t  clk, data;       /* LA channels (UPDI: data only) */
     uint8_t  mem, erase;
