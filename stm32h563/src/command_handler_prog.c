@@ -128,8 +128,8 @@ void handle_prog_flash(int conn_id, const char *json) {
     }
 
     if (!info) {
-        char mem[10] = "flash";
-        bp_json_get(json, "mem", mem, sizeof(mem));
+        char mem[10];
+        if (!bp_json_get(json, "mem", mem, sizeof(mem))) strcpy(mem, "flash");   /* absent: flash */
         p.mem = PROG_MEM_COUNT;
         for (uint8_t i = 0; i < PROG_MEM_COUNT; i++) if (strcmp(mem, k_mems[i]) == 0) p.mem = i;
         if (p.mem == PROG_MEM_COUNT) { send_error(conn_id, "mem must be flash, eeprom, config or user"); return; }
@@ -140,8 +140,8 @@ void handle_prog_flash(int conn_id, const char *json) {
             send_error(conn_id, "missing or invalid page (the chip's write page in bytes, 1..4096)"); return;
         }
         p.page = (uint16_t)page;
-        char er[8] = "page";
-        bp_json_get(json, "erase", er, sizeof(er));
+        char er[8];
+        if (!bp_json_get(json, "erase", er, sizeof(er))) strcpy(er, "page");      /* absent: page */
         if (strcmp(er, "chip") == 0)      p.erase = PROG_ERASE_CHIP;
         else if (strcmp(er, "page") == 0) p.erase = PROG_ERASE_PAGE;
         else if (strcmp(er, "none") == 0) p.erase = PROG_ERASE_NONE;
