@@ -129,6 +129,12 @@ does everything with DAP_JTAG_Sequence; pyOCD and Keil use DAP_JTAG_Configure, I
 JTAG-DP transfers. Each JTAG-DP scan is one gateware run (its ACK decides what comes next), so
 ARM over JTAG is slower than over SWD, whose transfers queue in the gateware.
 
+Measured on a NUCLEO-F446RE (2026-11-23, USB network adapter, OpenOCD cmsis-dap): the chain reads
+0x4BA00477 (Cortex-M4 JTAG-DP) and 0x06421041 (boundary scan); OpenOCD programs and verifies a
+52 KB image in 8.2 s over JTAG against 3.4 s over SWD. The JTAG time does not change with TCK
+(1 to 6 MHz): OpenOCD's JTAG path is bound by packet round trips. SVF playback (OpenOCD `svf`)
+works on the same sequences, TDO compares included.
+
 Unknown commands return `0xFF` (DAP_Invalid), matching the spec.
 
 The SWD line layer (`swd_ll.c`) implements one transfer as **two** `fpga_swd_feed`
