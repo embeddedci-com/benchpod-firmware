@@ -35,7 +35,13 @@ typedef struct {
     uint32_t block_size;    /* bytes per sector it reports (only 512 is taken) */
 } msc_flash_ops_t;
 
-typedef enum { MSC_FLASH_UF2 = 0, MSC_FLASH_FILE = 1 } msc_flash_mode_t;
+/* READ and VERIFY run after a flash, on the drive that came back (usb_flash.c does the waiting):
+ *  - READ: find `name83` in the root directory and read its first bytes into `out` (found = 1), e.g.
+ *    FAIL.TXT, which DAPLink loaders write after a failed copy. Not found is a result, not an error.
+ *  - VERIFY: the staged UF2 file against the drive's CURRENT.UF2 (the loader's flash contents as
+ *    UF2 blocks): each block of the file is looked up by its target address and its payload compared.
+ *    MSC_FLASH_E_NOFILE when the drive has no such file (the board left its loader). */
+typedef enum { MSC_FLASH_UF2 = 0, MSC_FLASH_FILE = 1, MSC_FLASH_READ = 2, MSC_FLASH_VERIFY = 3 } msc_flash_mode_t;
 
 typedef enum {
     MSC_FLASH_RUNNING = 1,
@@ -49,12 +55,16 @@ typedef enum {
     MSC_FLASH_E_ARGS = -7,        /* bad mode, name or length */
     MSC_FLASH_E_ABORTED = -8,     /* stopped by the client (usb_flash.c, not the steps) */
     MSC_FLASH_E_EXFAT = -9,       /* an exFAT drive */
+    MSC_FLASH_E_VERIFY = -10,     /* VERIFY: the drive holds something else than the file */
+    MSC_FLASH_E_NOFILE = -11,     /* VERIFY: the drive has no CURRENT.UF2 */
+    MSC_FLASH_E_LOADER = -12,     /* the loader reported a failure (usb_flash.c, from FAIL.TXT) */
 } msc_flash_rc_t;
 
 typedef enum {
     MSC_PH_START = 0, MSC_PH_UF2, MSC_PH_DIR_SCAN, MSC_PH_FAT_SCAN, MSC_PH_DATA, MSC_PH_FAT,
     MSC_PH_DIR, MSC_PH_DONE,
-    MSC_PH_DIR_ZERO, MSC_PH_FREE_OLD, MSC_PH_FSINFO     /* FAT32 only */
+    MSC_PH_DIR_ZERO, MSC_PH_FREE_OLD, MSC_PH_FSINFO,    /* FAT32 only */
+    MSC_PH_FIND, MSC_PH_READ, MSC_PH_VERIFY, MSC_PH_WAIT  /* READ and VERIFY; WAIT: usb_flash.c */
 } msc_flash_phase_t;
 
 typedef struct {
@@ -89,6 +99,15 @@ typedef struct {
     uint32_t root_clus, fsi_lba, fsi_free, hint;   /* root cluster; FSInfo sector, count, next free */
     uint32_t dir_clus, dir_last, dir_n;            /* root chain: current, last, clusters seen */
     uint32_t old_first, free_cur, free_n, freed;   /* a replaced file's chain, clusters freed */
+    /* READ and VERIFY */
+    uint8_t  found;              /* READ: the file is in the root directory */
+    uint8_t  vf_stage;           /* VERIFY: 0 file head, 1 next block, 2 walk to its cluster, 3 compare */
+    uint16_t out_len;            /* READ: bytes in out */
+    uint32_t f_clus, f_size;     /* the file found: first cluster, bytes */
+    uint32_t vf_base, vf_plen, vf_sec;   /* VERIFY: address of the file's first block, payload size,
+                                            sector of the block being checked */
+    uint32_t vf_clus, vf_idx;    /* VERIFY: the cluster walked to, its index in the file */
+    uint8_t  out[128];           /* READ: the file's first bytes */
     uint8_t  buf[2 * MSC_FLASH_SECTOR];   /* two sectors: a FAT12 entry can straddle them */
 } msc_flash_ctx_t;
 

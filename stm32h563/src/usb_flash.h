@@ -38,6 +38,10 @@ typedef struct {
                                esp: flash offset (0 for a merged image) */
     uint16_t block;         /* teensy: 1024 (default) or 512 (Teensy LC) */
     bool     leave;         /* dfu, teensy, avr, samd, esp: start the new firmware at the end */
+    bool     check_fail_txt; /* file: after the copy, wait for the drive to come back and read
+                                FAIL.TXT (DAPLink writes it, with the reason, after a failed copy) */
+    bool     verify;        /* uf2: after the last block, if the drive is (still or again) the loader,
+                               compare its CURRENT.UF2 with the file; skipped when the board left */
 } usb_flash_params_t;
 
 /* 0 = started; -1 = refused (BP0084 `why`); -2 = the W25Q code cannot run (BP0083 `why`). */
@@ -53,6 +57,7 @@ typedef struct {
     int         rc;
     uint32_t    done, total, len, ms, address;
     char        name[16];
+    char        note[64];   /* what the read-back found (FAIL.TXT's first line, verify result), or "" */
 } usb_flash_status_t;
 void usb_flash_status(usb_flash_status_t *st);
 

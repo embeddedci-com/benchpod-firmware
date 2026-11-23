@@ -18,6 +18,9 @@ const char *msc_flash_rc_str(int rc)
     case MSC_FLASH_E_ARGS:    return "bad mode, name or length";
     case MSC_FLASH_E_ABORTED: return "aborted";
     case MSC_FLASH_E_EXFAT:   return "exFAT is not supported";
+    case MSC_FLASH_E_VERIFY:  return "the drive's flash contents differ from the file";
+    case MSC_FLASH_E_NOFILE:  return "the drive has no CURRENT.UF2";
+    case MSC_FLASH_E_LOADER:  return "the loader reported a failure";
     default:                  return "?";
     }
 }
@@ -25,7 +28,8 @@ const char *msc_flash_rc_str(int rc)
 const char *msc_flash_phase_str(int phase)
 {
     static const char *const k[] = { "start", "uf2", "directory", "free space", "data", "fat",
-                                      "entry", "done", "new directory block", "old file", "fsinfo" };
+                                      "entry", "done", "new directory block", "old file", "fsinfo",
+                                      "find file", "read file", "verify", "wait for drive" };
     return (phase >= 0 && phase < (int)(sizeof(k) / sizeof(k[0]))) ? k[phase] : "?";
 }
 

@@ -776,6 +776,181 @@ static void test_fat32(void)
     test_fat32_other();
 }
 
+/* ---- READ and VERIFY (after a flash, on the drive that came back) ----------------------------- */
+
+/* A file in the root directory of a FAT16 volume (FAT32 when f32 != NULL), clusters from `first`,
+   in order or (frag) every other one first. Returns nothing; the chain goes in every FAT copy. */
+static uint32_t next_free_cluster;
+static void put_file(rig_t *r, geo_t g, t32_t *f32, const char *name83, const uint8_t *data, uint32_t len,
+                     int frag, uint32_t *first_out)
+{
+    uint32_t spc = f32 ? f32->g.spc : g.spc, csize = spc * 512, ncl = (len + csize - 1) / csize;
+    uint32_t base = next_free_cluster, order[4096];
+    for (uint32_t i = 0; i < ncl; i++) order[i] = base + i;
+    if (frag)   /* swap neighbours: the chain no longer ascends */
+        for (uint32_t i = 0; i + 1 < ncl; i += 2) { uint32_t t = order[i]; order[i] = order[i + 1]; order[i + 1] = t; }
+    next_free_cluster += ncl;
+    for (uint32_t i = 0; i < ncl; i++) {
+        uint32_t nx = i + 1 < ncl ? order[i + 1] : (f32 ? 0x0FFFFFFF : 0xFFFF);
+        if (f32) f32set(f32, order[i], nx);
+        else for (uint32_t k = 0; k < g.nfats; k++)
+            put16(r->disk + (size_t)(g.vol + g.rsv + k * g.fatsz) * 512 + order[i] * 2, nx);
+        uint8_t *dst = f32 ? clus32(f32, order[i])
+                           : r->disk + (size_t)(g.vol + g.rsv + g.nfats * g.fatsz + (g.root_ent * 32 + 511) / 512 +
+                                                (order[i] - 2) * g.spc) * 512;
+        uint32_t off = i * csize, n = len - off < csize ? len - off : csize;
+        memset(dst, 0, csize);
+        memcpy(dst, data + off, n);
+    }
+    uint8_t *dir = f32 ? clus32(f32, 2)
+                       : r->disk + (size_t)(g.vol + g.rsv + g.nfats * g.fatsz) * 512;
+    uint32_t slots = f32 ? spc * 16 : g.root_ent;
+    for (uint32_t i = 0; i < slots; i++) {
+        uint8_t *e = dir + i * 32;
+        if (e[0] != 0 && e[0] != 0xE5) continue;
+        memset(e, 0, 32);
+        memcpy(e, name83, 11); e[11] = 0x20;
+        put16(e + 26, order[0]); put16(e + 20, f32 ? order[0] >> 16 : 0); put32(e + 28, len);
+        break;
+    }
+    if (first_out) *first_out = order[0];
+}
+
+static void test_read_file(void)
+{
+    const char *text = "error: The transfer timed out\nsecond line\n";
+    geo_t g16 = { 63, 4, 4, 2, 512, 40, 40000, 16 };
+    for (int variant = 0; variant < 4; variant++) {
+        rig_t r = { calloc(g16.vol + g16.tot + 8, 512), g16.vol + g16.tot + 8, NULL, 0, 0, 0 };
+        t32_t t;
+        uint8_t src_buf[1024] = {0};
+        msc_flash_ctx_t c;
+        rig_t *rr = &r;
+        if (variant == 3) { g32_t g = { 2048, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 }; mkfs32(&t, g, 512); rr = &t.r; }
+        else mkfs(&r, g16);
+        next_free_cluster = variant == 3 ? 5 : 4;
+        uint8_t big[600]; memset(big, 'x', sizeof(big)); memcpy(big, text, strlen(text));
+        if (variant == 1) {                       /* behind many other root entries */
+            uint8_t *root = r.disk + (size_t)(g16.vol + g16.rsv + g16.nfats * g16.fatsz) * 512;
+            for (int i = 2; i < 300; i++) { memcpy(root + i * 32, "OTHER   TXT", 11); root[i * 32 + 11] = 0x20; }
+        }
+        if (variant == 2) put_file(&r, g16, NULL, "FAIL    TXT", (const uint8_t *)text, 0, 0, NULL);   /* empty */
+        else if (variant == 3) put_file(rr, g16, &t, "FAIL    TXT", big, sizeof(big), 0, NULL);
+        else put_file(&r, g16, NULL, "FAIL    TXT", big, sizeof(big), 0, NULL);
+        rr->file = src_buf;
+        memset(&c, 0, sizeof(c));
+        c.ops = (msc_flash_ops_t){ rr, rd, wr, src, rr->sectors, 512 };
+        c.mode = MSC_FLASH_READ;
+        CHECK(msc_flash_name83("fail.txt", c.name83));
+        CHECK(run(&c, NULL) == MSC_FLASH_DONE);
+        CHECK(c.found == 1);
+        if (variant == 2) CHECK(c.out_len == 0);
+        else { CHECK(c.out_len == 128); CHECK(memcmp(c.out, text, strlen(text)) == 0); }
+        /* No such file. */
+        memset(&c, 0, sizeof(c));
+        c.ops = (msc_flash_ops_t){ rr, rd, wr, src, rr->sectors, 512 };
+        c.mode = MSC_FLASH_READ;
+        CHECK(msc_flash_name83("nothere.txt", c.name83));
+        CHECK(run(&c, NULL) == MSC_FLASH_DONE && c.found == 0 && c.out_len == 0);
+        /* A read-only mode never writes. */
+        CHECK(rr->writes == 0);
+        if (variant == 3) free32(&t); else free(r.disk);
+    }
+
+    /* The whole DAPLink story: a file write, the loader then adds FAIL.TXT (and the drive "comes back"). */
+    uint32_t len = 30000;
+    rig_t r = { calloc(g16.vol + g16.tot + 8, 512), g16.vol + g16.tot + 8, NULL, len, 0, 0 };
+    uint8_t *file = calloc(len, 1);
+    r.file = file;
+    mkfs(&r, g16);
+    msc_flash_ctx_t c;
+    ctx_init(&c, &r, MSC_FLASH_FILE, "firmware.bin", len);
+    CHECK(run(&c, NULL) == MSC_FLASH_DONE);
+    next_free_cluster = 4 + (len + 2047) / 2048 + 2;
+    put_file(&r, g16, NULL, "FAIL    TXT", (const uint8_t *)text, (uint32_t)strlen(text), 0, NULL);
+    ctx_init(&c, &r, MSC_FLASH_READ, "fail.txt", 0);
+    CHECK(run(&c, NULL) == MSC_FLASH_DONE && c.found && c.out_len == strlen(text));
+    CHECK(memcmp(c.out, text, c.out_len) == 0);
+    free(r.disk); free(file);
+}
+
+/* CURRENT.UF2 of a simulated RP2 loader: `nflash` blocks of 256 bytes from 0x10000000. */
+static void make_current(uint8_t *f, uint32_t nflash)
+{
+    make_uf2(f, nflash, 0x10000000);
+}
+
+static void test_verify(void)
+{
+    enum { nflash = 400, nmine = 120 };
+    for (int variant = 0; variant < 4; variant++) {
+        uint8_t *cur = malloc(nflash * 512), *mine = malloc(nmine * 512);
+        make_current(cur, nflash);
+        /* Our file: blocks 50..169 of the flash (addresses from the same base), same payload as the
+           drive holds, but its own block numbering. */
+        make_uf2(mine, nmine, 0x10000000 + 50 * 256);
+        for (uint32_t i = 0; i < nmine; i++) memcpy(mine + i * 512 + 32, cur + (50 + i) * 512 + 32, 256);
+        geo_t g16 = { 63, 4, 4, 2, 512, 40, 40000, 16 };
+        rig_t r = { calloc(g16.vol + g16.tot + 8, 512), g16.vol + g16.tot + 8, mine, nmine * 512, 0, 0 };
+        t32_t t;
+        rig_t *rr = &r;
+        if (variant == 3) { g32_t g = { 0, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 }; mkfs32(&t, g, nmine * 512);
+                            rr = &t.r; rr->file = mine; }
+        else mkfs(&r, g16);
+        next_free_cluster = variant == 3 ? 5 : 4;
+        put_file(rr, g16, variant == 3 ? &t : NULL, "CURRENTUF2", cur, nflash * 512, variant == 1, NULL);
+        msc_flash_ctx_t c;
+        #define VCTX() do { memset(&c, 0, sizeof(c)); c.ops = (msc_flash_ops_t){ rr, rd, wr, src, rr->sectors, 512 }; \
+                            c.mode = MSC_FLASH_VERIFY; c.len = nmine * 512; memcpy(c.name83, "CURRENTUF2", 11); } while (0)
+        VCTX();
+        int steps = 0, rc = run(&c, &steps);
+        CHECK(rc == MSC_FLASH_DONE && c.done == nmine);
+        CHECK(rr->writes == 0);
+        /* The same blocks in reverse order: the chain walk starts over. */
+        uint8_t *rev = malloc(nmine * 512);
+        for (uint32_t i = 0; i < nmine; i++) memcpy(rev + i * 512, mine + (nmine - 1 - i) * 512, 512);
+        rr->file = rev;
+        VCTX();
+        CHECK(run(&c, NULL) == MSC_FLASH_DONE);
+        rr->file = mine;
+        /* One payload byte differs, in the middle and at the end of a block. */
+        for (int where = 0; where < 2; where++) {
+            mine[77 * 512 + 32 + (where ? 255 : 0)] ^= 0x01;
+            VCTX();
+            CHECK(run(&c, NULL) == MSC_FLASH_E_VERIFY && c.pos == 77);
+            mine[77 * 512 + 32 + (where ? 255 : 0)] ^= 0x01;
+        }
+        /* A block the drive does not hold. */
+        put32(mine + 5 * 512 + 12, 0x10000000 + 1000 * 256);
+        VCTX();
+        CHECK(run(&c, NULL) == MSC_FLASH_E_VERIFY);
+        put32(mine + 5 * 512 + 12, 0x10000000 + 55 * 256);
+        put32(mine + 6 * 512 + 12, 0x0F000000);                      /* below the file's base */
+        VCTX();
+        CHECK(run(&c, NULL) == MSC_FLASH_E_VERIFY);
+        put32(mine + 6 * 512 + 12, 0x10000000 + 56 * 256);
+        /* Not whole blocks, or not UF2 blocks. */
+        VCTX(); c.len = nmine * 512 - 1;
+        CHECK(run(&c, NULL) == MSC_FLASH_E_NOT_UF2);
+        mine[9 * 512] ^= 0xFF;
+        VCTX();
+        CHECK(run(&c, NULL) == MSC_FLASH_E_NOT_UF2);
+        mine[9 * 512] ^= 0xFF;
+        /* No CURRENT.UF2 (the board left its loader): its own result. */
+        VCTX(); memcpy(c.name83, "OTHER   UF2", 11);
+        CHECK(run(&c, NULL) == MSC_FLASH_E_NOFILE);
+        /* A file of that name that is no UF2 file. */
+        memset(cur, 0x55, 512);
+        put_file(rr, g16, variant == 3 ? &t : NULL, "NOTUF2  UF2", cur, 512, 0, NULL);
+        VCTX(); memcpy(c.name83, "NOTUF2  UF2", 11);
+        CHECK(run(&c, NULL) == MSC_FLASH_E_NOFILE);
+        /* A write to the drive anywhere would be a bug. */
+        CHECK(rr->writes == 0);
+        free(cur); free(mine); free(rev);
+        if (variant == 3) { t.file = NULL; free32(&t); } else free(r.disk);
+    }
+}
+
 static void test_names(void)
 {
     char n[11];
@@ -802,6 +977,8 @@ int main(void)
     test_file((geo_t){ 0, 1, 1, 1, 128, 160, 20000, 16 }, 513);             /* FAT16, one FAT copy */
     test_refusals();
     test_fat32();
+    test_read_file();
+    test_verify();
     printf("test_msc_flash: %s (%d checks)\n", failures ? "FAILED" : "all passed", checks);
     return failures ? 1 : 0;
 }

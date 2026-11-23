@@ -495,6 +495,120 @@ static int fsinfo_step(msc_flash_ctx_t *c)
     return finish(c, MSC_FLASH_DONE);
 }
 
+/* ---- READ and VERIFY ------------------------------------------------------------------------- */
+
+static uint32_t clus_lba(const msc_flash_ctx_t *c, uint32_t clus, uint32_t sec)
+{
+    return c->data_start + (clus - 2u) * c->spc + sec;
+}
+
+/* The root directory entry `name83`: one sector per step (FAT12/16 root area, or the FAT32 chain). */
+static int find_step(msc_flash_ctx_t *c)
+{
+    const bool f32 = c->fat_bits == 32;
+    bool end = f32 ? c->scan_end != 0 : c->pos >= c->root_secs;
+    if (!end) {
+        uint32_t lba = f32 ? clus_lba(c, c->dir_clus, c->pos) : c->root_start + c->pos;
+        if (c->ops.read(c->ops.io, lba, c->buf, 1) != 0) return finish(c, MSC_FLASH_E_IO);
+        c->fat_cached = NONE;
+        for (uint32_t off = 0; off < MSC_FLASH_SECTOR; off += 32u) {
+            const uint8_t *e = c->buf + off;
+            if (name_matches(e, c->name83)) {
+                c->f_clus = f32 ? (rd16(e + 20) << 16) | rd16(e + 26) : rd16(e + 26);
+                c->f_size = rd32(e + 28);
+                c->found = 1;
+                c->pos = 0;
+                c->phase = c->mode == MSC_FLASH_READ ? MSC_PH_READ : MSC_PH_VERIFY;
+                return MSC_FLASH_RUNNING;
+            }
+            if (e[0] == 0x00) { end = true; break; }
+        }
+        if (!end) {
+            if (!f32) { c->pos++; return MSC_FLASH_RUNNING; }
+            if (++c->pos < c->spc) return MSC_FLASH_RUNNING;
+            c->pos = 0;
+            int32_t nx = fat_entry(c, c->fat_rd, c->dir_clus, false, 0);
+            c->fat_cached = NONE;
+            if (nx < 0) return finish(c, MSC_FLASH_E_IO);
+            if ((uint32_t)nx >= EOC32) c->scan_end = 1;
+            else if ((uint32_t)nx < 2u || (uint32_t)nx >= c->clusters + 2u || ++c->dir_n * c->spc > 4096u)
+                return finish(c, MSC_FLASH_E_FS);
+            else c->dir_clus = (uint32_t)nx;
+            return MSC_FLASH_RUNNING;
+        }
+    }
+    return finish(c, c->mode == MSC_FLASH_READ ? MSC_FLASH_DONE : MSC_FLASH_E_NOFILE);
+}
+
+static int read_step(msc_flash_ctx_t *c)
+{
+    uint32_t n = c->f_size < sizeof(c->out) ? c->f_size : (uint32_t)sizeof(c->out);
+    c->out_len = 0;
+    if (n != 0 && c->f_clus >= 2u && c->f_clus < c->clusters + 2u) {
+        if (c->ops.read(c->ops.io, clus_lba(c, c->f_clus, 0), c->buf, 1) != 0) return finish(c, MSC_FLASH_E_IO);
+        memcpy(c->out, c->buf, n);
+        c->out_len = (uint16_t)n;
+    }
+    return finish(c, MSC_FLASH_DONE);
+}
+
+static int verify_step(msc_flash_ctx_t *c)
+{
+    const uint32_t file_secs = c->f_size / MSC_FLASH_SECTOR;
+    if (c->f_clus < 2u || c->f_clus >= c->clusters + 2u || file_secs == 0) return finish(c, MSC_FLASH_E_NOFILE);
+    switch (c->vf_stage) {
+    case 0:   /* the file's first block gives its base address and payload size */
+        if (c->ops.read(c->ops.io, clus_lba(c, c->f_clus, 0), c->buf, 1) != 0) return finish(c, MSC_FLASH_E_IO);
+        if (uf2_check(c->buf) != 0 || rd32(c->buf + 16) == 0) return finish(c, MSC_FLASH_E_NOFILE);
+        c->vf_base = rd32(c->buf + 12);
+        c->vf_plen = rd32(c->buf + 16);
+        c->vf_clus = c->f_clus;
+        c->vf_idx = 0;
+        c->vf_stage = 1;
+        return MSC_FLASH_RUNNING;
+    case 1: { /* our next block: which sector of the file holds that address */
+        if (c->pos >= c->total) return finish(c, MSC_FLASH_DONE);
+        if (c->ops.src(c->ops.io, c->pos * MSC_FLASH_SECTOR, c->buf, MSC_FLASH_SECTOR) != 0)
+            return finish(c, MSC_FLASH_E_SRC);
+        if (uf2_check(c->buf) != 0) return finish(c, MSC_FLASH_E_NOT_UF2);
+        uint32_t addr = rd32(c->buf + 12), plen = rd32(c->buf + 16);
+        c->fat_cached = NONE;
+        if (plen != c->vf_plen || addr < c->vf_base || (addr - c->vf_base) % plen != 0)
+            return finish(c, MSC_FLASH_E_VERIFY);
+        c->vf_sec = (addr - c->vf_base) / plen;
+        if (c->vf_sec >= file_secs) return finish(c, MSC_FLASH_E_VERIFY);
+        if (c->vf_sec / c->spc < c->vf_idx) { c->vf_clus = c->f_clus; c->vf_idx = 0; }
+        c->vf_stage = 2;
+        return MSC_FLASH_RUNNING;
+    }
+    case 2:   /* walk the file's cluster chain forward, a bounded number of entries per step */
+        for (uint32_t i = 0; i < STEP_ENTRIES && c->vf_idx < c->vf_sec / c->spc; i++) {
+            int32_t nx = fat_entry(c, c->fat_rd, c->vf_clus, false, 0);
+            if (nx < 0) return finish(c, MSC_FLASH_E_IO);
+            if ((uint32_t)nx < 2u || (uint32_t)nx >= c->clusters + 2u) return finish(c, MSC_FLASH_E_VERIFY);
+            c->vf_clus = (uint32_t)nx;
+            c->vf_idx++;
+        }
+        if (c->vf_idx == c->vf_sec / c->spc) c->vf_stage = 3;
+        return MSC_FLASH_RUNNING;
+    default: {   /* compare: our block in buf, the drive's in buf + 512 */
+        if (c->ops.src(c->ops.io, c->pos * MSC_FLASH_SECTOR, c->buf, MSC_FLASH_SECTOR) != 0)
+            return finish(c, MSC_FLASH_E_SRC);
+        if (c->ops.read(c->ops.io, clus_lba(c, c->vf_clus, c->vf_sec % c->spc), c->buf + MSC_FLASH_SECTOR, 1) != 0)
+            return finish(c, MSC_FLASH_E_IO);
+        const uint8_t *a = c->buf, *b = c->buf + MSC_FLASH_SECTOR;
+        if (uf2_check(b) != 0 || rd32(b + 12) != rd32(a + 12) || rd32(b + 16) != rd32(a + 16) ||
+            memcmp(a + 32, b + 32, rd32(a + 16)) != 0)
+            return finish(c, MSC_FLASH_E_VERIFY);
+        c->fat_cached = NONE;
+        c->pos++;
+        c->done = c->pos;
+        c->vf_stage = 1;
+        return MSC_FLASH_RUNNING;
+    }
+    }
+}
+
 /* ---- entry ---------------------------------------------------------------------------------- */
 
 static int start(msc_flash_ctx_t *c)
@@ -507,7 +621,21 @@ static int start(msc_flash_ctx_t *c)
     c->fat_dirty = false;
     c->old_first = c->freed = c->dir_n = 0;
     c->dir_extend = c->scan_end = c->wrapped = 0;
+    c->found = c->vf_stage = 0;
+    c->out_len = 0;
     if (c->ops.block_size != MSC_FLASH_SECTOR) return finish(c, MSC_FLASH_E_SECTOR);
+    if (c->mode == MSC_FLASH_READ || c->mode == MSC_FLASH_VERIFY) {
+        if (c->name83[0] == ' ' || c->name83[0] == 0 || c->ops.block_count == 0) return finish(c, MSC_FLASH_E_ARGS);
+        if (c->mode == MSC_FLASH_VERIFY) {
+            if (c->len == 0 || c->len % MSC_FLASH_SECTOR != 0) return finish(c, MSC_FLASH_E_NOT_UF2);
+            c->total = c->len / MSC_FLASH_SECTOR;
+        }
+        int g = read_geometry(c);
+        if (g != 0) return finish(c, g);
+        c->phase = MSC_PH_FIND;
+        c->dir_clus = c->root_clus;
+        return MSC_FLASH_RUNNING;
+    }
     if (c->len == 0 || c->ops.block_count == 0) return finish(c, MSC_FLASH_E_ARGS);
     c->total = (c->len + MSC_FLASH_SECTOR - 1u) / MSC_FLASH_SECTOR;
     if (c->mode == MSC_FLASH_UF2) {
@@ -544,6 +672,9 @@ int msc_flash_step(msc_flash_ctx_t *c)
     case MSC_PH_DIR_ZERO: return dir_zero_step(c);
     case MSC_PH_FREE_OLD: return free_old_step(c);
     case MSC_PH_FSINFO:   return fsinfo_step(c);
+    case MSC_PH_FIND:     return find_step(c);
+    case MSC_PH_READ:     return read_step(c);
+    case MSC_PH_VERIFY:   return verify_step(c);
     default:              return c->result;
     }
 }

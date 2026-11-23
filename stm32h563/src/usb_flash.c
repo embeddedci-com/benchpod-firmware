@@ -3,6 +3,7 @@
    session's table), and the esp mode around the internal ESP32 flasher. */
 #include "usb_flash.h"
 #include "usb_msc.h"
+#include "usb_flash_wait.h"
 #include "usb_serial.h"
 #include "usb_host.h"
 #include "msc_flash.h"
@@ -31,6 +32,7 @@
 #define RC_ESP_UNVERIFIED 2      /* ESP_ROM_UNVERIFIED, moved off 1 ("running") */
 
 typedef enum { FAM_MSC = 0, FAM_CTRL, FAM_SER, FAM_ESP } family_t;
+enum { POST_NONE = 0, POST_WAIT, POST_RUN };   /* the drive read back after the job */
 typedef enum { ESP_PRE_RESET = 0, ESP_PRE_BACK, ESP_PRE_JOB } esp_pre_t;
 
 static struct {
@@ -41,6 +43,11 @@ static struct {
     uint8_t  mode, phase, proto;
     uint32_t base, done, total, len, address, t0, ms;
     char     name[16];
+    char     note[64];
+    /* read-back after the flash (file: FAIL.TXT, uf2: verify) */
+    uint8_t  post;               /* POST_* */
+    bool     check_fail_txt, verify;
+    uint32_t mounts0;
     /* esp */
     bool     leave;
     uint8_t  esp_pre;
@@ -48,6 +55,7 @@ static struct {
     uint16_t vid, pid;
 } s;
 
+static usb_flash_wait_t s_wait;
 static esp_rom_job_t s_esp;
 static esp_rom_io_t  s_esp_io;
 
@@ -243,6 +251,78 @@ static int esp_poll(void)
     }
 }
 
+static void finish(int rc);
+
+/* ---- reading the drive back ---------------------------------------------------------------- */
+
+static void set_note(const char *t)
+{
+    snprintf(s.note, sizeof(s.note), "%s", t);
+}
+
+/* The first line of FAIL.TXT as a note: printable ASCII only, no quotes (it goes into JSON). */
+static void note_from_text(const uint8_t *b, uint32_t n)
+{
+    uint32_t k = 0;
+    while (k < n && b[k] == ' ') k++;
+    uint32_t o = 0;
+    for (; k < n && b[k] != '\r' && b[k] != '\n' && b[k] != 0 && o + 1 < sizeof(s.note); k++, o++) {
+        char ch = (char)b[k];
+        s.note[o] = (ch < 0x20 || ch > 0x7E) ? ' ' : ch == '"' ? '\'' : ch == '\\' ? '/' : ch;
+    }
+    s.note[o] = 0;
+}
+
+static void post_wait(void)
+{
+    uint32_t blocks = 0, bsize = 0;
+    bool ready = usb_msc_ready(&blocks, &bsize);
+    usb_flash_wait_rc_t w = usb_flash_wait_poll(&s_wait, now_ms(), usb_msc_mounts(), ready);
+    if (w == USB_FLASH_WAIT_PENDING) return;
+    if (w == USB_FLASH_WAIT_TIMEOUT) {
+        set_note(s.verify ? "verify skipped: the board left its bootloader"
+                          : "FAIL.TXT not checked: the drive did not come back");
+        finish(MSC_FLASH_DONE);
+        return;
+    }
+    msc_flash_ctx_t *c = s.ctx;
+    memset(c, 0, sizeof(*c));
+    c->ops = (msc_flash_ops_t){ &s, op_read, op_write, op_src, blocks, bsize };
+    c->mode = s.verify ? MSC_FLASH_VERIFY : MSC_FLASH_READ;
+    memcpy(c->name83, s.verify ? "CURRENTUF2" : "FAIL    TXT", 11);
+    c->len = s.verify ? s.len : 0;
+    s.post = POST_RUN;
+}
+
+/* The outcome of the read-back step, as the job's result. */
+static int post_result(int rc)
+{
+    const msc_flash_ctx_t *c = s.ctx;
+    if (s.verify) {
+        if (rc == MSC_FLASH_DONE) {
+            snprintf(s.note, sizeof(s.note), "verified %lu blocks", (unsigned long)c->done);
+            return rc;
+        }
+        if (rc == MSC_FLASH_E_VERIFY) {
+            snprintf(s.note, sizeof(s.note), "block %lu differs", (unsigned long)c->pos);
+            return rc;
+        }
+        if (rc == MSC_FLASH_E_NOFILE || rc == MSC_FLASH_E_FS || rc == MSC_FLASH_E_SECTOR ||
+            rc == MSC_FLASH_E_IO || rc == MSC_FLASH_E_EXFAT) {
+            set_note("verify skipped: the board left its bootloader");
+            return MSC_FLASH_DONE;
+        }
+        return rc;
+    }
+    if (rc == MSC_FLASH_DONE && c->found) {
+        note_from_text(c->out, c->out_len);
+        if (!s.note[0]) set_note("FAIL.TXT is empty");
+        return MSC_FLASH_E_LOADER;
+    }
+    if (rc != MSC_FLASH_DONE) set_note("FAIL.TXT not checked: the drive did not answer");
+    return MSC_FLASH_DONE;
+}
+
 /* ---- the job -------------------------------------------------------------------------------- */
 
 bool usb_flash_busy(void) { return s.running; }
@@ -314,6 +394,7 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     }
     char n83[11];
     if (p->mode == USB_FLASH_FILE && !msc_flash_name83(p->name, n83)) { *why = "name must be an 8.3 file name"; return -1; }
+    if (p->mode == USB_FLASH_UF2) memset(n83, ' ', sizeof(n83));
     uint32_t base = 0, staged = 0;
     if (!command_handler_psram_stage(&base, &staged)) { *why = "nothing staged: load_bin with \"psram\":true first"; return -1; }
     if (p->len == 0 || p->len > staged) { *why = "len is 0 or more than the staged upload"; return -1; }
@@ -370,6 +451,9 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     s.len = p->len;
     s.address = p->address;
     s.leave = p->leave;
+    s.check_fail_txt = p->mode == USB_FLASH_FILE && p->check_fail_txt;
+    s.verify = p->mode == USB_FLASH_UF2 && p->verify;
+    s.mounts0 = usb_msc_mounts();
     snprintf(s.name, sizeof(s.name), "%s", p->mode == USB_FLASH_FILE ? p->name : "");
     s.t0 = now_ms();
     s.have_result = false;
@@ -384,6 +468,7 @@ void usb_flash_poll(void)
     usb_host_info_t hi;
     usb_host_info(&hi);
     if (hi.mode == USB_HOST_MODE_HOST && hi.remaining_s < 15u) (void)usb_host_start(hi.port, 30u);
+    if (s.post == POST_WAIT) { post_wait(); return; }
     int rc;
     switch (family(s.mode)) {
     case FAM_ESP:  rc = esp_poll(); break;
@@ -392,6 +477,16 @@ void usb_flash_poll(void)
     default:       rc = xip_session_call_ctx(XIP_FN_MSC_FLASH_STEP, s.ctx); break;
     }
     snapshot();
+    if (rc == 0 && s.post == POST_NONE && (s.check_fail_txt || s.verify)) {
+        /* The copy is done: the loader may re-enumerate. Read the drive back when it is there. */
+        msc_flash_ctx_t *c = s.ctx;
+        c->phase = MSC_PH_WAIT;
+        s.phase = c->phase;
+        s.post = POST_WAIT;
+        usb_flash_wait_start(&s_wait, s.check_fail_txt, now_ms(), s.mounts0);
+        return;
+    }
+    if (s.post == POST_RUN && rc != 1) rc = post_result(rc);
     if (rc != 1) finish(rc);   /* 1: still running, in every family */
 }
 
@@ -423,4 +518,5 @@ void usb_flash_status(usb_flash_status_t *st)
     st->address = s.address;
     st->ms = s.running ? now_ms() - s.t0 : s.ms;
     memcpy(st->name, s.name, sizeof(st->name));
+    memcpy(st->note, s.note, sizeof(st->note));
 }

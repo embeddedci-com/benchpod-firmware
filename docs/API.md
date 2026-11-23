@@ -4602,7 +4602,7 @@ state.
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_a", "timeout_s": 120}
 {"cmd": "usb_flash", "mode": "uf2", "len": 204800}
-{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440}
+{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440, "check_fail_txt": true}
 {"cmd": "usb_flash", "mode": "dfu", "address": "0x08000000", "len": 131072}
 {"cmd": "usb_flash", "mode": "teensy", "address": 0, "len": 262144}
 {"cmd": "usb_flash", "mode": "avr", "len": 10240}
@@ -4611,7 +4611,7 @@ state.
 {"cmd": "usb_flash"}
 {"status": "ok", "data": {"running": false, "have_result": true, "mode": "file", "name": "FIRMWARE.BIN",
   "len": 61440, "address": 0, "protocol": "", "phase": "done", "done": 120, "total": 120, "result": "ok",
-  "ok": true, "ms": 1840}}
+  "ok": true, "ms": 1840, "note": ""}}
 {"cmd": "usb_flash", "abort": true}
 ```
 
@@ -4623,13 +4623,16 @@ state.
 | `leave` | `dfu`, `teensy`, `avr`, `samd`, `esp`: `false` keeps the board in its loader at the end; by default it starts the new firmware. Some bootloaders (optiboot, Caterina) start the sketch on their own after a few seconds anyway. |
 | `name` | With `mode` `file`: the file name, an 8.3 name such as `FIRMWARE.BIN`. A file of the same name is replaced. |
 | `len` | Bytes of the uploaded file to write. |
+| `check_fail_txt` | `file`: after the copy, wait up to 10 s for the drive to come back (a DAPLink loader re-enumerates), read `FAIL.TXT` from its root directory and, when it is there, end with the result `the loader reported a failure` and its first line in `note`. If the drive does not come back, the result stays `ok` and `note` says FAIL.TXT was not checked. Off by default. |
+| `verify` | `uf2`: after the last block, if the drive is still (or again) the loader, compare each block of the file with the drive's `CURRENT.UF2` (the loader's flash contents; Raspberry Pi RP2040 and RP2350 loaders). Only works when the loader stays in BOOTSEL after the write, as with a UF2 file that keeps it there. If the board left its loader (the normal case) the result stays `ok` and `note` says `verify skipped: the board left its bootloader`. A difference ends with `the drive's flash contents differ from the file` and the block in `note`. Off by default. |
 | `abort` | `true` stops a running flash. |
 
 | Field | Description |
 |---|---|
 | `running` | A flash is in progress. While it runs, captures, DAC playback, uploads and updates are refused with BP0048. |
 | `protocol` | `avr`: the bootloader found, `avr109`, `stk500v1` or `stk500v2`. `samd`: `sam-ba`. `esp`: the chip, such as `ESP32-S3`. Empty otherwise. |
-| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done`. `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. `avr` and `samd`: `start`, `touch`, `reattach`, `reset`, `sync`, `info`, `erase`, `write`, `verify`, `leave`, `done`. `esp`: `reset`, then the ESP32 flasher's phases (`sync`, `data`, `md5`, ...). |
+| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done` (FAT32 adds `new directory block`, `old file`, `fsinfo`; the read-back adds `wait for drive`, `find file`, `read file`, `verify`). `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. `avr` and `samd`: `start`, `touch`, `reattach`, `reset`, `sync`, `info`, `erase`, `write`, `verify`, `leave`, `done`. `esp`: `reset`, then the ESP32 flasher's phases (`sync`, `data`, `md5`, ...). |
+| `note` | What the read-back found: `FAIL.TXT`'s first line, `verified N blocks`, `verify skipped: ...`, or empty. |
 | `done`, `total` | Sectors (`uf2`, `file`), blocks (`dfu`, `teensy`, `esp`) or bytes (`avr`, `samd`: written, then verified) of all. |
 | `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12, FAT16 or FAT32 file system (exFAT is not supported), no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error, the board is not a Teensy in its loader, no bootloader answered on the serial port, what the board holds is not the image, the image would overwrite the bootloader, ...). |
 

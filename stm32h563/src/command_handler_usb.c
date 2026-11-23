@@ -150,6 +150,8 @@ void handle_usb_host(int conn_id, const char *json)
  *   {"cmd":"usb_flash","mode":"samd","address":"0x2000","len":N}   Arduino SAMD bootloader
  *   {"cmd":"usb_flash","mode":"esp","address":0,"len":N}           ESP32 ROM over USB serial
  *   optional "leave":false (dfu, teensy): stay in the loader
+ *   optional "check_fail_txt":true (file): read FAIL.TXT after the drive comes back
+ *   optional "verify":true (uf2): compare CURRENT.UF2 when the drive is still a loader
  *   {"cmd":"usb_flash"}                                            the state
  *   {"cmd":"usb_flash","abort":true}
  * The file is the first len bytes a load_bin with "psram" staged; usb_host must be on with a
@@ -162,15 +164,15 @@ static void usb_flash_reply(int conn_id)
 {
     usb_flash_status_t st;
     usb_flash_status(&st);
-    char data[384];
+    char data[512];
     snprintf(data, sizeof(data),
              "{\"running\":%s,\"have_result\":%s,\"mode\":\"%s\",\"name\":\"%s\",\"len\":%lu,"
              "\"address\":%lu,\"protocol\":\"%s\",\"phase\":\"%s\",\"done\":%lu,\"total\":%lu,"
-             "\"result\":\"%s\",\"ok\":%s,\"ms\":%lu}",
+             "\"result\":\"%s\",\"ok\":%s,\"ms\":%lu,\"note\":\"%s\"}",
              st.running ? "true" : "false", st.have_result ? "true" : "false", st.mode, st.name,
              (unsigned long)st.len, (unsigned long)st.address, st.protocol, st.phase, (unsigned long)st.done,
              (unsigned long)st.total, st.result,
-             (!st.running && st.have_result && st.rc == 0) ? "true" : "false", (unsigned long)st.ms);
+             (!st.running && st.have_result && st.rc == 0) ? "true" : "false", (unsigned long)st.ms, st.note);
     send_ok_large(conn_id, data);
 }
 
@@ -188,6 +190,8 @@ void handle_usb_flash(int conn_id, const char *json)
     if (bp_json_get(json, "address", v, sizeof(v))) p.address = (uint32_t)strtoul(v, NULL, 0);
     if (bp_json_get(json, "block", v, sizeof(v))) p.block = (uint16_t)strtoul(v, NULL, 10);
     p.leave = !(bp_json_get(json, "leave", v, sizeof(v)) && !strcmp(v, "false"));
+    p.check_fail_txt = bp_json_flag(json, "check_fail_txt");
+    p.verify = bp_json_flag(json, "verify");
     char n[16] = {0};
     if (!bp_json_get(json, "len", n, sizeof(n))) { bp_err_missing_argument(conn_id, "len"); return; }
     p.len = (uint32_t)strtoul(n, NULL, 10);

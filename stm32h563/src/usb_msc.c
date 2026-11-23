@@ -22,13 +22,17 @@ static tusb_control_request_t s_setup;
 static tuh_xfer_t        s_xfer;
 static volatile uint32_t s_actual;
 
-void tuh_msc_mount_cb(uint8_t dev_addr)   { s_dev = dev_addr; }
+static volatile uint32_t s_mounts;       /* drives mounted since boot (a drive that re-enumerates counts again) */
+
+void tuh_msc_mount_cb(uint8_t dev_addr)   { s_dev = dev_addr; s_mounts++; }
 void tuh_msc_umount_cb(uint8_t dev_addr)
 {
     if (s_dev != dev_addr) return;
     s_dev = 0;
     if (s_state == REQ_ISSUED || s_state == REQ_QUEUED) { s_ok = false; s_state = REQ_DONE; }
 }
+
+uint32_t usb_msc_mounts(void) { return s_mounts; }
 
 bool usb_msc_ready(uint32_t *blocks, uint32_t *block_size)
 {

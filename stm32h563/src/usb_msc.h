@@ -13,6 +13,8 @@
 
 /* A drive is mounted and answered READ CAPACITY: its size. */
 bool usb_msc_ready(uint32_t *blocks, uint32_t *block_size);
+/* How many drives have mounted since boot: a drive that goes away and comes back counts again. */
+uint32_t usb_msc_mounts(void);
 /* count sectors at lba, read into or written from buf (which must stay valid until it returns).
    Waits up to timeout_ms. 0 = ok. hw worker only. */
 int  usb_msc_io(bool write, uint32_t lba, void *buf, uint32_t count, uint32_t timeout_ms);
