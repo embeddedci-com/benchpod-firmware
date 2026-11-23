@@ -2626,7 +2626,7 @@ Which port:
 {"cmd": "usb_host"}
 {"status": "ok", "data": {
   "mode": "host", "port": "usb_c", "remaining_s": 112, "host_ms": 8011,
-  "enumerations": 1, "attached": true, "enumeration": "done",
+  "enumerations": 1, "attached": true, "enumeration": "done", "connected": true, "line_speed": "full",
   "device": {
     "vid": 11914, "pid": 3, "speed": "full", "usb": "2.10", "release": "1.00",
     "class": 239, "subclass": 2, "protocol": 1, "ep0_size": 64, "configurations": 1,
@@ -2660,6 +2660,8 @@ Which port:
 | `enumerations` | Devices that enumerated since host mode started (a replug counts again). |
 | `attached` | A device is enumerated now. |
 | `enumeration` | How far the current device got: `none` (nothing since host start or the last detach), `running` (its device descriptor arrived), `done` (enumerated), `stuck` (no enumeration 2 s after its device descriptor; the pod reads configuration descriptors of up to 1024 bytes, and a longer one stops here). A stuck device is reported until the next device sends its descriptor. |
+| `connected` | Host mode: a device's pull-up is on the port, before any enumeration. `false` while a board draws power but never shows up means its USB lines do not reach the pod. |
+| `line_speed` | `"full"` or `"low"`: the line the device pulls up (D+ or D-); `"none"` when nothing is connected. `"low"` from a full-speed board means D+ and D- are swapped. |
 | `device` | The device that enumerated last; kept after it detaches (`attached` false) until the next one. |
 | `device.vid`, `device.pid` | Vendor and product ID. |
 | `device.speed` | `"full"` or `"low"`. |
