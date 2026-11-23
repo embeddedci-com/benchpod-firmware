@@ -77,6 +77,10 @@ static void test_mixed_verbs(void) {
     expect("xip", "{\"cmd\":\"xip\"}", CMD_TIER_T0);
     expect("usb_flash", "{\"cmd\":\"usb_flash\"}", CMD_TIER_T1);
     expect("usb_flash", "{\"cmd\":\"usb_flash\",\"mode\":\"uf2\",\"len\":1024}", CMD_TIER_T1);
+    expect("usb_serial", "{\"cmd\":\"usb_serial\"}", CMD_TIER_T1);
+    expect("usb_serial", "{\"cmd\":\"usb_serial\",\"open\":true,\"baud\":115200}", CMD_TIER_T1);
+    expect("usb_serial_write", "{\"cmd\":\"usb_serial_write\",\"text\":\"x\"}", CMD_TIER_T1);
+    expect("usb_serial_read", "{\"cmd\":\"usb_serial_read\",\"max\":16}", CMD_TIER_T1);
     expect("xip", "{\"cmd\":\"xip\",\"selftest\":true}", CMD_TIER_T2);
     /* the console log level: read and set are T0 (it only changes what the console prints) */
     expect("log_level", "{\"cmd\":\"log_level\"}", CMD_TIER_T0);

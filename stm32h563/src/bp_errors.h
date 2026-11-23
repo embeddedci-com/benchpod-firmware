@@ -102,9 +102,12 @@ typedef enum {
     BP_E_LAN_CLIENTS_FULL = 82,
     BP_E_XIP_UNAVAILABLE = 83,
     BP_E_USB_FLASH_REFUSED = 84,
+    BP_E_USB_SERIAL_NO_PORT = 85,
+    BP_E_USB_SERIAL_BUSY = 86,
+    BP_E_USB_SERIAL_NOT_OPEN = 87,
 } bp_errcode_t;
 
-#define BP_E_LAST 84
+#define BP_E_LAST 87
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1145,6 +1148,42 @@ static inline const char *bp_note_usb_flash_refused(char *buf, size_t cap, const
 static inline const char *bp_tag_usb_flash_refused(const char *text, const char *why) {
     const bp_err_arg_t a[] = { {"why", why, 0, 1} };
     return bp_err_tag(text, BP_E_USB_FLASH_REFUSED, a, 1);
+}
+/* BP0085: The pod has no USB serial port to open: {why} */
+static inline void bp_err_usb_serial_no_port(int conn_id, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_SERIAL_NO_PORT, a, 1);
+}
+static inline const char *bp_note_usb_serial_no_port(char *buf, size_t cap, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_USB_SERIAL_NO_PORT, a, 1);
+}
+static inline const char *bp_tag_usb_serial_no_port(const char *text, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_SERIAL_NO_PORT, a, 1);
+}
+/* BP0086: The board's USB serial port is not free: {why} */
+static inline void bp_err_usb_serial_busy(int conn_id, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    bp_error_send(conn_id, BP_E_USB_SERIAL_BUSY, a, 1);
+}
+static inline const char *bp_note_usb_serial_busy(char *buf, size_t cap, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_USB_SERIAL_BUSY, a, 1);
+}
+static inline const char *bp_tag_usb_serial_busy(const char *text, const char *why) {
+    const bp_err_arg_t a[] = { {"why", why, 0, 1} };
+    return bp_err_tag(text, BP_E_USB_SERIAL_BUSY, a, 1);
+}
+/* BP0087: The USB serial console is not open */
+static inline void bp_err_usb_serial_not_open(int conn_id) {
+    bp_error_send(conn_id, BP_E_USB_SERIAL_NOT_OPEN, 0, 0);
+}
+static inline const char *bp_note_usb_serial_not_open(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_USB_SERIAL_NOT_OPEN, 0, 0);
+}
+static inline const char *bp_tag_usb_serial_not_open(const char *text) {
+    return bp_err_tag(text, BP_E_USB_SERIAL_NOT_OPEN, 0, 0);
 }
 
 #endif /* BP_ERRORS_H */

@@ -323,6 +323,9 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
 | `usb_flash` | T1 | Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32 | object | no |
+| `usb_serial` | T1 | USB serial console: open or close the serial port of the board the pod hosts, set baud, format, DTR and RTS, read the state | object | no |
+| `usb_serial_write` | T1 | Send bytes to the board's USB serial console | object | no |
+| `usb_serial_read` | T1 | Read what the board's USB serial console received | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -4638,6 +4641,63 @@ the pod's W25Q (`xip`), so it needs the `xip` blob of the running firmware; `esp
 flasher as `esp_flash`, and is refused while another ESP32 flash runs. Refusals: BP0084 (`usb_flash_refused`, arg
 `why`: host mode off, no drive mounted, device or serial port attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
 code), BP0048 (the storage bus is busy).
+
+### `usb_serial` — USB serial console
+
+The next firmware release (feature `usb_serial`). The pod, hosting the board
+([`usb_host`](#usb_host--usb-host-mode)), opens the board's USB serial port and reads and writes it
+like a UART: a CDC ACM port (the board's own USB: ESP32-S3 and C3, Pico, nRF52840, ...), or the
+FTDI, CP210x or CH34x chip of a dev kit. A test can read the boot log over the cable the board was
+flashed through. Three commands:
+
+```json
+{"cmd": "usb_serial", "open": true, "baud": 115200, "dtr": true, "rts": true}
+{"cmd": "usb_serial"}
+{"cmd": "usb_serial", "baud": 9600, "dtr": false}
+{"cmd": "usb_serial", "open": false}
+{"cmd": "usb_serial_write", "data_b64": "aGVsbG8K", "text": "reset\n"}
+{"cmd": "usb_serial_read", "max": 512, "timeout_ms": 2000, "until": "login: "}
+```
+
+`usb_serial` opens, closes, changes and reports the console. Every form answers with the state:
+
+```json
+{"status": "ok", "data": {"open": true, "baud": 115200, "frame": "8N1", "dtr": true, "rts": true,
+  "bridge": "cdc", "rx_buffered": 0, "rx_dropped": 0, "tx_total": 0, "rx_total": 0, "port_present": true}}
+```
+
+| Argument | Type | Default | Description |
+|---|---|---|---|
+| `open` | boolean | | `true` opens the console (usb_host on and a serial port mounted), `false` closes it. Left out: the other arguments change the open console, or only the state is read. |
+| `baud` | integer | `115200` | 300 to 3000000. Real on a USB-serial chip; a board's own USB port ignores it. |
+| `dtr`, `rts` | boolean | `true` | The control lines. Many boards reset or enter their loader on these: set them to what the board expects. |
+| `data_bits`, `parity`, `stop_bits` | | `8`, `"none"`, `1` | 5 to 8; `"none"`, `"even"` or `"odd"`; 1 or 2. |
+
+In the state, `bridge` is `cdc` (the board's own USB) or the chip (`ftdi`, `cp210x`, `ch34x`,
+`pl2303`). `rx_buffered` is what waits in the 4 KB receive ring. `rx_dropped` counts bytes lost
+because the ring was full, `rx_total` and `tx_total` all bytes received and sent since the open.
+`port_present` is false while the port is away. The ring comes from the heap at open and is freed
+at close.
+
+`usb_serial_write` takes `data_b64` (base64, standard or URL alphabet, padding optional) and/or
+`text` (sent after the bytes), at most 1024 bytes a call, and an optional `timeout_ms` (default
+1000, at most 5000) to wait for room. It answers `{"queued": N, "eof": false}`.
+
+`usb_serial_read` waits up to `timeout_ms` (default 0: what is there; at most 5000) and returns up
+to `max` bytes (default 256, at most 1024), earlier when `until` (up to 63 characters) ends the
+data. It answers `{"data_b64": "...", "eof": false}`: unpadded base64url of the bytes (the
+alphabet every pod reply uses); `eof` is true when the port is gone. Buffered bytes are still
+returned before `eof` ends the stream.
+
+When the board resets and enumerates again, the console stays open: `port_present` and `eof` go
+false meanwhile, and when a port of the same kind is back the pod sets baud, format and lines
+again. A board that comes back as another kind of port (a bootloader with another chip) is not
+bound. Stopping `usb_host` or its timeout also leaves the console open, with no port.
+
+The console and `usb_flash` exclude each other: `usb_serial` open is refused with BP0086
+(`usb_serial_busy`) while a flash runs, and `usb_flash` is refused with BP0084 while the console is
+open. Other refusals: BP0085 (`usb_serial_no_port`, arg `why`: host mode off or no serial port
+mounted), BP0087 (`usb_serial_not_open`: write, read or a setting without an open console).
 
 ### `xip` — code that runs from the W25Q
 

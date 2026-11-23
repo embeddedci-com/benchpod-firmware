@@ -157,6 +157,8 @@ void handle_usb_host(int conn_id, const char *json)
  */
 #include "usb_flash.h"
 #include "msc_flash.h"
+#include "usb_serial.h"
+#include "task.h"
 
 static void usb_flash_reply(int conn_id)
 {
@@ -191,6 +193,10 @@ void handle_usb_flash(int conn_id, const char *json)
     char n[16] = {0};
     if (!bp_json_get(json, "len", n, sizeof(n))) { bp_err_missing_argument(conn_id, "len"); return; }
     p.len = (uint32_t)strtoul(n, NULL, 10);
+    if (usb_serial_con_is_open()) {
+        bp_err_usb_flash_refused(conn_id, "the USB serial console is open (usb_serial with open false closes it)");
+        return;
+    }
     if (!usb_flash_busy()) {
         const char *busy = bus_busy_reason();
         if (busy) { send_error(conn_id, busy); return; }
@@ -200,6 +206,146 @@ void handle_usb_flash(int conn_id, const char *json)
     if (rc == -2) { bp_err_xip_unavailable(conn_id, why); return; }
     if (rc != 0) { bp_err_usb_flash_refused(conn_id, why ? why : "refused"); return; }
     usb_flash_reply(conn_id);
+}
+
+/* ---- usb_serial: the board's USB serial port as a console (usb_serial.h) ----------------------
+ *   {"cmd":"usb_serial"}                                          the state
+ *   {"cmd":"usb_serial","open":true[,"baud":115200][,"dtr":true][,"rts":true]
+ *                       [,"data_bits":8][,"parity":"none|even|odd"][,"stop_bits":1|2]}
+ *   {"cmd":"usb_serial","open":false}
+ *   {"cmd":"usb_serial","baud":9600,"dtr":false}                  change it while open
+ *     -> {"open","baud","frame","dtr","rts","bridge","rx_buffered","rx_dropped","tx_total",
+ *         "rx_total","port_present"}
+ *   {"cmd":"usb_serial_write","data_b64":"..."[,"text":"..."][,"timeout_ms":N]}  -> {"queued":N,"eof":bool}
+ *   {"cmd":"usb_serial_read"[,"max":N][,"timeout_ms":T][,"until":"text"]}      -> {"data_b64":"..","eof":bool}
+ * Refusals: BP0085 (no host mode or no serial port), BP0086 (a usb_flash runs), BP0087 (not open).
+ */
+#include "usb_serial.h"
+#include "b64url.h"
+
+#define USB_SER_IO_MAX       1024u
+#define USB_SER_TIMEOUT_MAX  5000u
+
+static bool usb_serial_host_on(void)
+{
+    usb_host_info_t hi;
+    usb_host_info(&hi);
+    return hi.mode == USB_HOST_MODE_HOST;
+}
+
+static void usb_serial_reply(int conn_id)
+{
+    usb_serial_state_t st;
+    usb_serial_con_state(&st);
+    char data[256];
+    if (usb_serial_state_json(&st, data, sizeof(data)) == 0) { bp_err_reply_too_large(conn_id); return; }
+    send_ok_str(conn_id, data);
+}
+
+void handle_usb_serial(int conn_id, const char *json)
+{
+    usb_serial_args_t a;
+    usb_serial_arg_err_t e = usb_serial_args_parse(json, &a);
+    if (e != USB_SER_ARG_OK) { send_error(conn_id, usb_serial_arg_err_text(e)); return; }
+    usb_serial_refusal_t r = usb_serial_plan(&a, usb_serial_con_is_open(), usb_serial_host_on(),
+                                             usb_serial_ready(), usb_flash_busy());
+    switch (r) {
+    case USB_SER_GO: break;
+    case USB_SER_NO_HOST:
+    case USB_SER_NO_PORT:  bp_err_usb_serial_no_port(conn_id, usb_serial_refusal_why(r)); return;
+    case USB_SER_FLASHING: bp_err_usb_serial_busy(conn_id, usb_serial_refusal_why(r)); return;
+    default:               bp_err_usb_serial_not_open(conn_id); return;
+    }
+    if (a.has_open && !a.open) usb_serial_con_close();
+    else if (a.has_open) {
+        int rc = usb_serial_con_open(&a);
+        if (rc == -2) { send_error(conn_id, "usb_serial: out of memory"); return; }
+        if (rc != 0) { bp_err_usb_serial_no_port(conn_id, usb_serial_refusal_why(USB_SER_NO_PORT)); return; }
+    } else if (!usb_serial_args_is_read(&a)) usb_serial_con_set(&a);
+    usb_serial_reply(conn_id);
+}
+
+static bool usb_serial_timeout(const char *json, uint32_t def, uint32_t *out)
+{
+    char v[12] = {0};
+    *out = def;
+    if (!bp_json_get(json, "timeout_ms", v, sizeof(v))) return true;
+    char *end = NULL;
+    unsigned long n = strtoul(v, &end, 10);
+    if (!end || *end || v[0] == '-' || n > USB_SER_TIMEOUT_MAX) return false;
+    *out = (uint32_t)n;
+    return true;
+}
+
+void handle_usb_serial_write(int conn_id, const char *json)
+{
+    if (!usb_serial_con_is_open()) { bp_err_usb_serial_not_open(conn_id); return; }
+    uint32_t tmo;
+    if (!usb_serial_timeout(json, 1000, &tmo)) { send_error(conn_id, "usb_serial_write: timeout_ms must be 0 to 5000"); return; }
+    const size_t inmax = 1300;
+    char *in = pvPortMalloc(inmax + USB_SER_IO_MAX);
+    if (!in) { send_error(conn_id, "usb_serial_write: out of memory"); return; }
+    uint8_t *bytes = (uint8_t *)in + inmax;
+    size_t n = 0;
+    const char *bad = NULL;
+    if (bp_json_get(json, "data_b64", in, inmax) && in[0] &&
+        usb_serial_b64_decode(in, bytes, USB_SER_IO_MAX, &n) != 0) bad = "data_b64 is not base64 or longer than 1024 bytes";
+    if (!bad && bp_json_get(json, "text", in, inmax)) {
+        size_t t = strlen(in);
+        if (n + t > USB_SER_IO_MAX) bad = "at most 1024 bytes a call";
+        else { memcpy(bytes + n, in, t); n += t; }
+    }
+    if (!bad && n == 0) bad = "needs data_b64 or text";
+    if (bad) {
+        char m[96];
+        snprintf(m, sizeof(m), "usb_serial_write: %s", bad);
+        vPortFree(in);
+        send_error(conn_id, m);
+        return;
+    }
+    uint32_t q = usb_serial_con_write(bytes, (uint32_t)n, tmo);
+    vPortFree(in);
+    char data[48];
+    snprintf(data, sizeof(data), "{\"queued\":%lu,\"eof\":%s}", (unsigned long)q, usb_serial_con_present() ? "false" : "true");
+    send_ok_str(conn_id, data);
+}
+
+void handle_usb_serial_read(int conn_id, const char *json)
+{
+    if (!usb_serial_con_is_open()) { bp_err_usb_serial_not_open(conn_id); return; }
+    uint32_t tmo, max = 256;
+    char v[12] = {0};
+    if (!usb_serial_timeout(json, 0, &tmo)) { send_error(conn_id, "usb_serial_read: timeout_ms must be 0 to 5000"); return; }
+    if (bp_json_get(json, "max", v, sizeof(v))) {
+        char *end = NULL;
+        unsigned long n = strtoul(v, &end, 10);
+        if (!end || *end || v[0] == '-' || n < 1 || n > USB_SER_IO_MAX) { send_error(conn_id, "usb_serial_read: max must be 1 to 1024"); return; }
+        max = (uint32_t)n;
+    }
+    char until[64] = {0};
+    size_t un = bp_json_get(json, "until", until, sizeof(until)) ? strlen(until) : 0;
+    const size_t reply_cap = B64URL_ENCODED_LEN(USB_SER_IO_MAX) + 64u;
+    uint8_t *buf = pvPortMalloc(USB_SER_IO_MAX + reply_cap);
+    if (!buf) { send_error(conn_id, "usb_serial_read: out of memory"); return; }
+    char *data = (char *)buf + USB_SER_IO_MAX;
+    uint32_t got = 0;
+    const TickType_t t0 = xTaskGetTickCount();
+    for (;;) {
+        got += usb_serial_con_read(buf + got, max - got);
+        if (got >= max) break;
+        if (un && usb_serial_ends_with(buf, got, (const uint8_t *)until, un)) break;
+        if (!usb_serial_con_present()) {   /* the port is gone: what is buffered is all there is */
+            got += usb_serial_con_read(buf + got, max - got);
+            break;
+        }
+        if (xTaskGetTickCount() - t0 >= pdMS_TO_TICKS(tmo)) break;
+        vTaskDelay(1);
+    }
+    int o = snprintf(data, reply_cap, "{\"data_b64\":\"");
+    o += (int)b64url_encode(buf, got, data + o, reply_cap - (size_t)o);
+    snprintf(data + o, reply_cap - (size_t)o, "\",\"eof\":%s}", usb_serial_con_present() ? "false" : "true");
+    send_ok_large(conn_id, data);
+    vPortFree(buf);
 }
 
 #else /* !BENCHPOD_USB_HOST */
@@ -215,5 +361,23 @@ void handle_usb_flash(int conn_id, const char *json)
 {
     (void)json;
     bp_err_unknown_command(conn_id, "usb_flash");
+}
+
+void handle_usb_serial(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, "usb_serial");
+}
+
+void handle_usb_serial_write(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, "usb_serial_write");
+}
+
+void handle_usb_serial_read(int conn_id, const char *json)
+{
+    (void)json;
+    bp_err_unknown_command(conn_id, "usb_serial_read");
 }
 #endif /* BENCHPOD_USB_HOST */

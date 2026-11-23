@@ -1105,3 +1105,42 @@ sdk = "start USB host mode and wait until the board's drive is mounted, upload t
 cli = "start USB host mode and wait until the board's drive is mounted, upload the file, then flash again"
 mcp = "start USB host mode (usb_host), wait until the board's drive is mounted, upload the file, then call usb_flash again"
 web = "Start USB host mode and wait until the board's drive shows up, then try again."
+
+# BP0085 to BP0087 come from the usb_serial branch. Another branch may also take these numbers: renumber at merge.
+[BP0085]
+name = "usb_serial_no_port"
+area = "usb"
+since = "next"
+args = { why = "str" }
+message = "The pod has no USB serial port to open: {why}"
+cause = "The USB serial console needs the pod hosting the board (usb_host on) and a serial port of the board mounted: a CDC ACM port, or the FTDI, CP210x or CH34x chip of a dev kit. {why}."
+[BP0085.fix]
+sdk = "start USB host mode (bp.usb_host(True)), wait until the board's serial port shows up, then open the console again"
+cli = "start USB host mode and wait until the board's serial port shows up, then open the console again"
+mcp = "start USB host mode (usb_host), wait until the board shows a serial port, then call usb_serial again"
+web = "Start USB host mode and wait until the board's serial port shows up, then try again."
+
+[BP0086]
+name = "usb_serial_busy"
+area = "usb"
+since = "next"
+args = { why = "str" }
+message = "The board's USB serial port is not free: {why}"
+cause = "One job at a time owns the board's USB serial port. A usb_flash uses it while it runs, and the console refuses a flash while it is open. {why}."
+[BP0086.fix]
+sdk = "wait until the usb_flash ends (or abort it), or close the console (usb_serial open false), then try again"
+cli = "wait until the flash ends, or close the console, then try again"
+mcp = "wait until usb_flash ends (poll it) or call usb_serial with open false, then try again"
+web = "Wait until the flash ends, or close the console, then try again."
+
+[BP0087]
+name = "usb_serial_not_open"
+area = "usb"
+since = "next"
+message = "The USB serial console is not open"
+cause = "usb_serial_write and usb_serial_read work only while the console is open."
+[BP0087.fix]
+sdk = "open the console first (usb_serial with open true), then write or read"
+cli = "open the console first, then write or read"
+mcp = "call usb_serial with open true first, then usb_serial_write or usb_serial_read"
+web = "Open the USB serial console first."
