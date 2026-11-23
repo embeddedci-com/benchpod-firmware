@@ -2606,7 +2606,7 @@ power-on-reset behaviour, or recovering a target that wedged itself.
 
 ### `usb_host` — USB host mode
 
-Firmware `next` and later (feature `usb_host_mode`; older firmware answers `usb_host` as an
+Firmware 4.0.3 and later (feature `usb_host_mode`; older firmware answers `usb_host` as an
 unknown command, except development builds made with `USB_HOST=1`). The pod's USB port becomes a
 full-speed USB host for the board under test, for a limited time, and reports the device that
 enumerates on it: IDs, strings, speed, how long enumeration took, the configuration and its
@@ -4565,7 +4565,7 @@ the C3 does not start and the pod has no copy to reinstall it from.
 
 ### `usb_flash` — flash a board over USB
 
-Firmware `next` and later (feature `usb_flash`). The pod flashes a board on its USB host port
+Firmware 4.0.3 and later (feature `usb_flash`). The pod flashes a board on its USB host port
 ([`usb_host`](#usb_host--usb-host-mode)) from a file uploaded with `load_bin` and `"psram": true`,
 the way a computer would:
 

@@ -4,7 +4,7 @@
   "revision": 14,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "b5591d68de413cd36b760467f32b9a284615af3cf4fd8a2046c91ef94749d50b",
+  "table_sha256": "174b25f67fab09fa45192a15c2120ddf66d3be36a56a04478562fe0712081c3e",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -149,6 +149,11 @@
       "firmware": "4.0.2",
       "gateware": 60,
       "date": "2026-11-20"
+    },
+    {
+      "firmware": "4.0.3",
+      "gateware": 60,
+      "date": "2026-11-23"
     }
   ],
   "features": {
@@ -795,13 +800,13 @@
     },
     "usb_host_mode": {
       "rev": 14,
-      "firmware": "next",
+      "firmware": "4.0.3",
       "board": "any",
       "docs": "API.md#usb_host--usb-host-mode"
     },
     "usb_flash": {
       "rev": 14,
-      "firmware": "next",
+      "firmware": "4.0.3",
       "board": "any",
       "docs": "API.md#usb_flash--flash-a-board-over-usb"
     }
