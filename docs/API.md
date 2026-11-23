@@ -3278,6 +3278,22 @@ job holds that W25Q code for its whole run, so a `usb_flash` cannot start meanwh
 busy) and the other way round. Without the blob, or with another build's, `start` and `info` are
 refused with an error that says to install the blobs (`benchpod install-blobs`).
 
+AVR TPI and XMEGA PDI notes:
+
+- Voltage: the ATtiny4/5/9/10, 20 and 40 can be programmed at 5 V only (their datasheets say
+  "Apply 5V", 4.75-5.5 V). The pod's 1.8 and 3.3 V I/O cannot program them: use the board's own 5 V
+  with a level shifter. The ATtiny102/104 datasheet contradicts itself (1.8-5.5 V
+  in one place, 5 V in another): try it. XMEGA: 3.3 V is fine, 1.8 V when BODLEVEL is below VCC.
+- `tpi` `flags` (the SDK sets them from its device table): bits 0-2 = words per flash write (0 or 1:
+  ATtiny4/5/9/10 and 102/104; 2: ATtiny20; 4: ATtiny40), bit 3 (8) = the chip has a page erase
+  (ATtiny102/104). `page` must be a multiple of the write size (2, 4 or 8 bytes). The chips erase
+  flash only as a whole code section, so `erase: "page"` is one section erase before the first page
+  (the whole code section is gone, also outside the written range); with the page-erase flag it
+  erases each page it writes. Use `erase: "chip"` when in doubt.
+- `pdi`: needs no flags. The PDI turns itself off when its clock runs slower than about 10 kHz; the
+  pod keeps the clock running while it waits and re-enters programming mode when a pause between
+  two steps of a job switched it off. The chip may start its program for a moment in such a pause.
+
 Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
 The job runs in the background: `info` and `start` answer at once and `status` reports progress.
 Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.

@@ -18,6 +18,15 @@
 
 #include "prog_flash.h"
 
+/* TPI `flags` (prog_tpi.c), set by the host from its device table:
+   bits 0-2  words per flash write: 0 or 1 = one word (ATtiny4/5/9/10, 102/104), 2 = ATtiny20,
+             4 = ATtiny40 (the chip latches that many words and starts one write);
+   bit 3     page erase (NVM command 0x18, ATtiny102/104): PROG_ERASE_PAGE erases each page it
+             writes. Without it PROG_ERASE_PAGE is one section erase of the whole code section
+             before the first page (the other chips cannot erase less). */
+#define TPI_F_WORDS_MASK  0x07u
+#define TPI_F_PAGE_ERASE  0x08u
+
 #define AVR12_GUARD  8u                 /* idle clocks searched for the start bit */
 #define AVR12_RXCLK  (AVR12_GUARD + 12u)
 
