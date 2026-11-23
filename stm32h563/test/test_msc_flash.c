@@ -841,7 +841,8 @@ static void test_read_file(void)
         CHECK(run(&c, NULL) == MSC_FLASH_DONE && c.found == 0 && c.out_len == 0);
         /* A read-only mode never writes. */
         CHECK(rr->writes == 0);
-        if (variant == 3) free32(&t); else free(r.disk);
+        free(r.disk);                     /* the FAT16 rig is allocated in every variant */
+        if (variant == 3) free32(&t);
     }
 
     /* The whole DAPLink story: a file write, the loader then adds FAIL.TXT (and the drive "comes back"). */
@@ -934,7 +935,8 @@ static void test_verify(void)
         /* A write to the drive anywhere would be a bug. */
         CHECK(rr->writes == 0);
         free(cur); free(mine); free(rev);
-        if (variant == 3) { t.file = NULL; free32(&t); } else free(r.disk);
+        free(r.disk);                     /* the FAT16 rig is allocated in every variant */
+        if (variant == 3) free32(&t);     /* t.file is mkfs32's own buffer (rr->file points at mine) */
     }
 }
 
