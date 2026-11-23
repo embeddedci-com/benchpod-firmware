@@ -636,12 +636,46 @@ static void test_read(void) {
     free(r);
 }
 
+static void test_refusals(void) {
+    rig_t *r;
+    r = rig_new(0);
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 64, PROG_ERASE_NONE, 0), PROG_E_ARGS);      /* no page size */
+    r->ctx.page = 64; r->ctx.addr = 1;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.write), PROG_E_ARGS);                          /* odd flash address */
+    r->ctx.addr = 0; r->ctx.page = 1024;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.write), PROG_E_ARGS);                          /* page too big */
+    r->ctx.page = 64; r->ctx.mem = PROG_MEM_COUNT;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.write), PROG_E_ARGS);                          /* unknown memory */
+    r->ctx.mem = PROG_MEM_FLASH; r->ctx.len = 0x9000;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.write), PROG_E_ARGS);                          /* past the 16-bit space */
+    r->ctx.len = 0;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.write), PROG_OK);                              /* nothing to write */
+    CHECK_EQ(r->chip.cmds[1] + r->chip.cmds[3] + r->chip.cmds[4], 0);                    /* nothing reached the NVM */
+    free(r);
+    /* a megaAVR 0 with 48 KB flash has it at 0x4000: the host passes that in flags */
+    r = rig_new(0);
+    r->chip.r[R_FLASH].base = 0x4000;
+    r->ctx.flags = 0x4000;
+    CHECK_EQ(do_write(r, PROG_MEM_FLASH, 0, 128, PROG_ERASE_CHIP, 64), PROG_OK);
+    CHECK(same(r->chip.r[R_FLASH].d, r->job.img, 128));
+    free(r);
+    /* the chip disappears during a write */
+    r = rig_new(2);
+    r->ctx.mem = PROG_MEM_FLASH; r->ctx.len = 1024; r->ctx.page = 512;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
+    r->chip.silent = true;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.write), PROG_E_NO_ANSWER);
+    prog_proto_updi.leave(&r->ctx, false);     /* must not hang */
+    free(r);
+}
+
 int main(void) {
     test_model_raw();
     test_entry();
     test_erase();
     test_write();
     test_read();
+    test_refusals();
     if (fails) { printf("%d of %d checks FAILED\n", fails, checks); return 1; }
     printf("test_prog_updi: %d checks passed\n", checks);
     return 0;
