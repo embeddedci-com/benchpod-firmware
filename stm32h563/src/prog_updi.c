@@ -171,7 +171,6 @@ static int enter(prog_ctx_t *c) {
             static const uint8_t t[2] = { SYNC, 0xE5 };
             TRY(xfer(c, t, 2, sib, 16));
         }
-        for (int i = 0; i < 16; i++) if (sib[i] < 0x20 || sib[i] > 0x7E) return PROG_E_PROTOCOL;
         if (sib[8] != 'P' || sib[9] != ':') return PROG_E_PROTOCOL;
         s->nvm = (uint8_t)(sib[10] - '0');
         if (s->nvm == 0) { s->asz = 1; s->flash_base = 0x8000; }
@@ -353,8 +352,8 @@ static int check_args(prog_ctx_t *c, bool geom) {
         if (!c->page || c->page > 512) return PROG_E_ARGS;
         if (c->mem == PROG_MEM_FLASH && ((c->page | c->addr) & 1)) return PROG_E_ARGS;
     }
-    uint64_t end = (uint64_t)mbase(c) + c->addr + c->len;
-    if (end > (1ull << (8 * (s->asz + 1)))) return PROG_E_ARGS;
+    uint32_t lim = s->asz == 1 ? 0x10000u : 0x1000000u, room = lim - mbase(c);   /* address space left */
+    if (mbase(c) >= lim || c->addr > room || c->len > room - c->addr) return PROG_E_ARGS;
     return PROG_OK;
 }
 
