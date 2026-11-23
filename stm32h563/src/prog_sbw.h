@@ -1,7 +1,7 @@
 #ifndef PROG_SBW_H
 #define PROG_SBW_H
 
-/* prog_sbw — TI MSP430 Spy-Bi-Wire (FRAM parts with CPUXv2: FR2xx, FR4xx, FR5xxx, FR6xxx) for
+/* prog_sbw: TI MSP430 Spy-Bi-Wire (FRAM parts with CPUXv2: FR2xx, FR4xx, FR5xxx, FR6xxx) for
  * prog_flash (prog_flash.h). Spec: docs/design/spy-bi-wire.md; section numbers in prog_sbw.c refer to it.
  * NOT in the firmware build or the xip_prog image yet (docs section 17: it needs its own image).
  *

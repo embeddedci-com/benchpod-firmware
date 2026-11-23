@@ -1,4 +1,4 @@
-/* prog_sbw.c — MSP430 Spy-Bi-Wire for prog_flash (prog_flash.h, prog_sbw.h).
+/* prog_sbw.c: MSP430 Spy-Bi-Wire for prog_flash (prog_flash.h, prog_sbw.h).
  *
  * Written from docs/design/spy-bi-wire.md (section numbers below); that document cites SLAU320AJ, the
  * family user's guides, the datasheets and TI's Replicator430FR source for every sequence.
