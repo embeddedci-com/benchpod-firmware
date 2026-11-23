@@ -208,6 +208,11 @@ firmware = "4.0.2"
 gateware = 60
 date = "2026-11-20"
 
+[[releases]]
+firmware = "4.0.3"
+gateware = 60
+date = "2026-11-23"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -919,14 +924,14 @@ note = "LAN pairing, on by default and on every pod updated from older firmware:
 
 [features.usb_host_mode]
 rev = 14
-firmware = "next"
+firmware = "4.0.3"
 docs = "API.md#usb_host--usb-host-mode"
 dated = "code"
 note = "USB host mode: the pod hosts the board's USB port at full speed for timeout_s (1 to 3600, default 60) and reports what enumerates: IDs, strings (47 characters, ASCII), speed, timing, the first configuration (up to 1024 bytes, 8 interfaces listed, all counted, truncated and malformed flags) and enumeration (none, running, done, stuck). Port usb_a (the USB-A host port, digital v3r4) or usb_c (the pod's own USB-C connector through a breakout, on pods without a USB-A host port; the pod supplies no VBUS there). Refused over the pod's own USB (BP0076); BP0077 no such port, BP0078 no crystal, BP0079 already on the other port."
 
 [features.usb_flash]
 rev = 14
-firmware = "next"
+firmware = "4.0.3"
 docs = "API.md#usb_flash--flash-a-board-over-usb"
 dated = "code"
 note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives, FAT12/FAT16), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
