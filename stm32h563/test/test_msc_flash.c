@@ -1,14 +1,16 @@
 /* Host test for msc_flash (xip_mod_msc_flash.c, msc_flash_names.c): UF2 blocks reach a simulated
-   UF2 bootloader whole and in order; a file lands on FAT12 and FAT16 drives (with and without an
-   MBR) next to an existing file and reads back; hostile drives and files are refused. */
+   UF2 bootloader whole and in order; a file lands on FAT12, FAT16 and FAT32 drives (with and
+   without an MBR) next to an existing file and reads back; FAT32 also: a full or extended root
+   directory chain, a replaced file, fragmented free space, the FSInfo hint and counts, exFAT;
+   hostile drives and files are refused. */
 #include "msc_flash.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static int failures;
-#define CHECK(c) do { if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
+static int failures, checks;
+#define CHECK(c) do { checks++; if (!(c)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); failures++; } } while (0)
 
 typedef struct {
     uint8_t *disk;
@@ -276,6 +278,504 @@ static void test_refusals(void)
     free(r.disk);
 }
 
+/* ---- FAT32 --------------------------------------------------------------------------------- */
+
+typedef struct {
+    uint32_t vol, spc, tot, nfats, ext;     /* in: volume start (MBR when > 0), cluster sectors, size */
+    uint32_t hint, fsi;                     /* in: FSInfo next free (0 = 2), 0 = no FSInfo sector */
+    uint32_t rsv, fatsz, clusters, data;    /* computed */
+} g32_t;
+
+typedef struct { rig_t r; g32_t g; uint8_t *file, *back; uint32_t len; } t32_t;
+
+static uint8_t *f32p(const t32_t *t, uint32_t f, uint32_t n)
+{
+    return t->r.disk + (size_t)(t->g.vol + t->g.rsv + f * t->g.fatsz) * 512 + n * 4;
+}
+static uint32_t f32get(const t32_t *t, uint32_t f, uint32_t n) { return get32(f32p(t, f, n)) & 0x0FFFFFFF; }
+static void f32set(t32_t *t, uint32_t n, uint32_t v)
+{
+    for (uint32_t f = 0; f < t->g.nfats; f++) put32(f32p(t, f, n), v);
+}
+static uint8_t *clus32(const t32_t *t, uint32_t c)
+{
+    return t->r.disk + (size_t)(t->g.data + (c - 2) * t->g.spc) * 512;
+}
+
+/* FSInfo = what the FAT says (free count) and the given hint. */
+static void fsinfo_sync(t32_t *t)
+{
+    if (!t->g.fsi) return;
+    uint32_t zero = 0;
+    for (uint32_t n = 2; n < t->g.clusters + 2; n++) zero += f32get(t, 0, n) == 0;
+    uint8_t *i = t->r.disk + (size_t)(t->g.vol + t->g.fsi) * 512;
+    put32(i + 488, zero);
+    put32(i + 492, t->g.hint);
+}
+
+static void mkfs32(t32_t *t, g32_t g, uint32_t len)
+{
+    memset(t, 0, sizeof(*t));
+    g.rsv = 32;
+    g.fatsz = 1;
+    for (int k = 0; k < 4; k++) {
+        g.clusters = (g.tot - g.rsv - g.nfats * g.fatsz) / g.spc;
+        g.fatsz = ((g.clusters + 2) * 4 + 511) / 512;
+    }
+    g.clusters = (g.tot - g.rsv - g.nfats * g.fatsz) / g.spc;
+    g.data = g.vol + g.rsv + g.nfats * g.fatsz;
+    t->g = g;
+    t->len = len;
+    t->r.sectors = g.vol + g.tot + 8;
+    t->r.disk = calloc(t->r.sectors, 512);
+    t->r.file_len = len;
+    t->file = malloc(len + 1);
+    t->back = malloc(len + 4096);
+    for (uint32_t i = 0; i < len; i++) t->file[i] = (uint8_t)(i * 13 + (i >> 8));
+    t->r.file = t->file;
+    if (g.vol) {
+        uint8_t *m = t->r.disk;
+        m[446 + 4] = 0x0C;
+        put32(m + 446 + 8, g.vol);
+        put32(m + 446 + 12, g.tot);
+        m[510] = 0x55; m[511] = 0xAA;
+    }
+    uint8_t *b = t->r.disk + (size_t)g.vol * 512;
+    b[0] = 0xEB; b[1] = 0x58; b[2] = 0x90;
+    memcpy(b + 3, "MSDOS5.0", 8);
+    put16(b + 11, 512); b[13] = (uint8_t)g.spc; put16(b + 14, g.rsv); b[16] = (uint8_t)g.nfats;
+    b[21] = 0xF8;
+    put32(b + 32, g.tot); put32(b + 36, g.fatsz);
+    put16(b + 40, g.ext); put32(b + 44, 2); put16(b + 48, g.fsi ? g.fsi : 0xFFFF);
+    b[510] = 0x55; b[511] = 0xAA;
+    if (g.fsi) {
+        uint8_t *i = t->r.disk + (size_t)(g.vol + g.fsi) * 512;
+        put32(i, 0x41615252); put32(i + 484, 0x61417272); put32(i + 508, 0xAA550000);
+    }
+    f32set(t, 0, 0x0FFFFFF8);
+    f32set(t, 1, 0x0FFFFFFF);
+    f32set(t, 2, 0x0FFFFFFF);                  /* the root directory: one cluster */
+    f32set(t, 3, 4);                           /* INFO.TXT: clusters 3 and 4 */
+    f32set(t, 4, 0x0FFFFFFF);
+    uint8_t *root = clus32(t, 2);
+    memcpy(root, "BENCHPODVOL", 11); root[11] = 0x08;
+    memcpy(root + 32, "INFO    TXT", 11); root[32 + 11] = 0x20;
+    put16(root + 32 + 26, 3); put32(root + 32 + 28, g.spc * 512 + 100);
+    fsinfo_sync(t);
+}
+
+static void free32(t32_t *t) { free(t->r.disk); free(t->file); free(t->back); }
+
+static uint32_t last_cluster, first_cluster, root_chain_len;
+static uint32_t v_first, v_chain;   /* what verify32 saw for the file */
+
+/* The file `name83` through the root chain and FAT copy f. Its length, -1 if absent or broken. */
+static long read_back32(t32_t *t, const char *name83, uint8_t *out, uint32_t f)
+{
+    const g32_t *g = &t->g;
+    root_chain_len = 0;
+    uint32_t dc = 2;
+    for (uint32_t guard = 0; dc >= 2 && dc < 0x0FFFFFF8 && guard < 100; guard++) {
+        root_chain_len++;
+        for (uint32_t i = 0; i < g->spc * 16; i++) {
+            const uint8_t *e = clus32(t, dc) + i * 32;
+            if (e[0] == 0) break;
+            if (memcmp(e, name83, 11) != 0 || (e[11] & 0x18)) continue;
+            uint32_t len = get32(e + 28), c = (get16(e + 20) << 16) | get16(e + 26), got = 0;
+            first_cluster = c;
+            last_cluster = c;
+            while (got < len) {
+                if (c < 2 || c >= g->clusters + 2) return -1;
+                last_cluster = c;
+                for (uint32_t s = 0; s < g->spc && got < len; s++) {
+                    uint32_t n = len - got < 512 ? len - got : 512;
+                    memcpy(out + got, t->r.disk + (size_t)(g->data + (c - 2) * g->spc + s) * 512, n);
+                    got += n;
+                }
+                c = f32get(t, f, c);
+            }
+            return c >= 0x0FFFFFF8 ? (long)len : -1;
+        }
+        dc = f32get(t, f, dc);
+    }
+    return -1;
+}
+
+static int run32(t32_t *t, const char *name, uint32_t len, msc_flash_ctx_t *c)
+{
+    t->r.file_len = len;
+    ctx_init(c, &t->r, MSC_FLASH_FILE, name, len);
+    return run(c, NULL);
+}
+
+/* After a good write: the file, INFO.TXT, FAT copies, FSInfo. */
+static void verify32(t32_t *t, const char *name83, uint32_t len)
+{
+    uint32_t first = t->g.ext & 0x80 ? t->g.ext & 0xF : 0, end = t->g.ext & 0x80 ? first + 1 : t->g.nfats;
+    for (uint32_t f = first; f < end; f++) {
+        CHECK(read_back32(t, name83, t->back, f) == (long)len);
+        CHECK(memcmp(t->back, t->file, len) == 0);
+    }
+    uint32_t last = last_cluster;
+    v_first = first_cluster;
+    v_chain = root_chain_len;
+    uint8_t info[2 * 8 * 512];
+    CHECK(read_back32(t, "INFO    TXT", info, first) == (long)(t->g.spc * 512 + 100));
+    for (uint32_t f = 1; f < t->g.nfats && !(t->g.ext & 0x80); f++)
+        CHECK(memcmp(f32p(t, 0, 0), f32p(t, f, 0), (size_t)t->g.fatsz * 512) == 0);
+    if (t->g.fsi) {
+        const uint8_t *i = t->r.disk + (size_t)(t->g.vol + t->g.fsi) * 512;
+        uint32_t zero = 0;
+        for (uint32_t n = 2; n < t->g.clusters + 2; n++) zero += f32get(t, first, n) == 0;
+        CHECK(get32(i + 488) == zero);
+        CHECK(get32(i + 492) == last);
+        CHECK(get32(i) == 0x41615252 && get32(i + 508) == 0xAA550000);
+    }
+}
+
+static void test_fat32_basic(g32_t g, uint32_t len)
+{
+    t32_t t;
+    mkfs32(&t, g, len);
+    msc_flash_ctx_t c;
+    int rc = run32(&t, "firmware.bin", len, &c);
+    CHECK(rc == MSC_FLASH_DONE);
+    if (rc != MSC_FLASH_DONE) printf("  FAT32 spc %u vol %u: %s\n", g.spc, g.vol, msc_flash_rc_str(rc));
+    CHECK(c.fat_bits == 32 && c.clusters == t.g.clusters && c.data_start == t.g.data);
+    CHECK(c.done == (len + 511) / 512 && c.total == c.done);
+    verify32(&t, "FIRMWAREBIN", len);
+    CHECK(v_first >= 5);
+    CHECK(v_chain == 1);
+
+    /* Again, same name, other size and content: replaced, the old clusters are free again. */
+    uint32_t len2 = len / 3 + 1;
+    for (uint32_t i = 0; i < len2; i++) t.file[i] ^= 0x5A;
+    CHECK(run32(&t, "FIRMWARE.BIN", len2, &c) == MSC_FLASH_DONE);
+    verify32(&t, "FIRMWAREBIN", len2);
+    /* A third time, bigger than the first: it must fit where the old file was. */
+    uint32_t len3 = len + 5000;
+    free(t.back); t.back = malloc(len3 + 4096);
+    t.file = realloc(t.file, len3); t.r.file = t.file;
+    for (uint32_t i = 0; i < len3; i++) t.file[i] = (uint8_t)(i * 3);
+    CHECK(run32(&t, "FIRMWARE.BIN", len3, &c) == MSC_FLASH_DONE);
+    verify32(&t, "FIRMWAREBIN", len3);
+    free32(&t);
+}
+
+/* Every slot of the root directory chain taken (files, LFN pieces): the chain grows by a cluster. */
+static void fill_dir(t32_t *t, uint32_t clus, uint32_t from)
+{
+    uint8_t *d = clus32(t, clus);
+    for (uint32_t i = from; i < t->g.spc * 16; i++) {
+        uint8_t *e = d + i * 32;
+        if (i % 3 == 0) { memset(e, 0, 32); e[0] = 0x41; e[11] = 0x0F; memcpy(e + 1, "a\0b\0c\0", 6); }
+        else { memcpy(e, "FILL0000TXT", 11); e[4] = (uint8_t)('0' + i / 100 % 10); e[5] = (uint8_t)('0' + i / 10 % 10);
+               e[6] = (uint8_t)('0' + i % 10); e[11] = 0x20; put16(e + 26, 3); put32(e + 28, 10); }
+    }
+}
+
+static void test_fat32_dir(g32_t g)
+{
+    uint32_t len = 20000;
+    t32_t t;
+    mkfs32(&t, g, len);
+    fill_dir(&t, 2, 2);
+    msc_flash_ctx_t c;
+    CHECK(run32(&t, "a.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(c.dir_extend == 1);
+    verify32(&t, "A       BIN", len);
+    CHECK(v_chain == 2);
+    uint32_t nc = f32get(&t, 0, 2);
+    CHECK(nc >= 5 && f32get(&t, 0, nc) == 0x0FFFFFFF);
+    const uint8_t *d = clus32(&t, nc);                       /* only the new entry in it */
+    CHECK(memcmp(d, "A       BIN", 11) == 0);
+    int stray = 0;
+    for (size_t i = 32; i < (size_t)g.spc * 512; i++) stray += d[i] != 0;
+    CHECK(stray == 0);
+
+    /* Fill the second cluster too (it has the one entry): extend again, to three clusters. */
+    fill_dir(&t, nc, 1);
+    CHECK(run32(&t, "b.bin", len, &c) == MSC_FLASH_DONE);
+    verify32(&t, "B       BIN", len);
+    CHECK(v_chain == 3);
+    CHECK(read_back32(&t, "A       BIN", t.back, 0) == (long)len);   /* the first file is still there */
+
+    /* A free slot (a deleted entry) in the first cluster is taken over, no growth. */
+    clus32(&t, 2)[32 * 5] = 0xE5;
+    CHECK(run32(&t, "c.bin", len, &c) == MSC_FLASH_DONE && c.dir_extend == 0);
+    CHECK(memcmp(clus32(&t, 2) + 32 * 5, "C       BIN", 11) == 0);
+    free32(&t);
+
+    /* A root chain that loops, full: refused, not endless. */
+    mkfs32(&t, g, len);
+    fill_dir(&t, 2, 2);
+    f32set(&t, 2, 2);
+    CHECK(run32(&t, "a.bin", len, &c) == MSC_FLASH_E_FS);
+    free32(&t);
+}
+
+static void test_fat32_alloc(void)
+{
+    g32_t g = { 0, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 };
+    msc_flash_ctx_t c;
+    t32_t t;
+    uint32_t len = 8 * 512;
+
+    /* A fragmented FAT: every other cluster taken for a long way, the hint at the start. */
+    mkfs32(&t, g, len);
+    for (uint32_t n = 5; n < 3000; n += 2) f32set(&t, n, 0x0FFFFFFF);
+    fsinfo_sync(&t);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(c.run_start >= 3000 - 1);
+    verify32(&t, "F       BIN", len);
+    free32(&t);
+
+    /* The hint in the middle of the fragments: the run is found after it. */
+    g.hint = 1000;
+    mkfs32(&t, g, len);
+    for (uint32_t n = 5; n < 3000; n += 2) f32set(&t, n, 0x0FFFFFFF);
+    fsinfo_sync(&t);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(c.run_start >= 2999);
+    verify32(&t, "F       BIN", len);
+    free32(&t);
+
+    /* Free space only before the hint: the search wraps. */
+    g.hint = 50000;
+    mkfs32(&t, g, len);
+    for (uint32_t n = 50000; n < t.g.clusters + 2; n++) f32set(&t, n, 0x0FFFFFFF);
+    fsinfo_sync(&t);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(c.run_start == 5 && c.wrapped);
+    verify32(&t, "F       BIN", len);
+    free32(&t);
+
+    /* A free run that starts just before the hint and goes on past it is found. */
+    g.hint = 20000;
+    mkfs32(&t, g, len);
+    for (uint32_t n = 5; n < t.g.clusters + 2; n++)
+        if (n < 19997 || n >= 20005) f32set(&t, n, 0x0FFFFFFF);
+    fsinfo_sync(&t);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(c.run_start == 19997);
+    verify32(&t, "F       BIN", len);
+    free32(&t);
+
+    /* Hints that make no sense are ignored. */
+    uint32_t bad[] = { 0, 1, 0x0FFFFFFF, 0xFFFFFFFF, 70000 };
+    for (unsigned k = 0; k < sizeof(bad) / sizeof(bad[0]); k++) {
+        g.hint = 1;
+        mkfs32(&t, g, len);
+        put32(t.r.disk + (size_t)(t.g.vol + t.g.fsi) * 512 + 492, bad[k]);
+        CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE && c.run_start == 5);
+        free32(&t);
+    }
+
+    /* The search is bounded per step. */
+    g.hint = 1;
+    mkfs32(&t, g, 4 * 512);
+    for (uint32_t n = 5; n < t.g.clusters + 2; n++) if (n % 2) f32set(&t, n, 0x0FFFFFFF);
+    for (uint32_t n = 6; n < t.g.clusters + 2; n += 2) f32set(&t, n, 0);
+    fsinfo_sync(&t);
+    int steps = 0, rc;
+    t.r.file_len = 4 * 512;
+    ctx_init(&c, &t.r, MSC_FLASH_FILE, "f.bin", 4 * 512);
+    rc = 0;
+    while ((rc = msc_flash_step(&c)) == MSC_FLASH_RUNNING) steps++;
+    CHECK(rc == MSC_FLASH_E_FULL);
+    CHECK(steps > 40 && steps < 200);       /* 65 K entries at 1024 per step */
+    free32(&t);
+
+    /* A full drive. */
+    g.hint = 0;
+    mkfs32(&t, g, len);
+    for (uint32_t n = 5; n < t.g.clusters + 2; n++) f32set(&t, n, 0x0FFFFFFF);
+    fsinfo_sync(&t);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_E_FULL);
+    CHECK(read_back32(&t, "F       BIN", t.back, 0) == -1);
+    /* One cluster too few. */
+    f32set(&t, 100, 0); f32set(&t, 101, 0);
+    CHECK(run32(&t, "f.bin", 3 * 512, &c) == MSC_FLASH_E_FULL);
+    CHECK(run32(&t, "f.bin", 2 * 512, &c) == MSC_FLASH_DONE && c.run_start == 100);
+    free32(&t);
+
+    /* Larger than the whole volume. */
+    mkfs32(&t, g, 40 * 1024 * 1024);
+    CHECK(run32(&t, "f.bin", 40 * 1024 * 1024, &c) == MSC_FLASH_E_FULL);
+    free32(&t);
+
+    /* The root directory is full and the drive has no cluster left for it. */
+    mkfs32(&t, g, len);
+    fill_dir(&t, 2, 2);
+    for (uint32_t n = 5; n < t.g.clusters + 2; n++) f32set(&t, n, 0x0FFFFFFF);
+    f32set(&t, 100, 0);
+    CHECK(run32(&t, "f.bin", 512, &c) == MSC_FLASH_E_FULL);   /* needs 2: the file and the directory */
+    free32(&t);
+}
+
+static void test_fat32_fsinfo(void)
+{
+    g32_t g = { 0, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 };
+    msc_flash_ctx_t c;
+    t32_t t;
+    uint32_t len = 30000;
+
+    /* Each signature wrong in turn: the file is written, FSInfo is not touched. */
+    uint32_t offs[] = { 0, 484, 510 };
+    for (unsigned k = 0; k < 3; k++) {
+        mkfs32(&t, g, len);
+        uint8_t *i = t.r.disk + (size_t)(t.g.vol + t.g.fsi) * 512;
+        i[offs[k]] ^= 0x55;
+        uint8_t before[512];
+        memcpy(before, i, 512);
+        CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+        CHECK(memcmp(before, i, 512) == 0);
+        CHECK(read_back32(&t, "F       BIN", t.back, 0) == (long)len && memcmp(t.back, t.file, len) == 0);
+        free32(&t);
+    }
+    /* No FSInfo sector in the boot sector. */
+    g.fsi = 0;
+    mkfs32(&t, g, len);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    verify32(&t, "F       BIN", len);
+    free32(&t);
+
+    /* An unknown free count stays unknown. */
+    g.fsi = 1;
+    mkfs32(&t, g, len);
+    put32(t.r.disk + (size_t)(t.g.vol + t.g.fsi) * 512 + 488, 0xFFFFFFFF);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(get32(t.r.disk + (size_t)(t.g.vol + t.g.fsi) * 512 + 488) == 0xFFFFFFFF);
+    free32(&t);
+
+    /* Top 4 bits of FAT entries are kept. */
+    mkfs32(&t, g, len);
+    for (uint32_t n = 5; n < 200; n++) put32(f32p(&t, 0, n), 0xA0000000);
+    for (uint32_t n = 5; n < 200; n++) put32(f32p(&t, 1, n), 0xA0000000);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    CHECK(c.run_start == 5);
+    CHECK((get32(f32p(&t, 0, 5)) >> 28) == 0xA && (get32(f32p(&t, 1, 5)) >> 28) == 0xA);
+    CHECK(read_back32(&t, "F       BIN", t.back, 1) == (long)len);
+    free32(&t);
+
+    /* One active FAT (mirroring off): only that copy is written. */
+    g.ext = 0x81;
+    mkfs32(&t, g, len);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    verify32(&t, "F       BIN", len);
+    CHECK(f32get(&t, 0, 5) == 0);
+    free32(&t);
+    g.ext = 0;
+
+    /* A write failing anywhere before the entry leaves no entry. */
+    mkfs32(&t, g, len);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    int total = t.r.writes;
+    free32(&t);
+    CHECK(total > 10);
+    for (int n = 1; n <= total; n++) {
+        mkfs32(&t, g, len);
+        t.r.fail_write_at = n;
+        int rc = run32(&t, "f.bin", len, &c);
+        CHECK(rc == MSC_FLASH_E_IO);
+        if (n < total - 1) CHECK(read_back32(&t, "F       BIN", t.back, 0) == -1);   /* the entry is next to last */
+        else CHECK(read_back32(&t, "F       BIN", t.back, 0) != -1 || n == total - 1);
+        free32(&t);
+    }
+
+    /* Replacing a file whose chain is cut short or loops: no hang, no crash. */
+    mkfs32(&t, g, len);
+    CHECK(run32(&t, "f.bin", len, &c) == MSC_FLASH_DONE);
+    f32set(&t, first_cluster + 1, first_cluster);        /* a loop inside the old chain */
+    CHECK(run32(&t, "f.bin", len, &c) <= 0);
+    free32(&t);
+}
+
+static void test_fat32_other(void)
+{
+    g32_t g = { 0, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 };
+    msc_flash_ctx_t c;
+    t32_t t;
+
+    /* exFAT: its own error, with and without an MBR. */
+    for (int mbr = 0; mbr < 2; mbr++) {
+        g.vol = mbr ? 2048 : 0;
+        mkfs32(&t, g, 512);
+        uint8_t *b = t.r.disk + (size_t)g.vol * 512;
+        memset(b, 0, 512);
+        b[0] = 0xEB; b[1] = 0x76; b[2] = 0x90;
+        memcpy(b + 3, "EXFAT   ", 8);
+        b[510] = 0x55; b[511] = 0xAA;
+        CHECK(run32(&t, "f.bin", 512, &c) == MSC_FLASH_E_EXFAT);
+        CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_EXFAT), "exFAT is not supported") == 0);
+        free32(&t);
+    }
+    g.vol = 0;
+
+    /* A "FAT32" volume with too few clusters is not FAT32. */
+    g32_t small = { 0, 1, 40000, 2, 0, 0, 1, 0, 0, 0, 0 };
+    mkfs32(&t, small, 512);
+    CHECK(run32(&t, "f.bin", 512, &c) == MSC_FLASH_E_FS);
+    free32(&t);
+
+    /* Broken fields: root cluster, FAT size, version. */
+    uint32_t off[] = { 44, 44, 36, 42, 16 };
+    uint32_t val[] = { 0, 0x0FFFFFF0, 1, 1, 0 };
+    for (unsigned k = 0; k < 5; k++) {
+        mkfs32(&t, g, 512);
+        uint8_t *b = t.r.disk;
+        if (off[k] == 16) b[16] = 0; else put32(b + off[k], val[k]);
+        CHECK(run32(&t, "f.bin", 512, &c) == MSC_FLASH_E_FS);
+        free32(&t);
+    }
+
+    /* UF2 on a FAT32 drive: the data area, boot sector and FATs stay. */
+    for (int mbr = 0; mbr < 2; mbr++) {
+        g.vol = mbr ? 63 : 0;
+        enum { nb = 40 };
+        mkfs32(&t, g, nb * 512);
+        make_uf2(t.file, nb, 0x10000000);
+        t.r.file_len = nb * 512;
+        ctx_init(&c, &t.r, MSC_FLASH_UF2, NULL, nb * 512);
+        CHECK(run(&c, NULL) == MSC_FLASH_DONE);
+        CHECK(c.data_base == g.vol + 32 + 2 * t.g.fatsz && c.data_base == t.g.data);
+        for (uint32_t i = 0; i < nb; i++)
+            CHECK(memcmp(t.r.disk + (size_t)(c.data_base + i) * 512, t.file + i * 512, 512) == 0);
+        CHECK(get16(t.r.disk + (size_t)g.vol * 512 + 510) == 0xAA55);
+        CHECK(f32get(&t, 0, 4) == 0x0FFFFFFF);
+        free32(&t);
+    }
+    g.vol = 0;
+
+    /* Hostile FAT32 volumes: a few thousand random changes to a good one. */
+    srand(11);
+    for (int n = 0; n < 4000; n++) {
+        mkfs32(&t, g, 5000);
+        for (int k = 0; k < 4; k++) {
+            uint32_t at = (uint32_t)(rand() % 60);
+            t.r.disk[at] = (uint8_t)rand();
+        }
+        if (n & 1) put32(f32p(&t, 0, 2), (uint32_t)rand());
+        if (n & 2) fill_dir(&t, 2, 2);
+        int rc = run32(&t, "f.bin", 5000, &c);
+        CHECK(rc <= 0 && rc != -99);
+        free32(&t);
+    }
+}
+
+static void test_fat32(void)
+{
+    test_fat32_basic((g32_t){ 0, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 }, 70 * 1024 + 17);       /* 512 B clusters */
+    test_fat32_basic((g32_t){ 2048, 1, 70000, 2, 0, 3000, 1, 0, 0, 0, 0 }, 100 * 1024 + 3);  /* behind an MBR, a hint */
+    test_fat32_basic((g32_t){ 0, 8, 540000, 2, 0, 0, 1, 0, 0, 0, 0 }, 300 * 1024 + 3);        /* 4 KB clusters */
+    test_fat32_basic((g32_t){ 63, 8, 540000, 1, 0, 0, 1, 0, 0, 0, 0 }, 9000);                /* one FAT, an MBR */
+    test_fat32_dir((g32_t){ 0, 1, 70000, 2, 0, 0, 1, 0, 0, 0, 0 });
+    test_fat32_dir((g32_t){ 0, 8, 540000, 2, 0, 0, 1, 0, 0, 0, 0 });
+    test_fat32_alloc();
+    test_fat32_fsinfo();
+    test_fat32_other();
+}
+
 static void test_names(void)
 {
     char n[11];
@@ -287,8 +787,9 @@ static void test_names(void)
     CHECK(!msc_flash_name83("sp ace.bin", n));
     CHECK(!msc_flash_name83(".bin", n));
     CHECK(!msc_flash_name83("", n));
-    CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_FS), "the drive has no FAT12 or FAT16 file system") == 0);
+    CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_FS), "the drive has no FAT12, FAT16 or FAT32 file system") == 0);
     CHECK(strcmp(msc_flash_phase_str(MSC_PH_FAT), "fat") == 0);
+    CHECK(strcmp(msc_flash_phase_str(MSC_PH_FSINFO), "fsinfo") == 0);
 }
 
 int main(void)
@@ -300,6 +801,7 @@ int main(void)
     test_file((geo_t){ 63, 4, 4, 2, 512, 40, 40000, 16 }, 300 * 1024 + 3);  /* FAT16 behind an MBR */
     test_file((geo_t){ 0, 1, 1, 1, 128, 160, 20000, 16 }, 513);             /* FAT16, one FAT copy */
     test_refusals();
-    printf("test_msc_flash: %s\n", failures ? "FAILED" : "all passed");
+    test_fat32();
+    printf("test_msc_flash: %s (%d checks)\n", failures ? "FAILED" : "all passed", checks);
     return failures ? 1 : 0;
 }
