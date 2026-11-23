@@ -234,10 +234,60 @@ static void leave(prog_ctx_t *c, bool run) {
     }
 }
 
+/* ---- NVM controller ---- */
+
+static int nvm_cmd(prog_ctx_t *c, uint8_t cmd) { return sts8(c, NVM_BASE + NVM_CTRLA, cmd); }
+
+/* One status read: busy flag in *busy, a write error answers PROG_E_PROTOCOL. */
+static int nvm_status(prog_ctx_t *c, bool *busy) {
+    uint8_t v;
+    TRY(lds8(c, NVM_BASE + NVM_STATUS, &v));
+    if (v & (S(c)->nvm == 0 ? 0x04 : 0x70)) return PROG_E_PROTOCOL;
+    *busy = v & 3;
+    return PROG_OK;
+}
+
+static int nvm_wait(prog_ctx_t *c, uint32_t tmo_ms) {
+    uint32_t t0 = now(c);
+    for (;;) {
+        bool busy;
+        TRY(nvm_status(c, &busy));
+        if (!busy) return PROG_OK;
+        pause_us(c, 500);
+        if (now(c) - t0 >= tmo_ms) return PROG_E_TIMEOUT;
+    }
+}
+
+/* ---- erase ---- */
+
+static int erase(prog_ctx_t *c) {
+    st_t *s = S(c);
+    bool busy;
+    c->phase = "erase";
+    if (c->erase != PROG_ERASE_CHIP || s->erased) return PROG_OK;   /* page erase happens in write */
+    if (s->es == 0) {
+        TRY(nvm_wait(c, 100));
+        TRY(nvm_cmd(c, s->nvm == 0 ? V0_CHER : V2_CHER));
+        s->t0 = now(c);
+        s->es = 1;
+        return PROG_RUNNING;
+    }
+    TRY(nvm_status(c, &busy));
+    if (busy) {
+        if (now(c) - s->t0 >= 1000) return PROG_E_TIMEOUT;
+        pause_us(c, 1000);
+        return PROG_RUNNING;
+    }
+    if (s->nvm == 2) TRY(nvm_cmd(c, V2_NOCMD));
+    s->erased = 1;
+    s->es = 0;
+    return PROG_OK;
+}
+
 static int stub(prog_ctx_t *ctx) { (void)ctx; return PROG_E_UNSUPPORTED; }
 
 const prog_proto_t prog_proto_updi = {
     .name = "updi", .uart = true, .uses_nrst = false,
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER),
-    .enter = enter, .erase = stub, .write = stub, .read = stub, .leave = leave,
+    .enter = enter, .erase = erase, .write = stub, .read = stub, .leave = leave,
 };

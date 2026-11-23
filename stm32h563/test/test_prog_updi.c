@@ -438,9 +438,49 @@ static void test_entry(void) {
     free(r);
 }
 
+static void check_chip_erase(int nvm) {
+    rig_t *r = rig_new(nvm);
+    const prog_proto_t *p = &prog_proto_updi;
+    fill(r->chip.r[R_FLASH].d, 0x4000, 9); fill(r->chip.r[R_EE].d, 256, 5);
+    fill(r->chip.r[R_USER].d, 32, 1); fill(r->chip.r[R_FUSE].d, 8, 2);
+    r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+    CHECK_EQ(run(&r->ctx, p->erase), PROG_OK);
+    for (int i = 0; i < 0x4000; i++) if (r->chip.r[R_FLASH].d[i] != 0xFF) { CHECK(0); break; }
+    for (int i = 0; i < 256; i++) if (r->chip.r[R_EE].d[i] != 0xFF) { CHECK(0); break; }
+    CHECK(r->chip.r[R_FUSE].d[0] != 0xFF);        /* fuses survive a chip erase */
+    CHECK_EQ(r->chip.cmds[nvm == 0 ? 5 : 0x20], 1);
+    if (nvm == 2) CHECK_EQ(r->chip.ctrla, 0);      /* v2: command cleared afterwards */
+    CHECK_EQ(r->chip.bad_access, 0);
+    /* erase = none: nothing is sent to the NVM controller */
+    r = rig_new(nvm);
+    fill(r->chip.r[R_FLASH].d, 64, 9);
+    r->ctx.erase = PROG_ERASE_NONE;
+    CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+    CHECK_EQ(run(&r->ctx, p->erase), PROG_OK);
+    CHECK(r->chip.r[R_FLASH].d[3] != 0xFF);
+    /* the NVM controller stays busy: timeout */
+    r = rig_new(nvm); r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+    r->chip.stuck = true;
+    CHECK_EQ(run(&r->ctx, p->erase), PROG_E_TIMEOUT);
+}
+
+static void test_erase(void) {
+    check_chip_erase(0);
+    check_chip_erase(2);
+    /* a chip unlocked with the erase key in enter() needs no second erase */
+    rig_t *r = rig_new(2); r->chip.locked = true; r->ctx.erase = PROG_ERASE_CHIP;
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.enter), PROG_OK);
+    CHECK_EQ(run(&r->ctx, prog_proto_updi.erase), PROG_OK);
+    CHECK_EQ(r->chip.cmds[0x20], 0);
+    free(r);
+}
+
 int main(void) {
     test_model_raw();
     test_entry();
+    test_erase();
     if (fails) { printf("%d of %d checks FAILED\n", fails, checks); return 1; }
     printf("test_prog_updi: %d checks passed\n", checks);
     return 0;
