@@ -19,6 +19,23 @@ usb_host_port_t usb_host_port_from_name(const char *name)
     return USB_HOST_PORT_NONE;
 }
 
+const char *usb_host_enum_name(usb_host_enum_t e)
+{
+    switch (e) {
+    case USB_HOST_ENUM_RUNNING: return "running";
+    case USB_HOST_ENUM_DONE:    return "done";
+    case USB_HOST_ENUM_STUCK:   return "stuck";
+    default:                    return "none";
+    }
+}
+
+usb_host_enum_t usb_host_enum_state(bool seen, bool attached, bool open, uint32_t since_ms)
+{
+    if (attached) return USB_HOST_ENUM_DONE;
+    if (seen && open) return since_ms >= USB_HOST_STUCK_MS ? USB_HOST_ENUM_STUCK : USB_HOST_ENUM_RUNNING;
+    return USB_HOST_ENUM_NONE;
+}
+
 const char *usb_host_mode_name(usb_host_mode_t mode)
 {
     switch (mode) {
@@ -53,9 +70,10 @@ size_t usb_host_reply_json(const usb_host_info_t *i, char *out, size_t cap)
     if (!out || cap == 0) return 0;
     jbuf_t b = { out, cap, 0, false };
     jp(&b, "{\"mode\":\"%s\",\"port\":\"%s\",\"remaining_s\":%lu,\"host_ms\":%lu,"
-           "\"enumerations\":%u,\"attached\":%s",
+           "\"enumerations\":%u,\"attached\":%s,\"enumeration\":\"%s\"",
        usb_host_mode_name(i->mode), usb_host_port_name(i->port), (unsigned long)i->remaining_s,
-       (unsigned long)i->host_ms, (unsigned)i->enumerations, i->attached ? "true" : "false");
+       (unsigned long)i->host_ms, (unsigned)i->enumerations, i->attached ? "true" : "false",
+       usb_host_enum_name(i->enumeration));
     if (i->seen) {
         char usb[8], rel[8];
         bcd(usb, i->bcd_usb);

@@ -29,8 +29,11 @@ static void fence(void) { __atomic_thread_fence(__ATOMIC_SEQ_CST); }
 
 void tuh_cdc_mount_cb(uint8_t idx)
 {
+    /* tuh_cdc_itf_get_info reports every port as class CDC, the vendor chips (FTDI, CP210x, CH34x)
+       too; the subclass is the interface's own, and cdc_host opens CDC ports only with ACM. */
     tuh_itf_info_t info;
-    bool acm = tuh_cdc_itf_get_info(idx, &info) && info.desc.bInterfaceClass == TUSB_CLASS_CDC;
+    bool acm = tuh_cdc_itf_get_info(idx, &info) &&
+               info.desc.bInterfaceSubClass == CDC_COMM_SUBCLASS_ABSTRACT_CONTROL_MODEL;
     s_bridge = !acm;
     s_idx = idx;
     s_mounts++;

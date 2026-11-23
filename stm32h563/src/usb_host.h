@@ -49,6 +49,24 @@ typedef enum {
     USB_HOST_MODE_STOPPING,
 } usb_host_mode_t;
 
+/* How far the current device got: none (nothing attached since host start or the last detach),
+   running (its device descriptor arrived, not configured yet), done (mounted), stuck (no mount
+   USB_HOST_STUCK_MS after its device descriptor: TinyUSB gave up without telling, e.g. a
+   configuration longer than CFG_TUH_ENUMERATION_BUFSIZE). */
+typedef enum {
+    USB_HOST_ENUM_NONE = 0,
+    USB_HOST_ENUM_RUNNING,
+    USB_HOST_ENUM_DONE,
+    USB_HOST_ENUM_STUCK,
+} usb_host_enum_t;
+
+#define USB_HOST_STUCK_MS 2000u
+
+const char *usb_host_enum_name(usb_host_enum_t e);
+/* The state from what the callbacks saw (usb_host_reply.c, host-tested): mounted now, a device
+   descriptor without a mount yet (`open`) and how long ago it came. */
+usb_host_enum_t usb_host_enum_state(bool seen, bool attached, bool open, uint32_t since_ms);
+
 typedef struct {
     usb_host_mode_t mode;
     usb_host_port_t port;
@@ -56,6 +74,7 @@ typedef struct {
     uint32_t host_ms;          /* time in host mode so far */
     uint16_t enumerations;     /* devices mounted since host mode started */
     bool     attached;         /* a device is mounted now */
+    usb_host_enum_t enumeration;
     /* The mounted device (valid while attached; the last one is kept after a detach until
        the next attach, `attached` false). */
     bool     seen;
