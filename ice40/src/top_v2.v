@@ -801,6 +801,11 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 62 = v61 + a SWIM MASTER (the STM8's one-wire debug interface) as the SWD engine's
+    // fifth job (swim_engine.v; SPI_ARM flags bit 4): the dio slot is the open-drain SWIM wire, SWD_FEED
+    // carries tokens (entry + sync measurement, command and data frames with ACK/retry, receive, config,
+    // report), the reply buffer the sync length and the received bytes.  tb_swim.  Loop and deep images
+    // only (FPGA_FEATURES bit 4): the emulation image has no room for it.
     // GATEWARE_VERSION 61 = v60 + a JTAG MASTER as the SWD engine's fourth job (jtag_seq.v; SPI_ARM
     // flags bit 3): TCK/TDI/TDO/TMS on the SCK/MOSI/MISO/CS slots, and SWD_FEED carries CMSIS-DAP
     // DAP_JTAG_Sequence sequences as is, with the TDO bytes in the reply buffer.  tb_jtag.
@@ -1271,13 +1276,13 @@ module top (
     // exclusive across the two images, which the firmware swaps by reflashing).  The firmware reads it to advertise capabilities
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
-    localparam [7:0] IMG_FEATURES = 8'h0A;   // deep-DAC-PSRAM-replay + JTAG master (v61)
+    localparam [7:0] IMG_FEATURES = 8'h1A;   // deep-DAC-PSRAM-replay + JTAG master (v61) + SWIM master (v62)
 `elsif USE_EMULATION
     localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54)
 `else
-    localparam [7:0] IMG_FEATURES = 8'h09;   // closed-loop DAC control + JTAG master (v61)
+    localparam [7:0] IMG_FEATURES = 8'h19;   // closed-loop DAC control + JTAG master (v61) + SWIM master (v62)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd61), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd62), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

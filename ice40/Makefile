@@ -49,6 +49,7 @@ SRC = src/top_v2.v            \
       src/swd_engine.v        \
       src/i2c_master.v        \
       src/jtag_seq.v          \
+      src/swim_engine.v       \
       src/i2c_emu.v           \
       src/emu_fifo.v          \
       src/spi_target.v        \
@@ -233,7 +234,7 @@ define topbench
 	done
 endef
 
-.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest i2cmastertest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest swimtest i2cmastertest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -628,14 +629,20 @@ swdqtest:
 # v55 I2C master (open drain, repeated START, NACK, clock stretching, arbitration) and SPI
 # modes 0-3, on swd_engine alone against behavioural targets.
 i2cmastertest:
-	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v
+	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
 	vvp -n /tmp/tb_i2c_master.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # v61 JTAG master: DAP_JTAG_Sequence sequences against a 2-TAP chain model (IDCODE, IR/BYPASS,
 # 64-cycle sequences, a queue that runs dry), at half periods 2, 3 and 13, on swd_engine alone.
 jtagtest:
-	iverilog -g2012 -o /tmp/tb_jtag.vvp -I src sim/tb_jtag.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v
+	iverilog -g2012 -o /tmp/tb_jtag.vvp -I src sim/tb_jtag.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
 	vvp -n /tmp/tb_jtag.vvp | tee /dev/stderr | grep -q '^PASS'
+
+# v62 SWIM master: entry + sync at two SWIM clock rates, SRST / ROTF / WOTF, NACK and retry, a chip
+# that never answers, a slow-rising line, high speed, on swd_engine alone against a behavioural STM8.
+swimtest:
+	iverilog -g2012 -o /tmp/tb_swim.vvp -I src sim/tb_swim.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
+	vvp -n /tmp/tb_swim.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:
@@ -664,7 +671,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest i2cmastertest check-protocol releasetooltest
+test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest swimtest i2cmastertest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
