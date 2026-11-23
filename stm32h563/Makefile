@@ -205,7 +205,7 @@ C_SOURCES := \
   src/cloud_ca.c \
   src/cloud_extras.c \
   src/lan_tls.c \
-  src/lan_tls_pem.c src/lan_clients.c \
+  src/lan_tls_pem.c src/lan_clients.c src/lan_tls_resume.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/command_handler_lease.c \
@@ -353,7 +353,7 @@ endif
 
 # W25Q code (src/xip_image.h, src/xip_session.h; defines here, before CFLAGS expands DEFS; the
 # linker script switch is further down):
-#   XIP_RAM=1        (the default, releases too) link the image at a 16 KB RAM region (taken from the
+#   XIP_RAM=1        (the default, releases too) link the image at a 20 KB RAM region (taken from the
 #                    FreeRTOS heap) and copy it there at session start: runs on every board. The
 #                    pods shipped so far (before digital v3r4) cannot memory-map their W25Q.
 #                    XIP_RAM=0 builds the memory-mapped image (digital v3r4, or the PB6 bodge).
@@ -397,17 +397,19 @@ endif
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
              $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c \
-             $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c
+             src/usb_bus.c src/usb_check.c src/usb_check_core.c \
+             $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c src/usb_serial_con.c \
+             $(TUSB)/class/hid/hid_host.c src/usb_hid.c src/usb_hid_core.c
 endif
 
 # Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
-# USB_HOST=1 5 KB (the host stack and its classes, a 1 KB descriptor buffer), XIP_RAM=1 16 KB (the RAM copy of the image).
+# USB_HOST=1 6 KB (the host stack and its classes, a 1 KB descriptor buffer, the HID class), XIP_RAM=1 20 KB (the RAM copy of the image).
 HEAP_KB := 259
 ifeq ($(USB_HOST),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 5)
+HEAP_KB := $(shell expr $(HEAP_KB) - 6)
 endif
 ifeq ($(XIP_RAM),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 16)
+HEAP_KB := $(shell expr $(HEAP_KB) - 20)
 endif
 ifeq ($(USB_HOST_LOG),1)
 HEAP_KB := $(shell expr $(HEAP_KB) - 3)
@@ -447,17 +449,22 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
           -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common -fstack-usage -MMD -MP
 
+# The W25Q image has 20 KB in the default (XIP_RAM=1) build: the drive writer, the largest module
+# (FAT12/16/32 and exFAT), is optimized for size: -Os saves 0.8 KB there, and at -O2 the compiler also
+# puts literal-pool addresses of flash data into it, which check_xip_refs.py refuses.
+$(BUILD_DIR)/xip_mod_msc_flash.o: CFLAGS += -Os
+
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
 
-# XIP_RAM=1: the image at a 16 KB RAM region (the defines are set above, with USB_HOST).
+# XIP_RAM=1: the image at a 20 KB RAM region, the top 20 KB of the 640 KB of RAM (the defines are set above, with USB_HOST).
 ifeq ($(XIP_RAM),1)
 XIP_RAM_LD := $(BUILD_DIR)/xip_ram.ld
 $(XIP_RAM_LD): $(LDSCRIPT) | $(BUILD_DIR)
-	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 624K|' \
-	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009C000,   LENGTH = 16K|' $< > $@
-	@grep -q 'LENGTH = 624K' $@ && grep -q '0x2009C000' $@ || { echo "xip_ram.ld: the linker script's RAM or XIP line changed"; rm -f $@; exit 1; }
+	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 620K|' \
+	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' $< > $@
+	@grep -q 'LENGTH = 620K' $@ && grep -q '0x2009B000' $@ || { echo "xip_ram.ld: the linker script's RAM or XIP line changed"; rm -f $@; exit 1; }
 $(BUILD_DIR)/$(TARGET).elf: $(XIP_RAM_LD)
 LDSCRIPT := $(XIP_RAM_LD)
 endif

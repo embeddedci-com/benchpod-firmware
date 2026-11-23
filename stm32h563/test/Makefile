@@ -45,8 +45,11 @@ LARATE_SRCS   := test_la_rate.c ../src/la_rate.c
 PSRAMALLOC_SRCS := test_psram_alloc.c ../src/psram_alloc.c
 BUSOWNER_SRCS := test_bus_owner.c ../src/bus_owner.c
 XSPIGUARD_SRCS := test_xspi_guard.c ../src/xspi_guard.c
+USBFLASHWAIT_SRCS := test_usb_flash_wait.c
 MSCFLASH_SRCS := test_msc_flash.c ../src/xip_mod_msc_flash.c ../src/msc_flash_names.c
 CTRLFLASH_SRCS := test_ctrl_flash.c ../src/xip_mod_ctrl_flash.c ../src/ctrl_flash_names.c
+PICOBOOT_SRCS := test_picoboot.c ../src/xip_mod_ctrl_flash.c ../src/ctrl_flash_names.c
+USBHID_SRCS   := test_usb_hid.c ../src/usb_hid_core.c
 SERFLASH_SRCS := test_ser_flash.c ../src/xip_mod_ser_flash.c ../src/ser_flash_names.c
 PSRAMREG_SRCS := test_psram_regions.c ../src/psram_regions.c
 JSON_SRCS     := test_json.c ../src/bp_json.c
@@ -83,6 +86,8 @@ FLASHLAYOUT_SRCS := test_flash_layout.c
 BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c ../src/board_caps.c
 BOARDCAPS_SRCS := test_board_caps.c ../src/board_caps.c
 USBHOST_SRCS  := test_usb_host_desc.c ../src/usb_host_desc.c ../src/usb_host_reply.c
+USBSERCON_SRCS := test_usb_serial_con.c ../src/usb_serial_con.c ../src/bp_json.c ../src/b64url.c
+USBCHECK_SRCS := test_usb_check.c ../src/usb_check_core.c ../src/bp_json.c
 GWCAPS_SRCS := test_gw_caps.c ../src/gw_caps.c
 LAIO_SRCS := test_la_io.c ../src/la_io.c ../src/board_caps.c
 VREF_SRCS     := test_vref.c ../src/vref_logic.c ../src/bp_json.c
@@ -165,6 +170,11 @@ C3IMG_SRCS := test_c3_image.c ../src/c3_image.c ../src/blob_store.c mocks/mock_w
 # The company CA load (src/cloud_extras.c) parses X.509, so it links the whole mbedTLS library
 # (default config), built once into an archive.
 LANTLSPEM_SRCS := test_lan_tls_pem.c ../src/lan_tls_pem.c
+# The LAN TLS resumption policy against a real mbedTLS server/client built with the pod's own
+# configuration (config/mbedtls_bench_config.h), once into an archive.
+LANTLSRESUME_SRCS := test_lan_tls_resume.c ../src/lan_tls_resume.c ../src/lan_clients.c ../src/bp_json.c
+BENCHTLS_CFLAGS_ABS := -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"' -I$(abspath ../config) -I$(abspath $(MBEDTLS))/include -I$(abspath $(MBEDTLS))/library
+BENCHTLS_CFLAGS := -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"' -I../config -I$(MBEDTLS)/include -I$(MBEDTLS)/library
 CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/cloud_ca.c ../src/blob_store.c mocks/mock_w25q.c
 MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 # The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
@@ -261,6 +271,18 @@ build/test_ser_flash: $(SERFLASH_SRCS) ../src/ser_flash.h
 build/test_ctrl_flash: $(CTRLFLASH_SRCS) ../src/ctrl_flash.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SANITIZE) $(CTRLFLASH_SRCS) -o $@
+
+build/test_usb_flash_wait: $(USBFLASHWAIT_SRCS) ../src/usb_flash_wait.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SANITIZE) $(USBFLASHWAIT_SRCS) -o $@
+
+build/test_picoboot: $(PICOBOOT_SRCS) ../src/ctrl_flash.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SANITIZE) $(PICOBOOT_SRCS) -o $@
+
+build/test_usb_hid: $(USBHID_SRCS) ../src/usb_hid_core.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SANITIZE) $(USBHID_SRCS) -o $@
 
 build/test_msc_flash: $(MSCFLASH_SRCS) ../src/msc_flash.h
 	@mkdir -p build
@@ -403,6 +425,13 @@ build/test_usb_host_desc: $(USBHOST_SRCS) ../src/usb_host.h ../src/usb_host_desc
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(USBHOST_SRCS) -o $@
 
+build/test_usb_serial_con: $(USBSERCON_SRCS) ../src/usb_serial_con.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(USBSERCON_SRCS) -o $@
+build/test_usb_check: $(USBCHECK_SRCS) ../src/usb_check_core.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(USBCHECK_SRCS) -o $@
+
 build/test_gw_caps: $(GWCAPS_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(GWCAPS_SRCS) -lm -o $@
@@ -525,6 +554,15 @@ build/mbedtls/libmbedtls_host.a: $(MBEDTLS_ALL)
 	cd build/mbedtls && $(CC) -O1 -w -c -I$(MBEDTLS)/include -I$(MBEDTLS)/library $(MBEDTLS_ALL)
 	ar rcs $@ build/mbedtls/*.o
 
+build/mbedtls_bench/libmbedtls_bench.a: $(MBEDTLS_ALL) ../config/mbedtls_bench_config.h
+	@rm -rf build/mbedtls_bench && mkdir -p build/mbedtls_bench
+	@cd build/mbedtls_bench && $(CC) -O1 -w -c $(BENCHTLS_CFLAGS_ABS) $(MBEDTLS_ALL)
+	ar rcs $@ build/mbedtls_bench/*.o
+
+build/test_lan_tls_resume: $(LANTLSRESUME_SRCS) build/mbedtls_bench/libmbedtls_bench.a
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(BENCHTLS_CFLAGS) $(LANTLSRESUME_SRCS) build/mbedtls_bench/libmbedtls_bench.a -o $@
+
 build/test_cloud_extras: $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a mocks/mock_w25q.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Ishim_rtos -Imocks -I$(MBEDTLS)/include $(CLOUDEXTRAS_SRCS) build/mbedtls/libmbedtls_host.a -lm -o $@
@@ -610,7 +648,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_xspi_guard build/test_msc_flash build/test_ctrl_flash build/test_ser_flash build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_usb_host_desc build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_dac_link build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_lan_clients build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_mdns_nsec build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_xspi_guard build/test_msc_flash build/test_usb_flash_wait build/test_ctrl_flash build/test_ser_flash build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_usb_host_desc build/test_usb_check build/test_picoboot build/test_usb_hid build/test_usb_serial_con build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_dac_link build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_lan_clients build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_mdns_nsec build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status build/test_lan_tls_resume $(OTA_TARGET)
 
 TESTS += build/test_bp_log build/test_log_level build/test_console_prompt build/test_emi_log build/test_emi_http build/test_recovery
 
@@ -638,7 +676,10 @@ run: $(TESTS)
 	@./build/test_bus_owner
 	@./build/test_xspi_guard
 	@./build/test_msc_flash
+	@./build/test_usb_flash_wait
 	@./build/test_ctrl_flash
+	@./build/test_picoboot
+	@./build/test_usb_hid
 	@./build/test_ser_flash
 	@./build/test_psram_regions
 	@./build/test_json
@@ -679,6 +720,8 @@ run: $(TESTS)
 	@./build/test_board_variant
 	@./build/test_board_caps
 	@./build/test_usb_host_desc
+	@./build/test_usb_serial_con
+	@./build/test_usb_check
 	@./build/test_gw_caps
 	@./build/test_la_io
 	@./build/test_vref
@@ -690,6 +733,7 @@ run: $(TESTS)
 	@./build/test_adc_pool
 	@./build/test_cmd_tier
 	@./build/test_lan_clients
+	@./build/test_lan_tls_resume
 	@./build/test_cmd_gate
 	@./build/test_pod_policy > build/test_pod_policy.log || { cat build/test_pod_policy.log; exit 1; }
 	@tail -n 1 build/test_pod_policy.log

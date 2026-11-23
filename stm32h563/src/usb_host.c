@@ -4,6 +4,7 @@
  * changes the role. The TinyUSB host callbacks run on the usb task and fill s_info; readers take
  * a copy inside a critical section, so they never see half a descriptor. */
 #include "usb_host.h"
+#include "usb_bus.h"
 #include "board_caps.h"
 
 #include "tusb.h"
@@ -76,11 +77,13 @@ static uint32_t s_enum_tick;    /* when it arrived */
 
 void usb_host_role_changed(usb_host_port_t port)
 {
+    usb_bus_role_changed();
     taskENTER_CRITICAL();
     s_active_port = port;
     if (port != USB_HOST_PORT_NONE) {
         s_host_since = s_epoch = HAL_GetTick();
         s_info.enumerations = 0;
+        s_info.descriptors = 0;
         s_info.attached = false;
         s_info.seen = false;
         s_enum_open = false;
@@ -158,6 +161,7 @@ void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *d)
     uint32_t ms = HAL_GetTick() - s_epoch;
     taskENTER_CRITICAL();
     s_info.seen = true;
+    if (s_info.descriptors < UINT16_MAX) s_info.descriptors++;
     s_info.vid = d->idVendor;               s_info.pid = d->idProduct;
     s_info.bcd_usb = d->bcdUSB;             s_info.bcd_device = d->bcdDevice;
     s_info.dev_class = d->bDeviceClass;     s_info.dev_subclass = d->bDeviceSubClass;
