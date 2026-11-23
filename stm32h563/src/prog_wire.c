@@ -19,6 +19,10 @@
 #include <string.h>
 
 #define FEED_MAX    192u
+/* A set() with the clock high flushes once the queue holds this much, so the automatic flush
+   (which push() falls back to at FEED_MAX) lands with the clock high, never inside a C2 strobe's
+   low phase. The headroom is for the bytes between two high levels (a strobe queues < 8). */
+#define FEED_SOFT   (FEED_MAX - 16u)
 #define SAMPLES_MAX 128u
 
 typedef struct {
@@ -65,6 +69,7 @@ static void op_set(void *io, int clk, int data)
 {
     wire_t *w = io;
     push(w, (uint8_t)('d' + (clk ? 2 : 0) + (data ? 1 : 0)));
+    if (clk && w->nfeed >= FEED_SOFT) feed_now(w);
 }
 
 static void op_drive(void *io, bool drive) { push((wire_t *)io, drive ? 'O' : 'o'); }
