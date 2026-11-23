@@ -447,6 +447,10 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
           -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common -fstack-usage -MMD -MP
 
+# The W25Q image has 16 KB in the default (XIP_RAM=1) build: the drive writer, the largest module
+# (FAT12/16/32 and exFAT), is optimized for size (-Os saves 0.7 KB there).
+$(BUILD_DIR)/xip_mod_msc_flash.o: CFLAGS += -Os
+
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld

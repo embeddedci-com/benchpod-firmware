@@ -12,7 +12,9 @@
  *    small FAT12/FAT16/FAT32 writer puts the data into a run of free clusters, then writes the FAT
  *    chain (every FAT copy), then the root directory entry, so the entry with the final size comes
  *    last. FAT32 also grows a full root directory by one cluster, frees the chain of a file it
- *    replaces and updates the FSInfo sector (when its signatures are valid). exFAT is refused.
+ *    replaces and updates the FSInfo sector (when its signatures are valid). exFAT: the file goes into a
+ *    contiguous run of free clusters (NoFatChain) found in the allocation bitmap, then the bitmap bits,
+ *    then the directory entry set last; a replaced file's set is marked unused and its clusters freed.
  *
  * The context holds all the state (the code has no static data: it runs from the W25Q). One step
  * does a bounded amount of work, so the hw worker keeps answering commands between steps.
@@ -50,11 +52,11 @@ typedef enum {
     MSC_FLASH_E_SRC = -2,         /* reading the staged file failed */
     MSC_FLASH_E_NOT_UF2 = -3,     /* a block is not a UF2 block, or the file is not whole blocks */
     MSC_FLASH_E_SECTOR = -4,      /* the drive's sector size is not 512 */
-    MSC_FLASH_E_FS = -5,          /* no FAT12/FAT16/FAT32 file system the writer understands */
+    MSC_FLASH_E_FS = -5,          /* no FAT12/FAT16/FAT32/exFAT file system the writer understands */
     MSC_FLASH_E_FULL = -6,        /* no free directory entry, or no run of free clusters long enough */
     MSC_FLASH_E_ARGS = -7,        /* bad mode, name or length */
     MSC_FLASH_E_ABORTED = -8,     /* stopped by the client (usb_flash.c, not the steps) */
-    MSC_FLASH_E_EXFAT = -9,       /* an exFAT drive */
+    MSC_FLASH_E_EXFAT = -9,       /* READ/VERIFY on an exFAT drive (not supported) */
     MSC_FLASH_E_VERIFY = -10,     /* VERIFY: the drive holds something else than the file */
     MSC_FLASH_E_NOFILE = -11,     /* VERIFY: the drive has no CURRENT.UF2 */
     MSC_FLASH_E_LOADER = -12,     /* the loader reported a failure (usb_flash.c, from FAIL.TXT) */
@@ -64,7 +66,8 @@ typedef enum {
     MSC_PH_START = 0, MSC_PH_UF2, MSC_PH_DIR_SCAN, MSC_PH_FAT_SCAN, MSC_PH_DATA, MSC_PH_FAT,
     MSC_PH_DIR, MSC_PH_DONE,
     MSC_PH_DIR_ZERO, MSC_PH_FREE_OLD, MSC_PH_FSINFO,    /* FAT32 only */
-    MSC_PH_FIND, MSC_PH_READ, MSC_PH_VERIFY, MSC_PH_WAIT  /* READ and VERIFY; WAIT: usb_flash.c */
+    MSC_PH_FIND, MSC_PH_READ, MSC_PH_VERIFY, MSC_PH_WAIT,  /* READ and VERIFY; WAIT: usb_flash.c */
+    MSC_PH_XBITMAP, MSC_PH_XLINK, MSC_PH_XUNUSE, MSC_PH_XSET, MSC_PH_XFREE   /* exFAT only */
 } msc_flash_phase_t;
 
 typedef struct {
@@ -81,7 +84,7 @@ typedef struct {
     uint32_t vol_start;          /* first sector of the volume (an MBR partition, else 0) */
     uint8_t  fat_bits;           /* 12, 16 or 32 */
     uint8_t  nfats;
-    uint8_t  spc;                /* sectors per cluster */
+    uint16_t spc;                /* sectors per cluster */
     uint32_t fat_start, fat_secs, root_start, root_secs, data_start, clusters;
     /* work */
     uint32_t pos;                /* phase cursor */
@@ -99,6 +102,16 @@ typedef struct {
     uint32_t root_clus, fsi_lba, fsi_free, hint;   /* root cluster; FSInfo sector, count, next free */
     uint32_t dir_clus, dir_last, dir_n;            /* root chain: current, last, clusters seen */
     uint32_t old_first, free_cur, free_n, freed;   /* a replaced file's chain, clusters freed */
+    /* exFAT (the FAT window is the second half of buf, the working sector the first) */
+    uint8_t  is_exfat, x_active; /* an exFAT volume; its active FAT and bitmap (0 or 1) */
+    uint8_t  x_rem, x_idx, x_ok, x_cnt, x_file;   /* directory scan: entries left in the set, position, name matches, secondaries, not a directory */
+    uint8_t  x_zero, x_mk, old_flags, old_cnt;    /* new entry: 1 zero the sector after it, 2 zero it all; end marker seen */
+    uint8_t  bm_dirty;
+    uint16_t x_hash, x_nlen, x_pos;               /* name hash and length; characters compared */
+    uint32_t bm_first, bm_len, bm_clus, bm_ci, bm_i, bm_lba;   /* allocation bitmap: chain start, bytes, cursor, sector in buf */
+    uint32_t cs_clus, cs_sec, cs_off;             /* start of the set being scanned */
+    uint32_t old_clus, old_sec, old_off, old_len; /* the set (and file) being replaced */
+    uint32_t mk_lba, mk_off, mk_sec, pad_lba, pad_off;
     /* READ and VERIFY */
     uint8_t  found;              /* READ: the file is in the root directory */
     uint8_t  vf_stage;           /* VERIFY: 0 file head, 1 next block, 2 walk to its cluster, 3 compare */

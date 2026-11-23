@@ -4,7 +4,7 @@
   "revision": 15,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "807f98fe0fc262f86bdd9db007979672c9182eba0c10f6bf19ba46bb6f3d51e4",
+  "table_sha256": "c9dbd97e3e755a1984e59770e3bd471523b434842096bc683a359de09158dd4f",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {

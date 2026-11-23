@@ -1,7 +1,7 @@
 /* Host test for msc_flash (xip_mod_msc_flash.c, msc_flash_names.c): UF2 blocks reach a simulated
    UF2 bootloader whole and in order; a file lands on FAT12, FAT16 and FAT32 drives (with and
    without an MBR) next to an existing file and reads back; FAT32 also: a full or extended root
-   directory chain, a replaced file, fragmented free space, the FSInfo hint and counts, exFAT;
+   directory chain, a replaced file, fragmented free space, the FSInfo hint and counts; exFAT volumes (bitmap, entry sets, checksums, replace, root growth, TexFAT);
    hostile drives and files are refused. */
 #include "msc_flash.h"
 
@@ -697,19 +697,6 @@ static void test_fat32_other(void)
     msc_flash_ctx_t c;
     t32_t t;
 
-    /* exFAT: its own error, with and without an MBR. */
-    for (int mbr = 0; mbr < 2; mbr++) {
-        g.vol = mbr ? 2048 : 0;
-        mkfs32(&t, g, 512);
-        uint8_t *b = t.r.disk + (size_t)g.vol * 512;
-        memset(b, 0, 512);
-        b[0] = 0xEB; b[1] = 0x76; b[2] = 0x90;
-        memcpy(b + 3, "EXFAT   ", 8);
-        b[510] = 0x55; b[511] = 0xAA;
-        CHECK(run32(&t, "f.bin", 512, &c) == MSC_FLASH_E_EXFAT);
-        CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_EXFAT), "exFAT is not supported") == 0);
-        free32(&t);
-    }
     g.vol = 0;
 
     /* A "FAT32" volume with too few clusters is not FAT32. */
@@ -951,6 +938,476 @@ static void test_verify(void)
     }
 }
 
+/* ---- exFAT --------------------------------------------------------------------------------- */
+
+typedef struct {
+    rig_t r;
+    uint32_t vol, shift, tot, nfats, active;     /* in: volume start (MBR when > 0), cluster shift, sectors */
+    uint32_t spc, fatoff, fatlen, heap, ncl;     /* computed */
+    uint32_t bm1, bm_clus, root, first_free_entry;                 /* bitmap first cluster and cluster count, root cluster */
+    uint8_t *file, *back;
+} tx_t;
+
+static uint8_t *xsec(tx_t *t, uint32_t s) { return t->r.disk + (size_t)(t->vol + s) * 512; }
+static uint8_t *xclus(tx_t *t, uint32_t c, uint32_t sec) { return xsec(t, t->heap + (c - 2) * t->spc + sec); }
+static uint32_t xfatget(tx_t *t, uint32_t n) { return get32(xsec(t, t->fatoff + t->active * t->fatlen) + n * 4); }
+static void xfatset(tx_t *t, uint32_t n, uint32_t v)
+{
+    for (uint32_t f = 0; f < t->nfats; f++) put32(xsec(t, t->fatoff + f * t->fatlen) + n * 4, v);
+}
+static void xbit(tx_t *t, uint32_t c, int v)
+{
+    uint8_t *b = xclus(t, t->bm1, 0) + (c - 2) / 8;   /* the bitmap is contiguous in the tests */
+    if (v) *b |= (uint8_t)(1u << ((c - 2) % 8)); else *b &= (uint8_t)~(1u << ((c - 2) % 8));
+}
+static int xbitget(tx_t *t, uint32_t c) { return (xclus(t, t->bm1, 0)[(c - 2) / 8] >> ((c - 2) % 8)) & 1; }
+
+static uint32_t xsum(const uint8_t *set, uint32_t n)
+{
+    uint32_t s = 0;
+    for (uint32_t i = 0; i < n * 32; i++) if (i != 2 && i != 3) s = (((s & 1) ? 0x8000 : 0) + (s >> 1) + set[i]) & 0xFFFF;
+    return s;
+}
+static uint32_t xhashw(const uint16_t *nm, uint32_t n)
+{
+    uint32_t h = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint16_t ch = nm[i] >= 'a' && nm[i] <= 'z' ? nm[i] - 32 : nm[i];
+        h = (((h & 1) ? 0x8000 : 0) + (h >> 1) + (ch & 0xFF)) & 0xFFFF;
+        h = (((h & 1) ? 0x8000 : 0) + (h >> 1) + (ch >> 8)) & 0xFFFF;
+    }
+    return h;
+}
+
+/* Put an entry set (name ASCII) at entry `idx` of the root cluster chain's first cluster... into the
+   root at byte offset `at` (the caller keeps track). contig: NoFatChain. */
+static uint32_t xput(uint8_t *at, const char *name, uint32_t first, uint32_t len, int nofat)
+{
+    uint16_t u[64];
+    uint32_t nl = (uint32_t)strlen(name), nn = (nl + 14) / 15;
+    for (uint32_t i = 0; i < nl; i++) u[i] = (uint8_t)name[i];
+    memset(at, 0, (2 + nn) * 32);
+    at[0] = 0x85; at[1] = (uint8_t)(1 + nn); put16(at + 4, 0x20);
+    at[32] = 0xC0; at[33] = (uint8_t)(1 | (nofat ? 2 : 0)); at[35] = (uint8_t)nl;
+    put16(at + 36, xhashw(u, nl)); put32(at + 40, len); put32(at + 52, first); put32(at + 56, len);
+    for (uint32_t i = 0; i < nl; i++) { at[64 + (i / 15) * 32] = 0xC1; put16(at + 64 + (i / 15) * 32 + 2 + (i % 15) * 2, u[i]); }
+    put16(at + 2, xsum(at, 2 + nn));
+    return 2 + nn;
+}
+
+/* A blank exFAT volume: boot sector, FAT, bitmap (cluster 2, contiguous), up-case table, root, and
+   INFO.TXT (two clusters, FAT chain). */
+static void mkexfat(tx_t *t)
+{
+    memset(t->r.disk, 0, (size_t)t->r.sectors * 512);
+    t->spc = 1u << t->shift;
+    uint32_t vol = t->tot;
+    t->fatoff = 24;
+    uint32_t ncl_guess = vol / t->spc;
+    t->fatlen = ((ncl_guess + 2) * 4 + 511) / 512;
+    uint32_t heap = 24 + t->fatlen * t->nfats;
+    t->heap = (heap + t->spc - 1) / t->spc * t->spc;
+    t->ncl = (vol - t->heap) / t->spc;
+    uint32_t bmbytes = (t->ncl + 7) / 8;
+    t->bm_clus = (bmbytes + t->spc * 512 - 1) / (t->spc * 512);
+    uint32_t bm0 = 2, bm_n = t->nfats;          /* TexFAT: a second bitmap */
+    t->bm1 = bm0 + (t->active ? t->bm_clus : 0);   /* the active one */
+    uint32_t up = 2 + t->bm_clus * bm_n, root = up + 1;
+    t->root = root;
+    if (t->vol) {
+        uint8_t *m = t->r.disk;
+        m[446 + 4] = 0x07; put32(m + 446 + 8, t->vol); put32(m + 446 + 12, vol);
+        m[510] = 0x55; m[511] = 0xAA;
+    }
+    uint8_t *b = xsec(t, 0);
+    b[0] = 0xEB; b[1] = 0x76; b[2] = 0x90; memcpy(b + 3, "EXFAT   ", 8);
+    put32(b + 64, t->vol); put32(b + 72, vol);
+    put32(b + 80, t->fatoff); put32(b + 84, t->fatlen); put32(b + 88, t->heap); put32(b + 92, t->ncl);
+    put32(b + 96, root); put16(b + 104, 0x0100); put16(b + 106, t->active);
+    b[108] = 9; b[109] = (uint8_t)t->shift; b[110] = (uint8_t)t->nfats; b[112] = 0xFF;
+    b[510] = 0x55; b[511] = 0xAA;
+    for (uint32_t f = 0; f < t->nfats; f++) {
+        put32(xsec(t, t->fatoff + f * t->fatlen), 0xFFFFFFF8);
+        put32(xsec(t, t->fatoff + f * t->fatlen) + 4, 0xFFFFFFFF);
+    }
+    for (uint32_t k = 0; k < bm_n * t->bm_clus; k++)
+        xfatset(t, 2 + k, (k + 1) % t->bm_clus ? 3 + k : 0xFFFFFFFF);
+    xfatset(t, up, 0xFFFFFFFF);
+    xfatset(t, root, 0xFFFFFFFF);
+    uint32_t info = root + 1;                   /* INFO.TXT: clusters info, info+1 (a FAT chain) */
+    xfatset(t, info, info + 1);
+    xfatset(t, info + 1, 0xFFFFFFFF);
+    for (uint32_t c = 2; c <= info + 1; c++) xbit(t, c, 1);
+    uint8_t *r = xclus(t, root, 0);
+    uint32_t e = 0;
+    r[0] = 0x83; r[1] = 1; put16(r + 2, 'T'); e++;
+    for (uint32_t k = 0; k < bm_n; k++, e++) {
+        r[e * 32] = 0x81; r[e * 32 + 1] = (uint8_t)k;
+        put32(r + e * 32 + 20, 2 + k * t->bm_clus); put32(r + e * 32 + 24, bmbytes);
+    }
+    r[e * 32] = 0x82; put32(r + e * 32 + 20, up); put32(r + e * 32 + 24, 128); e++;
+    e += xput(r + e * 32, "INFO.TXT", info, t->spc * 512 + 100, 0);
+    t->first_free_entry = e;
+    for (uint32_t i = 0; i < t->spc * 512 + 100; i++) xclus(t, info, 0)[i] = (uint8_t)(i * 5);
+}
+
+/* The file `name` through the root chain: sets its entries' checksum and hash, the data, the bitmap.
+   Length, -1 absent, -2 a bad set. */
+static long xread(tx_t *t, const char *name, uint8_t *out)
+{
+    uint32_t dc = t->root, nl = (uint32_t)strlen(name);
+    for (uint32_t guard = 0; dc >= 2 && dc < 0xFFFFFFF8 && guard < 1000; guard++) {
+        for (uint32_t i = 0; i < t->spc * 16; i++) {
+            const uint8_t *e = xclus(t, dc, 0) + i * 32;
+            if (e[0] == 0) return -1;
+            if (e[0] != 0x85) continue;
+            uint32_t cnt = e[1];
+            /* the set may sit in one cluster only in the tests (spc*16 entries): check the bound */
+            if (i + 1 + cnt > t->spc * 16) return -2;
+            if (xsum(e, 1 + cnt) != get16(e + 2)) return -2;
+            const uint8_t *st = e + 32;
+            if (st[0] != 0xC0 || st[3] != nl) continue;
+            uint16_t u[256];
+            for (uint32_t k = 0; k < st[3]; k++) u[k] = (uint16_t)get16(e + 64 + (k / 15) * 32 + 2 + (k % 15) * 2);
+            if (xhashw(u, st[3]) != get16(st + 4)) return -2;
+            int same = 1;
+            for (uint32_t k = 0; k < nl; k++) same &= (u[k] | 0x20) == (((uint8_t)name[k]) | 0x20);
+            if (!same) continue;
+            uint32_t len = get32(st + 24), c = get32(st + 20), got = 0;
+            int nofat = (st[1] & 2) != 0;
+            if (get32(st + 8) != len || get32(st + 28) || get32(st + 12)) return -2;
+            while (got < len) {
+                if (c < 2 || c >= t->ncl + 2 || !xbitget(t, c)) return -2;
+                for (uint32_t s = 0; s < t->spc && got < len; s++) {
+                    uint32_t n = len - got < 512 ? len - got : 512;
+                    memcpy(out + got, xclus(t, c, s), n);
+                    got += n;
+                }
+                c = nofat ? c + 1 : xfatget(t, c);
+            }
+            return (long)len;
+        }
+        dc = xfatget(t, dc);
+    }
+    return -1;
+}
+
+static int runx(tx_t *t, const char *name, uint32_t len, msc_flash_ctx_t *c)
+{
+    t->r.file_len = len;
+    ctx_init(c, &t->r, MSC_FLASH_FILE, name, len);
+    return run(c, NULL);
+}
+
+static uint32_t xused(tx_t *t) { uint32_t n = 0; for (uint32_t c = 2; c < t->ncl + 2; c++) n += xbitget(t, c); return n; }
+
+static void verifyx(tx_t *t, const char *name, uint32_t len)
+{
+    CHECK(xread(t, name, t->back) == (long)len);
+    CHECK(memcmp(t->back, t->file, len) == 0);
+    uint8_t *info = malloc(70000);
+    CHECK(xread(t, "INFO.TXT", info) == (long)(t->spc * 512 + 100));
+    for (uint32_t i = 0; i < t->spc * 512 + 100; i++) if (info[i] != (uint8_t)(i * 5)) { CHECK(0); break; }
+    free(info);
+}
+
+static void newx(tx_t *t, uint32_t vol, uint32_t shift, uint32_t tot, uint32_t nfats, uint32_t active, uint32_t maxlen)
+{
+    memset(t, 0, sizeof(*t));
+    t->vol = vol; t->shift = shift; t->tot = tot; t->nfats = nfats; t->active = active;
+    t->r.sectors = vol + tot + 8;
+    t->r.disk = calloc(t->r.sectors, 512);
+    t->file = malloc(maxlen);
+    t->back = malloc(maxlen + 4096);
+    for (uint32_t i = 0; i < maxlen; i++) t->file[i] = (uint8_t)(i * 7 + (i >> 9) + 1);
+    t->r.file = t->file;
+    mkexfat(t);
+}
+static void freex(tx_t *t) { free(t->r.disk); free(t->file); free(t->back); }
+
+static void test_exfat_basic(uint32_t vol, uint32_t shift, uint32_t tot, uint32_t len)
+{
+    tx_t t;
+    msc_flash_ctx_t c;
+    newx(&t, vol, shift, tot, 1, 0, len + 40000);
+    uint32_t used0 = xused(&t);
+    int rc = runx(&t, "firmware.bin", len, &c);
+    CHECK(rc == MSC_FLASH_DONE);
+    if (rc != MSC_FLASH_DONE) printf("  exFAT shift %u vol %u: %s\n", shift, vol, msc_flash_rc_str(rc));
+    CHECK(c.is_exfat && c.clusters == t.ncl && c.data_start == t.vol + t.heap && c.spc == t.spc);
+    verifyx(&t, "FIRMWARE.BIN", len);
+    uint32_t need = (len + t.spc * 512 - 1) / (t.spc * 512);
+    CHECK(xused(&t) == used0 + need);
+    /* the data starts low: right after INFO.TXT */
+    CHECK(xbitget(&t, t.root + 3));
+    /* the boot sector, FAT of untouched clusters */
+    CHECK(get32(xsec(&t, 0) + 64) == t.vol && xsec(&t, 0)[112] == 0xFF);
+    CHECK(xfatget(&t, t.root + 3) == 0);
+
+    /* Replace: other size and content; the old clusters are free again. */
+    uint32_t len2 = len / 3 + 1;
+    for (uint32_t i = 0; i < len2; i++) t.file[i] ^= 0x5A;
+    CHECK(runx(&t, "FIRMWARE.BIN", len2, &c) == MSC_FLASH_DONE);
+    verifyx(&t, "FIRMWARE.BIN", len2);
+    CHECK(xused(&t) == used0 + (len2 + t.spc * 512 - 1) / (t.spc * 512));
+    /* A lower-case name replaces the same file; another name adds one. */
+    CHECK(runx(&t, "firmware.bin", len2, &c) == MSC_FLASH_DONE);
+    verifyx(&t, "FIRMWARE.BIN", len2);
+    CHECK(runx(&t, "app.hex", len2, &c) == MSC_FLASH_DONE);
+    verifyx(&t, "APP.HEX", len2);
+    CHECK(xread(&t, "FIRMWARE.BIN", t.back) == (long)len2);
+    /* Bigger than the first. */
+    uint32_t len3 = len + 30000;
+    for (uint32_t i = 0; i < len3; i++) t.file[i] = (uint8_t)(i * 3);
+    CHECK(runx(&t, "FIRMWARE.BIN", len3, &c) == MSC_FLASH_DONE);
+    verifyx(&t, "FIRMWARE.BIN", len3);
+    CHECK(xread(&t, "APP.HEX", t.back) == (long)len2);   /* (content differs now, length holds) */
+    freex(&t);
+}
+
+/* A write that fails: the entry set is the last write, so the old state stays readable. */
+static void test_exfat_fail(void)
+{
+    tx_t t0;
+    msc_flash_ctx_t c;
+    newx(&t0, 0, 3, 40000, 1, 0, 30000);
+    CHECK(runx(&t0, "f.bin", 30000, &c) == MSC_FLASH_DONE);
+    int total = t0.r.writes;
+    freex(&t0);
+    for (int k = 1; k <= total; k++) {
+        tx_t t;
+        newx(&t, 0, 3, 40000, 1, 0, 30000);
+        uint32_t used0 = xused(&t);
+        t.r.fail_write_at = k;
+        int rc = runx(&t, "f.bin", 30000, &c);
+        CHECK(rc == MSC_FLASH_E_IO);
+        long n = xread(&t, "F.BIN", t.back);
+        CHECK(n == -1 || n == 30000);
+        CHECK(xread(&t, "INFO.TXT", t.back) == (long)(t.spc * 512 + 100));
+        (void)used0;
+        freex(&t);
+    }
+    /* Replace with a failing write: the old file is whole or the new one is. */
+    tx_t t1;
+    newx(&t1, 0, 3, 40000, 1, 0, 30000);
+    CHECK(runx(&t1, "f.bin", 20000, &c) == MSC_FLASH_DONE);
+    t1.r.writes = 0;
+    CHECK(runx(&t1, "f.bin", 30000, &c) == MSC_FLASH_DONE);
+    int total2 = t1.r.writes;
+    freex(&t1);
+    for (int k = 1; k <= total2; k++) {
+        tx_t t;
+        newx(&t, 0, 3, 40000, 1, 0, 30000);
+        CHECK(runx(&t, "f.bin", 20000, &c) == MSC_FLASH_DONE);
+        t.r.writes = 0;
+        t.r.fail_write_at = k;
+        CHECK(runx(&t, "f.bin", 30000, &c) == MSC_FLASH_E_IO);
+        long n = xread(&t, "F.BIN", t.back);
+        CHECK(n == -1 || n == 20000 || n == 30000);
+        freex(&t);
+    }
+}
+
+/* In-use entries that are not files (a volume GUID) in entries [from, to) of the root's first cluster. */
+static void fill_root_x(tx_t *t, uint32_t from, uint32_t to)
+{
+    for (uint32_t i = from; i < to; i++) {
+        uint8_t *e = xclus(t, t->root, 0) + i * 32;
+        memset(e, 0, 32);
+        e[0] = 0xA0;
+    }
+}
+
+static void test_exfat_dir(void)
+{
+    msc_flash_ctx_t c;
+    tx_t t;
+    const uint32_t n = 4096 / 32;   /* entries in a 4 KB cluster */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    uint32_t f = t.first_free_entry;
+    freex(&t);
+    /* The root cluster full, no end marker: the root grows by one cluster. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    fill_root_x(&t, f, n);
+    CHECK(runx(&t, "f.bin", 70000, &c) == MSC_FLASH_DONE);
+    CHECK(c.dir_extend == 1);
+    verifyx(&t, "F.BIN", 70000);
+    CHECK(xfatget(&t, t.root) == c.run_start && xfatget(&t, c.run_start) == 0xFFFFFFFF);
+    CHECK(xbitget(&t, c.run_start) && c.run_start == t.root + 3);
+    /* A second file lands in the new cluster. */
+    CHECK(runx(&t, "g.bin", 3000, &c) == MSC_FLASH_DONE);
+    CHECK(c.dir_extend == 0);
+    verifyx(&t, "G.BIN", 3000);
+    freex(&t);
+    /* The end marker is the very last entry, with no room: pad and extend. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    fill_root_x(&t, f, n - 1);
+    CHECK(runx(&t, "f.bin", 70000, &c) == MSC_FLASH_DONE);
+    CHECK(c.dir_extend == 1 && c.pad_lba != 0xFFFFFFFFu);
+    verifyx(&t, "F.BIN", 70000);
+    CHECK(xclus(&t, t.root, 7)[15 * 32] == 0x05);
+    freex(&t);
+    /* Deleted entries before the end marker are taken over. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    fill_root_x(&t, f, n);
+    for (uint32_t i = 20; i < 24; i++) xclus(&t, t.root, 0)[i * 32] = 0x05;
+    CHECK(runx(&t, "f.bin", 5000, &c) == MSC_FLASH_DONE);
+    CHECK(c.dir_extend == 0);
+    CHECK(xclus(&t, t.root, 0)[20 * 32] == 0x85);
+    verifyx(&t, "F.BIN", 5000);
+    freex(&t);
+    /* Little room before the marker in its sector: the set starts in the next sector. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    fill_root_x(&t, f, 14);
+    for (uint32_t i = 14; i < 40; i++) xclus(&t, t.root, 0)[i * 32] = 0;
+    for (uint32_t i = 20; i < 40; i++) xclus(&t, t.root, 0)[i * 32] = 0xA0;   /* junk behind the marker */
+    CHECK(runx(&t, "f.bin", 5000, &c) == MSC_FLASH_DONE);
+    CHECK(c.pad_lba != 0xFFFFFFFFu && c.dir_lba == c.pad_lba + 1 && c.dir_extend == 0);
+    verifyx(&t, "F.BIN", 5000);
+    CHECK(xclus(&t, t.root, 0)[14 * 32] == 0x05 && xclus(&t, t.root, 0)[15 * 32] == 0x05);
+    CHECK(xclus(&t, t.root, 1)[3 * 32] == 0);
+    freex(&t);
+    /* Room for the set and a marker: in place, the junk behind is cleared. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    fill_root_x(&t, f, 12);
+    for (uint32_t i = 12; i < 16; i++) xclus(&t, t.root, 0)[i * 32] = 0;
+    xclus(&t, t.root, 0)[13 * 32] = 0xA0;
+    xclus(&t, t.root, 0)[15 * 32] = 0xA0;
+    CHECK(runx(&t, "f.bin", 5000, &c) == MSC_FLASH_DONE);
+    CHECK(c.pad_lba == 0xFFFFFFFFu && c.dir_off == 12 * 32);
+    verifyx(&t, "F.BIN", 5000);
+    CHECK(xclus(&t, t.root, 0)[15 * 32] == 0);
+    freex(&t);
+    /* The old file's set sits across a sector boundary, with a FAT-chained file and a long name. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    fill_root_x(&t, f, 15);
+    /* F.BIN as a FAT chain of 3 clusters at the end of the used area, set at entries 15..17 */
+    {
+        uint32_t c0 = t.root + 3;
+        uint8_t *e = xclus(&t, t.root, 0) + 15 * 32;
+        xput(e, "F.BIN", c0, 3 * 4096 - 100, 0);
+        xfatset(&t, c0, c0 + 1); xfatset(&t, c0 + 1, c0 + 2); xfatset(&t, c0 + 2, 0xFFFFFFFF);
+        for (uint32_t k = 0; k < 3; k++) xbit(&t, c0 + k, 1);
+        xclus(&t, t.root, 0)[18 * 32] = 0;
+    }
+    CHECK(runx(&t, "f.bin", 9000, &c) == MSC_FLASH_DONE);
+    CHECK(c.found == 1);
+    verifyx(&t, "F.BIN", 9000);
+    CHECK(xclus(&t, t.root, 0)[15 * 32] == 0x05 && xclus(&t, t.root, 1)[0] == 0x40);
+    CHECK(c.run_start == t.root + 6);
+    for (uint32_t k = 0; k < 3; k++) CHECK(xfatget(&t, t.root + 3 + k) == 0 && !xbitget(&t, t.root + 3 + k));
+    freex(&t);
+}
+
+static void test_exfat_misc(void)
+{
+    msc_flash_ctx_t c;
+    tx_t t;
+    /* Full: a file bigger than the free space, and the drive filled to the last cluster. */
+    newx(&t, 0, 3, 4096, 1, 0, 3000000);
+    {
+        uint8_t *snap = malloc((size_t)t.r.sectors * 512);
+        memcpy(snap, t.r.disk, (size_t)t.r.sectors * 512);
+        CHECK(runx(&t, "f.bin", 3000000, &c) == MSC_FLASH_E_FULL);
+        CHECK(memcmp(snap, t.r.disk, (size_t)t.r.sectors * 512) == 0);
+        uint32_t free_cl = t.ncl + 2 - (t.root + 3);
+        CHECK(runx(&t, "f.bin", free_cl * 4096 + 1, &c) == MSC_FLASH_E_FULL);
+        CHECK(runx(&t, "f.bin", free_cl * 4096, &c) == MSC_FLASH_DONE);
+        CHECK(runx(&t, "g.bin", 1, &c) == MSC_FLASH_E_FULL);
+        free(snap);
+    }
+    freex(&t);
+    /* Fragmented free space: the run is found past the gaps. */
+    newx(&t, 0, 3, 40000, 1, 0, 70000);
+    for (uint32_t k = t.root + 3; k < t.root + 60; k += 3) xbit(&t, k, 1);
+    CHECK(runx(&t, "f.bin", 30000, &c) == MSC_FLASH_DONE);
+    CHECK(c.run_start >= t.root + 58);
+    verifyx(&t, "F.BIN", 30000);
+    freex(&t);
+    /* TexFAT: two FATs and bitmaps, the second active. */
+    newx(&t, 0, 3, 40000, 2, 1, 70000);
+    CHECK(runx(&t, "f.bin", 30000, &c) == MSC_FLASH_DONE);
+    verifyx(&t, "F.BIN", 30000);
+    CHECK(c.x_active == 1 && c.fat_start == t.vol + t.fatoff + t.fatlen);
+    freex(&t);
+    /* Refused boot sectors. */
+    struct { uint32_t off, val, size; int rc; } bad[] = {
+        { 11, 1, 1, MSC_FLASH_E_FS }, { 63, 7, 1, MSC_FLASH_E_FS }, { 108, 10, 1, MSC_FLASH_E_SECTOR }, { 108, 8, 1, MSC_FLASH_E_FS },
+        { 108, 12, 1, MSC_FLASH_E_SECTOR }, { 109, 16, 1, MSC_FLASH_E_FS }, { 110, 0, 1, MSC_FLASH_E_FS },
+        { 110, 3, 1, MSC_FLASH_E_FS }, { 80, 0, 4, MSC_FLASH_E_FS }, { 84, 0, 4, MSC_FLASH_E_FS },
+        { 88, 0, 4, MSC_FLASH_E_FS }, { 88, 0x7FFFFFFF, 4, MSC_FLASH_E_FS }, { 92, 0, 4, MSC_FLASH_E_FS },
+        { 92, 0xFFFFFFF6, 4, MSC_FLASH_E_FS }, { 96, 0, 4, MSC_FLASH_E_FS }, { 96, 0x7FFFFFFF, 4, MSC_FLASH_E_FS },
+        { 105, 2, 1, MSC_FLASH_E_FS }, { 106, 1, 1, MSC_FLASH_E_FS }, { 72, 0xFFFFFFFF, 4, MSC_FLASH_E_FS },
+        { 76, 1, 4, MSC_FLASH_E_FS }, { 510, 0, 1, MSC_FLASH_E_FS }, { 84, 1, 4, MSC_FLASH_E_FS },
+    };
+    for (unsigned k = 0; k < sizeof(bad) / sizeof(bad[0]); k++) {
+        newx(&t, k & 1 ? 2048 : 0, 3, 40000, 1, 0, 6000);
+        uint8_t *b = xsec(&t, 0);
+        if (bad[k].size == 1) b[bad[k].off] = (uint8_t)bad[k].val; else put32(b + bad[k].off, bad[k].val);
+        int rc = runx(&t, "f.bin", 5000, &c);
+        CHECK(rc == bad[k].rc);
+        if (rc != bad[k].rc) printf("  bad[%u]: %s\n", k, msc_flash_rc_str(rc));
+        freex(&t);
+    }
+    /* No bitmap entry, a bitmap too short, a bitmap entry in the wrong place. */
+    newx(&t, 0, 3, 40000, 1, 0, 6000);
+    xclus(&t, t.root, 0)[32] = 0x05;
+    CHECK(runx(&t, "f.bin", 5000, &c) == MSC_FLASH_E_FS);
+    freex(&t);
+    newx(&t, 0, 3, 40000, 1, 0, 6000);
+    put32(xclus(&t, t.root, 0) + 32 + 24, 8);
+    CHECK(runx(&t, "f.bin", 5000, &c) == MSC_FLASH_E_FS);
+    freex(&t);
+    /* A looping root chain. */
+    newx(&t, 0, 3, 40000, 1, 0, 6000);
+    fill_root_x(&t, t.first_free_entry, 128);
+    xfatset(&t, t.root, t.root);
+    t.r.file_len = 5000;
+    ctx_init(&c, &t.r, MSC_FLASH_FILE, "f.bin", 5000);
+    int rc, steps = 0;
+    while ((rc = msc_flash_step(&c)) == MSC_FLASH_RUNNING) steps++;
+    CHECK(rc == MSC_FLASH_E_FS && steps < 700000);
+    freex(&t);
+    /* READ and VERIFY have no exFAT support. */
+    newx(&t, 0, 3, 40000, 1, 0, 40 * 512);
+    ctx_init(&c, &t.r, MSC_FLASH_READ, "FAIL.TXT", 0);
+    CHECK(run(&c, NULL) == MSC_FLASH_E_EXFAT);
+    CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_EXFAT), "reading back from an exFAT drive is not supported") == 0);
+    /* UF2 on exFAT: the blocks go to the cluster heap. */
+    enum { nb = 40 };
+    make_uf2(t.file, nb, 0x10000000);
+    t.r.file_len = nb * 512;
+    ctx_init(&c, &t.r, MSC_FLASH_UF2, NULL, nb * 512);
+    CHECK(run(&c, NULL) == MSC_FLASH_DONE);
+    CHECK(c.data_base == t.vol + t.heap);
+    for (uint32_t i = 0; i < nb; i++) CHECK(memcmp(t.r.disk + (size_t)(c.data_base + i) * 512, t.file + i * 512, 512) == 0);
+    freex(&t);
+    /* Hostile volumes: random changes to the boot sector, the FAT and the root directory. */
+    srand(23);
+    for (int n = 0; n < 3000; n++) {
+        newx(&t, n & 1 ? 63 : 0, 3, 8000, 1, 0, 6000);
+        for (int k = 0; k < 4; k++) xsec(&t, 0)[rand() % 120] = (uint8_t)rand();
+        if (n & 2) xclus(&t, t.root, 0)[rand() % 200] = (uint8_t)rand();
+        if (n & 4) put32(xsec(&t, t.fatoff) + 4 * (2 + rand() % 12), (uint32_t)rand());
+        if (n & 8) put32(xclus(&t, t.root, 0) + 32 + 20, (uint32_t)rand());
+        if (n & 16) fill_root_x(&t, t.first_free_entry, 128);
+        int rc = runx(&t, "f.bin", 6000, &c);
+        CHECK(rc <= 0 && rc != -99);
+        freex(&t);
+    }
+}
+
+static void test_exfat(void)
+{
+    test_exfat_basic(0, 3, 131072, 3 * 1024 * 1024 + 17);      /* 64 MB, 4 KB clusters */
+    test_exfat_basic(2048, 6, 262144, 5 * 1024 * 1024 + 1);    /* 128 MB behind an MBR, 32 KB clusters */
+    test_exfat_basic(0, 3, 524288, 70000);                     /* 256 MB: a two-cluster bitmap */
+    test_exfat_basic(63, 0, 3000, 900);                        /* 512 B clusters */
+    test_exfat_fail();
+    test_exfat_dir();
+    test_exfat_misc();
+}
+
 static void test_names(void)
 {
     char n[11];
@@ -962,7 +1419,7 @@ static void test_names(void)
     CHECK(!msc_flash_name83("sp ace.bin", n));
     CHECK(!msc_flash_name83(".bin", n));
     CHECK(!msc_flash_name83("", n));
-    CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_FS), "the drive has no FAT12, FAT16 or FAT32 file system") == 0);
+    CHECK(strcmp(msc_flash_rc_str(MSC_FLASH_E_FS), "the drive has no FAT12, FAT16, FAT32 or exFAT file system") == 0);
     CHECK(strcmp(msc_flash_phase_str(MSC_PH_FAT), "fat") == 0);
     CHECK(strcmp(msc_flash_phase_str(MSC_PH_FSINFO), "fsinfo") == 0);
 }
@@ -979,6 +1436,7 @@ int main(void)
     test_fat32();
     test_read_file();
     test_verify();
+    test_exfat();
     printf("test_msc_flash: %s (%d checks)\n", failures ? "FAILED" : "all passed", checks);
     return failures ? 1 : 0;
 }

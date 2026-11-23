@@ -43,7 +43,9 @@ int main(int argc, char **argv)
     if (!msc_flash_name83(argv[3], c.name83)) { fprintf(stderr, "bad name\n"); return 2; }
     int rc, steps = 0;
     while ((rc = msc_flash_step(&c)) == MSC_FLASH_RUNNING) steps++;
-    printf("FAT%u clusters %u first %u root-extended %u steps %d: %s\n", c.fat_bits, c.clusters, c.run_start + c.dir_extend, c.dir_extend,
+    if (c.is_exfat) printf("exFAT");
+    else printf("FAT%u", c.fat_bits);
+    printf(" clusters %u first %u root-extended %u steps %d: %s\n", c.clusters, c.run_start + c.dir_extend, c.dir_extend,
            steps, msc_flash_rc_str(rc));
     return rc;
 }

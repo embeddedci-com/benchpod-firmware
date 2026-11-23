@@ -934,7 +934,7 @@ rev = 14
 firmware = "4.0.3"
 docs = "API.md#usb_flash--flash-a-board-over-usb"
 dated = "code"
-note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives and USB sticks, FAT12/FAT16/FAT32), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
+note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives and USB sticks and SD cards, FAT12/FAT16/FAT32/exFAT), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
 
 # May be renumbered when the USB branches are combined.
 [features.usb_flash_readback]
