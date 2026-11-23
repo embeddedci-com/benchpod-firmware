@@ -14,14 +14,15 @@ static const blob_manifest_t k_manifest[BLOB_COUNT + 1] = BLOB_MANIFEST_INIT;
 const blob_manifest_t *blob_manifest(blob_id_t id)
 {
     if (id < BLOB_COUNT) return &k_manifest[id];
-    if (id == BLOB_XIP) {
-        /* The W25Q image this firmware was linked with (patched in after the link). */
-        static blob_manifest_t xip;
-        const xip_hash_t *h = xip_image_expected();
-        xip.len = h->magic == XIP_HASH_MAGIC ? h->len : 0u;
-        xip.version = 0u;
-        memcpy(xip.sha256, h->sha256, 32);
-        return &xip;
+    if (id == BLOB_XIP || id == BLOB_XIP_PROG) {
+        /* The W25Q images this firmware was linked with (patched in after the link). */
+        static blob_manifest_t xip[XIP_IMG_COUNT];
+        const xip_img_t img = id == BLOB_XIP ? XIP_IMG_USB : XIP_IMG_PROG;
+        const xip_hash_t *h = xip_image_expected_of(img);
+        xip[img].len = h->magic == XIP_HASH_MAGIC ? h->len : 0u;
+        xip[img].version = 0u;
+        memcpy(xip[img].sha256, h->sha256, 32);
+        return &xip[img];
     }
     return id == BLOB_GW2 ? &k_manifest[BLOB_COUNT] : NULL;
 }

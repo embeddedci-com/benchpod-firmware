@@ -122,7 +122,7 @@ const prog_proto_info_t *prog_proto_find(const char *name);
 size_t prog_proto_count(void);
 const prog_proto_info_t *prog_proto_at(size_t i);
 
-/* Each prog_<proto>.c defines its entry, which the XIP image's dispatch (xip_mod_prog.c) calls:
+/* Each prog_<proto>.c defines its entry, which the XIP image's dispatch (xip_prog_mod.c) calls:
    `op` is a prog_xop_t. Plain C, so host tests link the sources directly. */
 int prog_updi_call(prog_ctx_t *ctx, unsigned op);
 int prog_pic_call(prog_ctx_t *ctx, unsigned op);

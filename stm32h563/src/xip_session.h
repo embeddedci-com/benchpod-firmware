@@ -15,12 +15,14 @@
  *  - ram: a dev build with XIP_RAM=1 links the image at a reserved RAM address instead; begin copies
  *    the slot there. Runs on any board: everything but the memory-mapped execution is the same.
  *
- * begin checks the slot's length and SHA-256 against the image this firmware was linked with
- * (xip_image_expected()) over the bytes it is about to run, and the table's magic, ABI and count.
+ * begin(img) checks the image's slot length and SHA-256 against the image this firmware was linked
+ * with (xip_image_expected_of()) over the bytes it is about to run, and the table's magic, ABI and
+ * count. One session at a time: the two images share the RAM region (ram mode) and the bus.
  */
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "xip_image.h"
 
 typedef enum { XIP_MODE_NONE = 0, XIP_MODE_MAPPED, XIP_MODE_RAM } xip_mode_t;
 
@@ -40,11 +42,18 @@ xip_mode_t  xip_mode(void);
 const char *xip_mode_name(xip_mode_t m);
 const char *xip_err_text(xip_err_t e);
 
-xip_err_t xip_session_begin(void);
-/* Call table entry `fn` (xip_image.h XIP_FN_*) with one argument. Inside a session only. */
+/* Start a session for image `img` (xip_image.h): XIP_ERR_ACTIVE while another session, of either
+   image, runs (they share the RAM region and the bus). Release with xip_session_end on every path. */
+xip_err_t xip_session_begin(xip_img_t img);
+xip_img_t xip_session_image(void);   /* the image of the running session (meaningful while active) */
+/* xip_err_text with the image's own slot named. */
+const char *xip_img_err_text(xip_img_t img, xip_err_t e);
+/* Call the running image's table entry `fn` (XIP_FN_* or XIP_PROG_FN_*) with one argument. Inside a session only. */
 uint32_t  xip_session_call_u32(unsigned fn, uint32_t arg);
-/* Call table entry `fn` with a context pointer (heap memory the caller owns). -1 outside a session. */
+/* Call entry `fn` with a context pointer (heap memory the caller owns). -1 outside a session. */
 int       xip_session_call_ctx(unsigned fn, void *ctx);
+/* The same with two more arguments (the prog image's XIP_PROG_FN_CALL). */
+int       xip_session_call_ctx2(unsigned fn, void *ctx, unsigned a, unsigned b);
 void      xip_session_end(void);
 bool      xip_session_active(void);
 

@@ -58,6 +58,8 @@ MEMORY
      0x201000 to 0x240000, memory-mapped through OCTOSPI1 at 0x90000000. Not in the firmware .bin:
      tools/xip_finish.py writes it to build/blobs/blob-xip.bin. */
   XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K
+  /* The second image (src/xip_image.h): the pin programmers, slot "xip_prog", W25Q 0x240000 */
+  XIP_PROG    (rx)    : ORIGIN = 0x90241000,   LENGTH = 252K
 }
 
 /* main.c icache_init() makes 0x080E0000 and up non-cacheable (the persistence records and
@@ -99,11 +101,37 @@ SECTIONS
   } >XIP
   __xip_region_end = ORIGIN(XIP) + LENGTH(XIP);
 
+  /* The second W25Q image: the table first, then the pin programmers (prog_flash) and xip_prog_mod.c.
+     Memory-mapped builds link it at its own W25Q address. A RAM build (XIP_RAM=1) replaces the XIP
+     and XIP_PROG lines above with the same 20 KB RAM region (the Makefile): the two images overlay
+     each other there, which is why AT() gives this one a load address of its own, the one the
+     mapped build uses (the linker refuses two sections with the same load address). The image is
+     extracted by section name (tools/xip_finish.py), so the load address is not used. */
+  .xip_prog : AT(0x90241000)
+  {
+    __xip_prog_start = .;
+    KEEP(*(.xip_prog.table))
+    *xip_prog_mod.o(.text .text* .rodata .rodata*)
+    *prog_updi.o(.text .text* .rodata .rodata*)
+    *prog_pic.o(.text .text* .rodata .rodata*)
+    *prog_c2.o(.text .text* .rodata .rodata*)
+    *prog_tpi.o(.text .text* .rodata .rodata*)
+    *prog_pdi.o(.text .text* .rodata .rodata*)
+    . = ALIGN(4);
+    __xip_prog_end = .;
+  } >XIP_PROG
+  __xip_prog_region_end = ORIGIN(XIP_PROG) + LENGTH(XIP_PROG);
+
   /* What the post-link step found in .xip (src/xip_image.c, patched by tools/xip_finish.py). */
   .xip_hash :
   {
     . = ALIGN(4);
     KEEP(*(.xip_hash))
+  } >FLASH
+  .xip_prog_hash :
+  {
+    . = ALIGN(4);
+    KEEP(*(.xip_prog_hash))
   } >FLASH
 
   .text :

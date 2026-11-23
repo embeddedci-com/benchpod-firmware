@@ -1,5 +1,5 @@
 /* prog_flash.c — the protocol metadata table (prog_flash.h). The job and the command come in the
-   framework; the protocols themselves run from the "prog" XIP image (xip_mod_prog.c). */
+   framework; the protocols themselves run from the "prog" XIP image (xip_prog_mod.c). */
 #include "prog_flash.h"
 #include <string.h>
 

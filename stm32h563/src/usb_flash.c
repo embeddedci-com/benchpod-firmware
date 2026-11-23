@@ -415,8 +415,14 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
 
     memset(&s, 0, sizeof(s));
     if (fam != FAM_ESP) {
-        xip_err_t xe = xip_session_begin();
-        if (xe != XIP_OK) { *why = xip_err_text(xe); return -2; }
+        xip_err_t xe = xip_session_begin(XIP_IMG_USB);
+        if (xe != XIP_OK) {
+            /* The other image's session (prog_flash holds it for a whole job) counts as busy. */
+            *why = xe == XIP_ERR_ACTIVE && xip_session_image() == XIP_IMG_PROG
+                 ? "busy: a chip is being flashed over its programming pins (prog_flash); try again when it ends"
+                 : xip_img_err_text(XIP_IMG_USB, xe);
+            return -2;
+        }
         s.xip = true;
         size_t size = fam == FAM_CTRL ? sizeof(ctrl_flash_ctx_t)
                     : fam == FAM_SER  ? sizeof(ser_flash_ctx_t) : sizeof(msc_flash_ctx_t);

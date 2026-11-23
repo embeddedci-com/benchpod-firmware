@@ -18,6 +18,7 @@
 #define XIP_W25Q_DUMMY       8u
 
 static bool     s_active;
+static xip_img_t s_img;
 #if !defined(BENCHPOD_XIP_RAM)
 static bool     s_mapped;
 #endif
@@ -43,7 +44,7 @@ const char *xip_err_text(xip_err_t e)
     case XIP_OK:              return "ok";
     case XIP_ERR_UNSUPPORTED: return "this board cannot run code from its W25Q";
     case XIP_ERR_NO_IMAGE:    return "this firmware was built without a W25Q image";
-    case XIP_ERR_SLOT:        return "the xip blob slot does not hold this firmware's image";
+    case XIP_ERR_SLOT:        return "the xip blob slot does not hold this firmware's image: install the blobs";
     case XIP_ERR_BUS:         return "the W25Q could not be opened";
     case XIP_ERR_MAP:         return "the W25Q could not be memory-mapped";
     case XIP_ERR_HASH:        return "the W25Q image does not match its SHA-256";
@@ -53,7 +54,18 @@ const char *xip_err_text(xip_err_t e)
     return "?";
 }
 
+/* The same with the image's slot named (the usb image's is "xip", the prog image's "xip_prog"). */
+const char *xip_img_err_text(xip_img_t img, xip_err_t e)
+{
+    if (img == XIP_IMG_PROG) {
+        if (e == XIP_ERR_SLOT) return "the xip_prog blob slot does not hold this firmware's image: install the blobs (benchpod install-blobs)";
+        if (e == XIP_ERR_NO_IMAGE) return "this firmware was built without the xip_prog image";
+    }
+    return xip_err_text(e);
+}
+
 bool     xip_session_active(void)        { return s_active; }
+xip_img_t xip_session_image(void)        { return s_img; }
 uint32_t xip_session_last_begin_us(void) { return s_begin_us; }
 
 static uint32_t now_us(void)
@@ -119,44 +131,48 @@ static const xspi_guard_hooks_t k_hooks = { unmap_w25q, map_w25q };
 
 #if defined(BENCHPOD_XIP_RAM)
 /* Copy the slot's image to where it was linked (a RAM region the linker reserved). */
-static xip_err_t load_into_ram(uint32_t len)
+static xip_err_t load_into_ram(const xip_image_t *im, uint32_t len)
 {
-    uint8_t *dst = (uint8_t *)(uintptr_t)__xip_start;
-    if ((uint32_t)(__xip_region_end - __xip_start) < len) return XIP_ERR_SLOT;
+    uint8_t *dst = (uint8_t *)(uintptr_t)im->table;
+    if ((uint32_t)(im->region_end - dst) < len) return XIP_ERR_SLOT;
     for (uint32_t off = 0; off < len; off += 256u) {
         uint32_t n = len - off < 256u ? len - off : 256u;
-        if (blob_store_read((void *)(uintptr_t)BLOB_XIP, off, dst + off, n) != 0) return XIP_ERR_BUS;
+        if (blob_store_read((void *)(uintptr_t)im->blob, off, dst + off, n) != 0) return XIP_ERR_BUS;
     }
     return XIP_OK;
 }
 #endif
 
-static xip_err_t check_image(const uint8_t *img, uint32_t len, const xip_hash_t *want)
+static xip_err_t check_image(const xip_image_t *im, uint32_t len)
 {
     uint8_t sha[32];
-    if (mbedtls_sha256(img, len, sha, 0) != 0 || memcmp(sha, want->sha256, 32) != 0) return XIP_ERR_HASH;
-    const xip_table_t *t = (const xip_table_t *)(uintptr_t)&xip_table;
-    if (t->magic != XIP_TABLE_MAGIC || t->abi != XIP_ABI || t->count != XIP_FN_COUNT) return XIP_ERR_TABLE;
+    if (mbedtls_sha256((const uint8_t *)(uintptr_t)im->table, len, sha, 0) != 0 ||
+        memcmp(sha, im->expected->sha256, 32) != 0) return XIP_ERR_HASH;
+    const xip_table_t *t = (const xip_table_t *)(uintptr_t)im->table;
+    if (t->magic != XIP_TABLE_MAGIC || t->abi != im->abi || t->count != im->count) return XIP_ERR_TABLE;
     return XIP_OK;
 }
 
-xip_err_t xip_session_begin(void)
+xip_err_t xip_session_begin(xip_img_t img)
 {
     const uint32_t t0 = now_us();
     if (s_active) return XIP_ERR_ACTIVE;
+    const xip_image_t *im = xip_image(img);
+    if (!im) return XIP_ERR_NO_IMAGE;
     const xip_mode_t mode = xip_mode();
-    if (mode == XIP_MODE_NONE || !blob_listed(BLOB_XIP)) return XIP_ERR_UNSUPPORTED;
-    const xip_hash_t *want = xip_image_expected();
+    if (mode == XIP_MODE_NONE || !blob_listed(im->blob)) return XIP_ERR_UNSUPPORTED;
+    const xip_hash_t *want = im->expected;
     if (want->magic != XIP_HASH_MAGIC || want->len == 0) return XIP_ERR_NO_IMAGE;
-    const blob_info_t *have = blob_store_info(BLOB_XIP);
+    const blob_info_t *have = blob_store_info(im->blob);
     if (!have || !have->present || have->len != want->len || memcmp(have->sha256, want->sha256, 32) != 0)
         return XIP_ERR_SLOT;
 
     if (w25q_session_open() != 0) { w25q_session_close(); return XIP_ERR_BUS; }
     s_active = true;
+    s_img = img;
     xip_err_t rc = XIP_OK;
 #if defined(BENCHPOD_XIP_RAM)
-    rc = load_into_ram(want->len);
+    rc = load_into_ram(im, want->len);
     w25q_session_close();   /* the copy runs without the bus; the session keeps others off it */
 #else
     if (map_w25q() != 0) {
@@ -167,9 +183,9 @@ xip_err_t xip_session_begin(void)
         xspi_guard_set_mapped(&k_hooks);
     }
 #endif
-    if (rc == XIP_OK) rc = check_image((const uint8_t *)(uintptr_t)__xip_start, want->len, want);
+    if (rc == XIP_OK) rc = check_image(im, want->len);
     if (rc != XIP_OK) {
-        LOG_W("[xip] session refused: %s\n", xip_err_text(rc));
+        LOG_W("[xip] %s session refused: %s\n", im->name, xip_err_text(rc));
         xip_session_end();
         return rc;
     }
@@ -179,16 +195,23 @@ xip_err_t xip_session_begin(void)
 
 uint32_t xip_session_call_u32(unsigned fn, uint32_t arg)
 {
-    const xip_table_t *t = (const xip_table_t *)(uintptr_t)&xip_table;
+    const xip_table_t *t = (const xip_table_t *)(uintptr_t)xip_image(s_img)->table;
     if (!s_active || fn >= t->count) return 0;
     return ((xip_fn_u32_t)t->fn[fn])(arg);
 }
 
 int xip_session_call_ctx(unsigned fn, void *ctx)
 {
-    const xip_table_t *t = (const xip_table_t *)(uintptr_t)&xip_table;
+    const xip_table_t *t = (const xip_table_t *)(uintptr_t)xip_image(s_img)->table;
     if (!s_active || fn >= t->count) return -1;
     return ((xip_fn_ctx_t)t->fn[fn])(ctx);
+}
+
+int xip_session_call_ctx2(unsigned fn, void *ctx, unsigned a, unsigned b)
+{
+    const xip_table_t *t = (const xip_table_t *)(uintptr_t)xip_image(s_img)->table;
+    if (!s_active || fn >= t->count) return -1;
+    return ((xip_fn_ctx2_t)t->fn[fn])(ctx, a, b);
 }
 
 void xip_session_end(void)
