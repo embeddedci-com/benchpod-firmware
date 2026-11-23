@@ -210,8 +210,11 @@ module tb_swim;
         begin tk(8'h05); tk({hsp, 3'b000, retr}); tk(tmo); tk(rise); end
     endtask
     task t_report; tk(8'h06);                    endtask
-    task t_rotf(input [7:0] nn, input [23:0] ad); begin tk(8'h07); tk(nn); tk(ad[23:16]); tk(ad[15:8]); tk(ad[7:0]); end endtask
-    task t_wotf(input [7:0] nn, input [23:0] ad); begin tk(8'h0F); tk(nn); tk(ad[23:16]); tk(ad[15:8]); tk(ad[7:0]); end endtask
+    task t_head(input [2:0] cmd, input [7:0] nn, input [23:0] ad); begin t_cmd(cmd); t_txb(nn); t_txb(ad[23:16]); t_txb(ad[15:8]); t_txb(ad[7:0]); end endtask
+    task t_rotf(input [7:0] nn, input [23:0] ad); integer q; begin t_head(3'd1, nn, ad); for (q = 0; q < ((nn == 0) ? 256 : nn); q = q + 1) t_rxb; end endtask
+    // WOTF: the data bytes go in with tk() after t_wotf, as raw TXB tokens: use t_wd
+    task t_wotf(input [7:0] nn, input [23:0] ad); begin t_head(3'd2, nn, ad); end endtask
+    task t_wd(input [7:0] b); t_txb(b); endtask
 
     task feed_go;
         integer i, g, w;
@@ -304,39 +307,43 @@ module tb_swim;
         rep_at(5, 11, 0, 8'h00, "after ROTF");
         check(reply_count, 8, "reply count ROTF");
 
-        fn = 0; t_wotf(8'd4, 24'h002000); tk(8'hAA); tk(8'h55); tk(8'h01); tk(8'hFE); t_report; feed_go;
+        fn = 0; t_wotf(8'd4, 24'h002000); t_wd(8'hAA); t_wd(8'h55); t_wd(8'h01); t_wd(8'hFE); t_report; feed_go;
         mem_is(24'h002000, 8'hAA, 8'h55, 8'h01, 8'hFE, "WOTF 4 bytes");
         rep_at(0, 20, 0, 8'h00, "after WOTF");
         check(q_flags, 8'h00, "q_flags idle after WOTF");
 
-        // N = 0 means 256, one byte back to back with the chip's gap at its minimum, a slow feed link
-        fn = 0; t_rotf(8'd2, 24'h00F000); t_report; data_gap = 22; gap = 2000; feed_go; gap = 0;
-        data_at(0, 24'h00F000, 2, "ROTF, chip answering back to back, slow feed");
-        rep_at(2, 27, 0, 8'h00, "after slow ROTF");
+        // the chip answering back to back (no gap before its first byte beyond one slot); then a slow feed
+        // link on a WOTF (the chip waits for the host: gaps of 83 us between queue bytes are fine)
+        fn = 0; t_rotf(8'd2, 24'h00F000); t_report; data_gap = 22; feed_go;
+        data_at(0, 24'h00F000, 2, "ROTF, chip answering back to back");
+        rep_at(2, 27, 0, 8'h00, "after back-to-back ROTF");
         data_gap = 40;
+        fn = 0; t_wotf(8'd2, 24'h002F00); t_wd(8'h0F); t_wd(8'hF0); t_report; gap = 2000; feed_go; gap = 0;
+        mem_is(24'h002F00, 8'h0F, 8'hF0, mem[16'h2F02], mem[16'h2F03], "WOTF over a slow feed");
+        rep_at(0, 34, 0, 8'h00, "after slow-feed WOTF");
 
         // ---- 2. raw frames: TXB / RXB, a CMD the chip does not know is still ACKed ----
         fn = 0; t_cmd(3'd1); t_txb(8'd1); t_txb(8'h00); t_txb(8'h30); t_txb(8'h00); t_rxb; t_report; feed_go;
         data_at(0, 24'h003000, 1, "raw ROTF with RXB");
-        rep_at(1, 33, 0, 8'h00, "after raw ROTF");
+        rep_at(1, 40, 0, 8'h00, "after raw ROTF");
 
         // ---- 3. NACK and retry ----
-        fn = 0; inj_nack = 2; t_wotf(8'd1, 24'h002100); tk(8'h5A); t_report; feed_go;
+        fn = 0; inj_nack = 2; t_wotf(8'd1, 24'h002100); t_wd(8'h5A); t_report; feed_go;
         mem_is(24'h002100, 8'h5A, mem[16'h2101], mem[16'h2102], mem[16'h2103], "WOTF after two NACKs");
-        rep_at(0, 39, 2, 8'h00, "two NACKs retried");
+        rep_at(0, 46, 2, 8'h00, "two NACKs retried");
         check(q_flags, 8'h08, "q_flags after retries (2 NACKs counted)");
 
         // a bad parity frame from the chip: NACK from the pod, the chip sends the byte again
         fn = 0; inj_par = 1; t_rotf(8'd2, 24'h004000); t_report; feed_go;
         data_at(0, 24'h004000, 2, "ROTF with a bad-parity frame");
-        rep_at(2, 46, 3, 8'h20, "parity NACK");
+        rep_at(2, 53, 3, 8'h20, "parity NACK");
         check(host_nacks, 1, "chip saw the pod's NACK");
 
         // retries used up: stops, the failure appends the report, the rest of the queue is not run
-        fn = 0; inj_nack = 10; t_wotf(8'd1, 24'h002200); tk(8'h77); t_report; t_cmd(3'd0); feed_go;
+        fn = 0; inj_nack = 10; t_wotf(8'd1, 24'h002200); t_wd(8'h77); t_report; t_cmd(3'd0); feed_go;
         check(q_flags & 8'hFE, 8'h3E, "q_flags NACK retries used up");   // nack-failed, NACK count 7, stopped
         check(reply_count, 3, "failure reply is the report");
-        rep_at(0, 46, 7, 8'hB0, "NACK retries used up");
+        rep_at(0, 53, 7, 8'hB0, "NACK retries used up");
         check(srst_count, 1, "the SRST behind the failure was not run");
         inj_nack = 0;
         // a retry count of 1 from CFG: two NACKs are too many
@@ -363,7 +370,7 @@ module tb_swim;
         // ---- 6. slow rising line: the engine waits for it, the bits stay intact ----
         // 700 ns is 5.6 SWIM clocks: the pod's high part after a 0 bit (2 clocks) would be gone before the line
         // rose.  (The chip's own bits need a faster line, see 200 ns below: its high part is only 2 clocks.)
-        rearm; rise_ns = 700.0; t_wotf(8'd3, 24'h002300); tk(8'h11); tk(8'h22); tk(8'h33); t_cmd(3'd0); t_report; feed_go;
+        rearm; rise_ns = 700.0; t_wotf(8'd3, 24'h002300); t_wd(8'h11); t_wd(8'h22); t_wd(8'h33); t_cmd(3'd0); t_report; feed_go;
         mem_is(24'h002300, 8'h11, 8'h22, 8'h33, mem[16'h2303], "slow rise WOTF");
         rep_at(0, 9, 0, 8'h00, "slow rise 700 ns");
         rearm; rise_ns = 200.0; t_rotf(8'd3, 24'h002300); t_report; feed_go;
@@ -375,9 +382,9 @@ module tb_swim;
         rise_ns = 20.0;
 
         // ---- 7. high speed: SWIM_CSR HS, then the pod follows ----
-        rearm; t_wotf(8'd1, 24'h007F80); tk(8'h10); feed_go;
+        rearm; t_wotf(8'd1, 24'h007F80); t_wd(8'h10); feed_go;
         if (hs !== 1'b1) fail("chip is not in high speed");
-        fn = 0; t_cfg(1'b1, 4'd3, 8'd32, 8'd64); t_rotf(8'd6, 24'h001000); t_wotf(8'd2, 24'h002400); tk(8'hC3); tk(8'h3C); t_report; feed_go;
+        fn = 0; t_cfg(1'b1, 4'd3, 8'd32, 8'd64); t_rotf(8'd6, 24'h001000); t_wotf(8'd2, 24'h002400); t_wd(8'hC3); t_wd(8'h3C); t_report; feed_go;
         data_at(0, 24'h001000, 6, "high speed ROTF");
         mem_is(24'h002400, 8'hC3, 8'h3C, mem[16'h2402], mem[16'h2403], "high speed WOTF");
         rep_at(6, 24, 0, 8'h40, "high speed report");
@@ -388,9 +395,9 @@ module tb_swim;
         sync_at(0, 477, 484, "sync at 6.4 MHz");
         data_at(2, 24'h005000, 3, "ROTF at 6.4 MHz");
         rep_at(5, 8, 0, 8'h00, "6.4 MHz report");
-        fn = 0; t_wotf(8'd2, 24'h005100); tk(8'h99); tk(8'h66); feed_go;
+        fn = 0; t_wotf(8'd2, 24'h005100); t_wd(8'h99); t_wd(8'h66); feed_go;
         mem_is(24'h005100, 8'h99, 8'h66, mem[16'h5102], mem[16'h5103], "WOTF at 6.4 MHz");
-        clk_ns = 111.11; tgt_restart; arm; t_entry; t_rotf(8'd3, 24'h005200); t_wotf(8'd1, 24'h005300); tk(8'hA5); feed_go;
+        clk_ns = 111.11; tgt_restart; arm; t_entry; t_rotf(8'd3, 24'h005200); t_wotf(8'd1, 24'h005300); t_wd(8'hA5); feed_go;
         sync_at(0, 338, 344, "sync at 9 MHz");
         data_at(2, 24'h005200, 3, "ROTF at 9 MHz");
         mem_is(24'h005300, 8'hA5, mem[16'h5301], mem[16'h5302], mem[16'h5303], "WOTF at 9 MHz");
