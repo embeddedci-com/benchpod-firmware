@@ -284,26 +284,26 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# Loop image: seed 20 since v61 (local sweep 1-64, 56 ok: clk48 58.28 MHz, clk 27.42 MHz,
-# clk -> clk48 11.35 ns, clk48 -> clk 8.08 ns).  CI not swept yet: run ice40-seed-sweep.yml and
-# pick from both before promoting.  (v60: seed 2.)
+# Loop image: seed 20 since v61 (clk48 58.28 MHz, clk 27.42 MHz, clk -> clk48 11.35 ns,
+# clk48 -> clk 8.08 ns; 4323 LC, 81%).  CI: 53.91 / 26.99 / 14.95 / 6.22.  Local sweep 56 of 64 ok,
+# CI 54 of 64.  (v60: seed 2.)
 SEED_LOOP ?= 20
-# The next v61 seeds from the local sweep, by clk48 margin.
-SEED_LOOP_FALLBACK ?= 8 31 14 43 55
-# Deep image: seed 24 since v60 (clk48 59.26 MHz, clk 27.45 MHz, clk -> clk48 13.92 ns,
-# clk48 -> clk 5.62 ns; 3939 LC, 75%).  CI: 57.67 / 28.72 / 13.27 / 6.85.  Its clk -> clk48
+# The next v61 seeds good in both toolchains, by their worst clk48 margin.
+SEED_LOOP_FALLBACK ?= 8 1 34 55 13
+# Deep image: seed 24 since v60; v61: clk48 55.60 MHz, clk 28.01 MHz, clk -> clk48 13.88 ns,
+# clk48 -> clk 4.39 ns.  CI: 55.67 / 27.25 / 14.85 / 4.39 (local 45, CI 40 of 64 ok).  Its clk -> clk48
 # margin to MAX_X48_NS is the smallest of the three images: re-sweep in both toolchains (the
 # ice40-seed-sweep workflow for CI's) when it moves.
 SEED_DEEP ?= 24
-# The next v60 seeds good in both toolchains, by their worst gate margin.
-SEED_DEEP_FALLBACK ?= 32 48 60 19 13
-# Emulation image (USE_EMULATION): seed 60 since v60 (clk48 61.41 MHz, clk 27.37 MHz,
-# clk -> clk48 11.17 ns, clk48 -> clk 6.66 ns; CI 56.06 / 28.36 / 11.78 / 8.17).  CI's toolchain
-# closes only 28 of 64 emu seeds.  It is the fullest image: 5155/5280 LC (97.6%),
-# 30/30 block RAM, 4/4 SPRAM.  Its binding clock is clk (24 MHz, MIN_CLK_MHZ), not clk48.
+# The next v61 seeds good in both toolchains, by their worst clk48 margin.
+SEED_DEEP_FALLBACK ?= 58 53 18 54 59
+# Emulation image (USE_EMULATION): seed 60 since v60; v61: clk48 58.64 MHz, clk 25.50 MHz,
+# clk -> clk48 11.86 ns, clk48 -> clk 6.77 ns; CI 58.95 / 27.00 / 14.20 / 8.08 (local 19, CI 53 of
+# 64 ok).  It is the fullest image: no JTAG master (HAS_JTAG 0, v61), 97.6% LC, 30/30 block RAM,
+# 4/4 SPRAM.  Its binding clock is clk (24 MHz, MIN_CLK_MHZ), not clk48.
 SEED_EMU ?= 60
-# The next v60 seeds good in both toolchains, by their worst gate margin.
-SEED_EMU_FALLBACK ?= 12 7 41 59 40
+# The next v61 seeds good in both toolchains, by their worst gate margin.
+SEED_EMU_FALLBACK ?= 56 36 4 1 53
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
