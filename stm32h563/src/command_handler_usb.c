@@ -45,9 +45,42 @@ static void usb_host_reply(int conn_id)
     vPortFree(data);
 }
 
+#if defined(BENCHPOD_USB_HOST_LOG)
+#include "usb_host_log.h"
+/* {"cmd":"usb_host","log":true[,"clear":true]}: TinyUSB's host log, JSON-escaped (development builds). */
+static void usb_host_log_reply(int conn_id, bool clear)
+{
+    const size_t cap = BP_CLOUD_REPLY_MAX - 64u;
+    char *raw = pvPortMalloc(1200), *data = pvPortMalloc(cap);
+    if (!raw || !data) { vPortFree(raw); vPortFree(data); send_error(conn_id, "usb_host: out of memory"); return; }
+    size_t n = usb_host_log_read(raw, 1200), o = 0;
+    o += (size_t)snprintf(data, cap, "{\"log\":\"");
+    for (size_t i = 0; i < n && o + 8 < cap; i++) {
+        unsigned char c = (unsigned char)raw[i];
+        if (c == '"' || c == '\\') { data[o++] = '\\'; data[o++] = (char)c; }
+        else if (c == '\n') { data[o++] = '\\'; data[o++] = 'n'; }
+        else if (c < 0x20 || c > 0x7E) data[o++] = '?';
+        else data[o++] = (char)c;
+    }
+    snprintf(data + o, cap - o, "\"}");
+    if (clear) usb_host_log_clear();
+    send_ok_large(conn_id, data);
+    vPortFree(raw);
+    vPortFree(data);
+}
+#endif
+
 void handle_usb_host(int conn_id, const char *json)
 {
     char v[16] = {0};
+#if defined(BENCHPOD_USB_HOST_LOG)
+    if (bp_json_get(json, "log", v, sizeof(v)) && !strcmp(v, "true")) {
+        char c[8] = {0};
+        usb_host_log_reply(conn_id, bp_json_get(json, "clear", c, sizeof(c)) && !strcmp(c, "true"));
+        return;
+    }
+    memset(v, 0, sizeof(v));
+#endif
     if (!bp_json_get(json, "enabled", v, sizeof(v))) { usb_host_reply(conn_id); return; }
     if (!strcmp(v, "false")) {
         usb_host_stop();

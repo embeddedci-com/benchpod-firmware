@@ -12,7 +12,16 @@
 
 #define CFG_TUSB_MCU             OPT_MCU_STM32H5
 #define CFG_TUSB_OS              OPT_OS_FREERTOS
+#if defined(BENCHPOD_USB_HOST_LOG)
+/* USB_HOST_LOG=1 development builds: the host stack's log (level 2) into a RAM ring
+   (usb_host_log.c, usb_host "log"); the device stack stays silent. */
+#define CFG_TUSB_DEBUG           2
+#define CFG_TUH_LOG_LEVEL        2
+#define CFG_TUD_LOG_LEVEL        3
+#define CFG_TUSB_DEBUG_PRINTF    usb_host_log_printf
+#else
 #define CFG_TUSB_DEBUG           0
+#endif
 #define CFG_TUSB_MEM_ALIGN       __attribute__((aligned(4)))
 
 #define BOARD_TUD_RHPORT         0
@@ -49,7 +58,7 @@
 #define CFG_TUH_ENUMERATION_BUFSIZE 1024
 #define CFG_TUH_DEVICE_MAX       1
 #define CFG_TUH_HUB              0
-#define CFG_TUH_ENDPOINT_MAX     4
+#define CFG_TUH_ENDPOINT_MAX     16  /* endpoint NUMBERS, not a count: usbh indexes by number (an Uno R3 uses EP 4) */
 #define CFG_TUH_MSC              1   /* a USB drive to flash (usb_msc.h, usb_flash.h) */
 #define CFG_TUH_CDC              1   /* a USB serial port to flash over (usb_serial.h, usb_flash.h) */
 #define CFG_TUH_CDC_FTDI         1   /* boards with a USB-serial chip instead of native USB */

@@ -386,6 +386,14 @@ endif
 USB_HOST ?= 1
 ifeq ($(USB_HOST),1)
 DEFS      += -DBENCHPOD_USB_HOST=1
+# USB_HOST_LOG=1: TinyUSB's host log in a 3 KB RAM ring, read with usb_host "log" (development only).
+ifeq ($(USB_HOST_LOG),1)
+ifeq ($(RELEASE),1)
+$(error USB_HOST_LOG=1 is a development build and cannot be combined with RELEASE=1)
+endif
+DEFS      += -DBENCHPOD_USB_HOST_LOG=1
+C_SOURCES += src/usb_host_log.c
+endif
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
              $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c \
@@ -400,6 +408,9 @@ HEAP_KB := $(shell expr $(HEAP_KB) - 5)
 endif
 ifeq ($(XIP_RAM),1)
 HEAP_KB := $(shell expr $(HEAP_KB) - 16)
+endif
+ifeq ($(USB_HOST_LOG),1)
+HEAP_KB := $(shell expr $(HEAP_KB) - 3)
 endif
 ifneq ($(HEAP_KB),259)
 DEFS      += -DBENCHPOD_HEAP_KB=$(HEAP_KB)U
