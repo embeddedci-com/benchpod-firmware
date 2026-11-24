@@ -114,7 +114,7 @@ retried as DAP_TransferConfigure says.
 
 ## JTAG
 
-Gateware v61 and later carry a JTAG master in the loop and deep images (not in the emulation
+Firmware 4.0.4 and later (feature `jtag`), with gateware v61 or later, has a JTAG master in the loop and deep images (not in the emulation
 image, which has no room for it; `dap_start` with JTAG pins refuses there with BP0059 or BP0058).
 `dap_start` takes four LA channels, `tck`, `tms`, `tdi` and `tdo`, and an optional `trst`
 (nTRST, driven as an output, released high); nRESET stays on the pod's own reset pin. With both

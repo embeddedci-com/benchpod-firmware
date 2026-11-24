@@ -213,6 +213,11 @@ firmware = "4.0.3"
 gateware = 60
 date = "2026-11-23"
 
+[[releases]]
+firmware = "4.0.4"
+gateware = 62
+date = "2026-11-23"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -973,7 +978,7 @@ note = "usb_flash mode picoboot: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350)
 
 [features.jtag]
 rev = 16
-firmware = "next"
+firmware = "4.0.4"
 gateware = 61
 gw_const = "JTAG_MIN_GW"
 dated = "code"
@@ -982,7 +987,7 @@ note = "dap_start with tck, tms, tdi and tdo (optional trst) makes the pod a CMS
 
 [features.prog_flash]
 rev = 17
-firmware = "next"
+firmware = "4.0.4"
 board = "any"
 dated = "code"
 docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"

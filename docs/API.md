@@ -3258,7 +3258,7 @@ A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range 
 
 ### `prog_flash` — flash a chip over its programming pins
 
-Firmware with feature `prog_flash`. The pod runs the chip's own programming protocol on its LA
+Firmware 4.0.4 and later (feature `prog_flash`). The pod runs the chip's own programming protocol on its LA
 pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 or 3.3 V).
 
 | `proto` | Chips | Wiring |
