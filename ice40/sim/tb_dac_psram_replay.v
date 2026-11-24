@@ -48,14 +48,17 @@ module tb_dac_psram_replay;
 
     // streaming DAC engine (psram_mode=1) on clk48; BRAM port unused.
     wire sync, dsclk, din, running;
+    wire sync_e, sclk_a, sclk_b, din_a, din_b;
     dac8551_engine #(.ADDR_W(12)) dac (
         .clk(clk48), .rst(rst48), .start(start), .stop(stop),
         .period_samples(13'd0), .divider(16'd8),
         .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(), .wave_data(8'h00),
         .psram_mode(1'b1), .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
-        .dac_sync(sync), .dac_sclk(dsclk), .dac_din(din), .running(running)
+        .dac_sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b), .running(running)
     );
+    dac_pads dac_pads_i (.clk48(clk48), .sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b),
+                   .dac_sync(sync), .dac_sclk(dsclk), .dac_din(din));
 
     // ---- APS6404L read model (same contract as tb_dac_psram_reader) ----
     reg  [7:0] mem [0:1023];
@@ -108,11 +111,11 @@ module tb_dac_psram_replay;
         end
     end
 
-    // Sample period in psram_mode with the real reader: max(divider, 4) + 52 clk48, one more than
-    // the BRAM path's + 51 (tb_dac8551), because the reader's FWFT head refills one clk48 after
+    // Sample period in psram_mode with the real reader: max(divider, 4) + 64 clk48 (v66; + 52 up
+    // to v65), one more than the BRAM path's + 63 (tb_dac8551), because the reader's FWFT head refills one clk48 after
     // each pop, so S_PHI waits a cycle for the high byte.  The wire divider here is the v40
     // reload 8, i.e. divider 9.  Firmware's deep-replay divider math depends on this.
-    localparam integer DEEP_SAMPLE_CLK = 9 + 52;
+    localparam integer DEEP_SAMPLE_CLK = 9 + 64;
 
     localparam NFRAMES = 11;   // > 2 loops of 4 samples -> exercises the wrap
     function [15:0] want_sample(input integer i);
@@ -133,7 +136,7 @@ module tb_dac_psram_replay;
                 end
             for (k = 1; k < NFRAMES; k = k + 1)
                 if (fclk[k] - fclk[k-1] != DEEP_SAMPLE_CLK) begin
-                    $display("FAIL %0s: frame[%0d] came %0d clk48 after the previous one, want %0d (divider 9 + 52)",
+                    $display("FAIL %0s: frame[%0d] came %0d clk48 after the previous one, want %0d (divider 9 + 64)",
                              what, k, fclk[k] - fclk[k-1], DEEP_SAMPLE_CLK);
                     errors = errors + 1;
                 end
@@ -166,7 +169,7 @@ module tb_dac_psram_replay;
         wait (fidx >= NFRAMES);
         check_frames("re-arm");
         if (errors == 0)
-            $display("PASS tb_dac_psram_replay: %0d DAC frames replayed from PSRAM in order across the wrap (len=%0d B) at divider + 52 clk48 per sample, and again after a re-arm onto base 0x100 / len 6 B", NFRAMES, LEN);
+            $display("PASS tb_dac_psram_replay: %0d DAC frames replayed from PSRAM in order across the wrap (len=%0d B) at divider + 64 clk48 per sample, and again after a re-arm onto base 0x100 / len 6 B", NFRAMES, LEN);
         else
             $display("FAIL tb_dac_psram_replay: %0d error(s)", errors);
         $finish;

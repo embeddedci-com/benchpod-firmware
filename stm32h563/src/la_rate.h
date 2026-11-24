@@ -87,18 +87,23 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
 
 /* ---- DAC sample period ------------------------------------------------------------------
  * Extra clk48 the DAC8551 sequencer spends per sample BEYOND the inter-sample divider gap:
- * 3 fetch/latch cycles (BRAM: S_RDLO + S_RDHI + S_LAT) plus a 24-bit SPI frame shifted at
- * 2 clocks/bit (S_SHIFT) = 3 + 48 = 51.  See ice40/src/dac8551_engine.v and tb_dac8551.  So
- * one sample takes max(divider, DAC_MIN_DIVIDER) + 51 clocks and the real update rate is
- * DAC_CLK/(divider + 51), NOT DAC_CLK/divider.  Ignoring it made generate() play far below
- * the requested frequency at small dividers, and made replay play slow (80 kS/s asked came
- * out at 73.7 kS/s, 400 kS/s at 281 kS/s; measured on the pod). */
-#define DAC_SEQ_OVERHEAD_CLK 51u
+ * 3 fetch/latch cycles (BRAM: S_RDLO + S_RDHI + S_LAT) plus the 24-bit SPI frame (S_SHIFT).
+ * Gateware v66+ shifts it at 2.5 clocks/bit (a 19.2 MHz SCLK through DDR pads, for the DAC8554's
+ * 20 ns SCLK low time): 3 + 60 = 63.  Up to v65, 2 clocks/bit (24 MHz): 3 + 48 = 51.  See
+ * ice40/src/dac8551_engine.v and tb_dac8551.  So one sample takes max(divider, DAC_MIN_DIVIDER)
+ * + overhead clocks and the real update rate is DAC_CLK/(divider + overhead), NOT
+ * DAC_CLK/divider.  Ignoring it made generate() play far below the requested frequency at small
+ * dividers, and made replay play slow (80 kS/s asked came out at 73.7 kS/s, 400 kS/s at
+ * 281 kS/s; measured on the pod).  Use dac_seq_overhead_clk(gw) for the running gateware. */
+#define DAC_SCLK_DDR_MIN_GW      66u
+#define DAC_SEQ_OVERHEAD_CLK     63u   /* gateware >= DAC_SCLK_DDR_MIN_GW */
+#define DAC_SEQ_OVERHEAD_CLK_OLD 51u   /* gateware <  DAC_SCLK_DDR_MIN_GW */
+uint32_t dac_seq_overhead_clk(uint8_t gw_version);
 /* A deep (PSRAM) replay takes one more clk48 per sample: the dac_psram_reader FIFO is
  * first-word-fall-through and refills its head one clk48 after each pop, so the engine's
- * S_PHI waits a cycle for the high byte.  tb_dac_psram_replay checks it (divider + 52);
- * the pod measured the same (48 MHz / (3 + 52) = 872.7 kS/s at the old divider floor of 3;
- * 48 MHz / (4 + 52) ~= 857 kS/s at today's floor of 4). */
+ * S_PHI waits a cycle for the high byte.  tb_dac_psram_replay checks it (divider + 64 on v66+,
+ * + 52 before); the pod measured the same (48 MHz / (4 + 52) ~= 857 kS/s on v59-v65;
+ * 48 MHz / (4 + 64) ~= 706 kS/s on v66+). */
 #define DAC_PSRAM_EXTRA_CLK  1u
 
 /* Smallest DAC divider firmware sends.  The next frame's SYNC falls divider+3 clocks after the
@@ -117,13 +122,15 @@ typedef struct {
                            2 = request below the slowest rate, played at that */
 } dac_rate_plan_t;
 
-/* Clocks one DAC sample takes at `divider`, from the BRAM (from_psram false) or PSRAM. */
-uint32_t dac_sample_clocks(uint32_t divider, bool from_psram);
+/* Clocks one DAC sample takes at `divider`, from the BRAM (from_psram false) or PSRAM, on
+ * gateware `gw_version`. */
+uint32_t dac_sample_clocks(uint32_t divider, bool from_psram, uint8_t gw_version);
 
 /* Divider for a replay at `req_rate_hz` (the real sample rate) on a `dac_clk_hz` engine clock:
  * the nearest achievable one, accounting for the frame overhead.  req_rate_hz <= 0 asks for the
  * maximum rate (DAC_MIN_DIVIDER).  Requests outside the range are clamped and flagged. */
-dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram);
+dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram,
+                                uint8_t gw_version);
 
 /* LA CHANGE capture (gateware >= LA_CHANGE_MIN_GW): above the raw sampler's LA_RAW_MAX_HZ the
    firmware records the changes at 48 MS/s instead and reads them back as 48 MHz / k samples,

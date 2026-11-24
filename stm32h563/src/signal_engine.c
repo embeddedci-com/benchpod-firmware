@@ -243,12 +243,14 @@ void SPI1_IRQHandler(void)            { HAL_SPI_IRQHandler(&hspi_ice); }
 /* ---- Sample-rate / divider arithmetic ------------------------------------ */
 
 /* DAC_SEQ_OVERHEAD_CLK, DAC_PSRAM_EXTRA_CLK and DAC_MIN_DIVIDER (the DAC8551 sequencer's per-sample
-   cost) live in la_rate.h, next to the host-tested replay divider math (dac_replay_plan). */
+   cost) live in la_rate.h, next to the host-tested replay divider math (dac_replay_plan).  The
+   overhead depends on the gateware (63 clk48 on v66+, 51 before): dac_overhead() is the running one. */
+static uint32_t dac_overhead(void) { return dac_seq_overhead_clk(s_fpga_version); }
 
 /* True DAC update rate (Hz) achieved by the sequencer for a given divider.  The
    DAC engine runs on DAC_CLK_HZ (48 MHz on gateware >= 13), not the 24 MHz HFOSC. */
 static float dac_effective_rate_hz(uint32_t divider) {
-    return (float)DAC_CLK_HZ / (float)(divider + DAC_SEQ_OVERHEAD_CLK);
+    return (float)DAC_CLK_HZ / (float)(divider + dac_overhead());
 }
 
 /* Pick the DAC sample-clock divider and per-period sample count so the played
@@ -280,14 +282,14 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
     uint32_t divider;
     if (forced_sample_rate_hz > 0.0f) {
         /* Effective rate = DAC_CLK/(divider+K) → divider = DAC_CLK/rate - K. */
-        float d = (float)DAC_CLK_HZ / forced_sample_rate_hz - (float)DAC_SEQ_OVERHEAD_CLK;
+        float d = (float)DAC_CLK_HZ / forced_sample_rate_hz - (float)dac_overhead();
         divider = (d < (float)DAC_MIN_DIVIDER) ? DAC_MIN_DIVIDER
                 : (d > 65535.0f) ? 65535u : (uint32_t)(d + 0.5f);
     } else {
         /* Smallest divider whose per-period count fits: period = eff_rate/freq ≤ MAX
            ⇒ divider ≥ DAC_CLK/(MAX*freq) - K.  Take the ceiling, floored at DAC_MIN_DIVIDER. */
         float dmin = (float)DAC_CLK_HZ / ((float)SIGNAL_MAX_SAMPLES * freq)
-                     - (float)DAC_SEQ_OVERHEAD_CLK;
+                     - (float)dac_overhead();
         divider = (dmin < (float)DAC_MIN_DIVIDER) ? DAC_MIN_DIVIDER
                 : (dmin >= 65535.0f) ? 65535u : (uint32_t)dmin + 1u;
     }
@@ -312,7 +314,8 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
 /* Convert a desired LA sample rate (Hz) into an FPGA clock divider (the only caller is the
    LA side of a capture).  sample_rate = FPGA_HFOSC_HZ / divider, so divider = HFOSC / rate.
    0 (or negative) → divider 2, the LA's max rate (12 MS/s).  Clamped to 2..65535.  The DAC
-   has its own conversion (dac_replay_plan in la_rate.c; it tops out near 873 kS/s from RAM, 857 kS/s from PSRAM). */
+   has its own conversion (dac_replay_plan in la_rate.c; it tops out near 716 kS/s from RAM, 706 kS/s from PSRAM
+   on gateware v66+, 873 / 857 kS/s before). */
 static uint32_t divider_from_rate_hz(float sample_rate_hz) {
     if (sample_rate_hz <= 0.0f) return 2;
     uint32_t d = (uint32_t)((float)FPGA_HFOSC_HZ / sample_rate_hz + 0.5f);
@@ -327,7 +330,7 @@ static uint32_t s_dac_replay_rate_hz = 0;
 uint32_t signal_engine_dac_replay_rate_hz(void) { return s_dac_replay_rate_hz; }
 
 static uint32_t dac_replay_divider(float sample_rate_hz, bool from_psram) {
-    dac_rate_plan_t p = dac_replay_plan(DAC_CLK_HZ, sample_rate_hz, from_psram);
+    dac_rate_plan_t p = dac_replay_plan(DAC_CLK_HZ, sample_rate_hz, from_psram, s_fpga_version);
     if (p.clamped)
         LOG_W("[sig] WARN: replay rate %lu S/s is %s the DAC's %s; playing at %lu S/s\n",
               (unsigned long)lroundf(sample_rate_hz), p.clamped == 1 ? "above" : "below",
@@ -2158,8 +2161,9 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        cap_div is floored at ADC_CAP_MIN_DIVIDER (>= 60), so dac_div stays >= DAC_MIN_DIVIDER. */
     uint32_t cap_div = adc_divider_from_rate_hz(fs);
     uint32_t two_cap = 2u * cap_div;
-    uint32_t dac_div = (two_cap >= DAC_SEQ_OVERHEAD_CLK + DAC_MIN_DIVIDER)
-                           ? (two_cap - DAC_SEQ_OVERHEAD_CLK) : DAC_MIN_DIVIDER;
+    uint32_t dac_k   = dac_overhead();
+    uint32_t dac_div = (two_cap >= dac_k + DAC_MIN_DIVIDER)
+                           ? (two_cap - dac_k) : DAC_MIN_DIVIDER;
 
     if (fill_wave16(waveform, period, amplitude, offset) != 0) {
         LOG_W("[sig] ERROR: measure unknown waveform \"%s\"\n", waveform);

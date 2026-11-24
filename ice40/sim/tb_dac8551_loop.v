@@ -21,14 +21,17 @@ module tb_dac8551_loop;
     reg [7:0] wave [0:7];            // contents irrelevant; addresses are checked
     always @(posedge clk) wdata <= wave[waddr];
 
+    wire sync_e, sclk_a, sclk_b, din_a, din_b;
     dac8551_engine #(.ADDR_W(12)) dut (
         .clk(clk), .rst(rst), .start(start), .stop(stop),
         .period_samples(period), .divider(divider),
         .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(waddr), .wave_data(wdata),
         .psram_mode(1'b0), .strm_data(8'h00), .strm_valid(1'b0), .strm_pop(),
-        .dac_sync(sync), .dac_sclk(sclk), .dac_din(din), .running(running)
+        .dac_sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b), .running(running)
     );
+    dac_pads dac_pads_i (.clk48(clk), .sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b),
+                   .dac_sync(sync), .dac_sclk(sclk), .dac_din(din));
 
     // De-duplicated waveform-address stream.
     integer    an = 0;

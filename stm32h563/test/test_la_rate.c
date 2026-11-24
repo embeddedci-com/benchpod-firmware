@@ -149,43 +149,59 @@ int main(void) {
     CHECK(step_delay_wire(250, 39) == 250,      "v39: delay unchanged");
 
     /* ---- DAC replay divider: the rate a replay asks for is the rate it plays at.  One sample
-     *      takes divider + 51 clk48 from the BRAM and divider + 52 from PSRAM (tb_dac8551,
-     *      tb_dac_psram_replay); the old 48 MHz / rate divider played 80 kS/s at 73.7 kS/s. ---- */
+     *      takes divider + 63 clk48 from the BRAM and divider + 64 from PSRAM on gateware v66+
+     *      (19.2 MHz SCLK), + 51 / + 52 up to v65 (tb_dac8551, tb_dac_psram_replay); the old
+     *      48 MHz / rate divider played 80 kS/s at 73.7 kS/s. ---- */
     {
         const uint32_t clk = 48000000u;
-        const float rates[] = { 1000.f, 10000.f, 44100.f, 80000.f, 100000.f, 250000.f, 400000.f, 800000.f };
+        const uint8_t gws[] = { 65, 66 };
+        const float rates[] = { 1000.f, 10000.f, 44100.f, 80000.f, 100000.f, 250000.f, 400000.f, 700000.f };
+        for (unsigned g = 0; g < 2; g++)
         for (unsigned i = 0; i < sizeof(rates) / sizeof(rates[0]); i++) {
             for (int deep = 0; deep < 2; deep++) {
-                dac_rate_plan_t q = dac_replay_plan(clk, rates[i], deep);
-                double real = (double)clk / (double)dac_sample_clocks(q.divider, deep);
+                dac_rate_plan_t q = dac_replay_plan(clk, rates[i], deep, gws[g]);
+                double real = (double)clk / (double)dac_sample_clocks(q.divider, deep, gws[g]);
                 double err = fabs(real - rates[i]) / rates[i];
                 /* nearest divider: within half a clock of the request */
-                double half = 0.5 / (double)dac_sample_clocks(q.divider, deep);
+                double half = 0.5 / (double)dac_sample_clocks(q.divider, deep, gws[g]);
                 CHECK(err <= half + 1e-9 && q.clamped == 0,
-                      "replay %.0f S/s (deep=%d): divider %u plays %.1f S/s (%.3f%%)", rates[i], deep, q.divider, real, err * 100);
-                CHECK(q.rate_hz == (uint32_t)(real + 0.5), "replay %.0f S/s (deep=%d): rate_hz %u want %.0f", rates[i], deep, q.rate_hz, real);
+                      "replay %.0f S/s (deep=%d, gw %u): divider %u plays %.1f S/s (%.3f%%)", rates[i], deep, gws[g], q.divider, real, err * 100);
+                CHECK(q.rate_hz == (uint32_t)(real + 0.5), "replay %.0f S/s (deep=%d, gw %u): rate_hz %u want %.0f", rates[i], deep, gws[g], q.rate_hz, real);
             }
         }
-        dac_rate_plan_t q = dac_replay_plan(clk, 80000.f, false);
-        CHECK(q.divider == 549 && q.rate_hz == 80000u, "80 kS/s RAM: divider %u (want 549 = 600 - 51), %u S/s", q.divider, q.rate_hz);
-        q = dac_replay_plan(clk, 80000.f, true);
-        CHECK(q.divider == 548 && q.rate_hz == 80000u, "80 kS/s PSRAM: divider %u (want 548 = 600 - 52), %u S/s", q.divider, q.rate_hz);
-        q = dac_replay_plan(clk, 400000.f, false);
-        CHECK(q.divider == 69 && q.rate_hz == 400000u, "400 kS/s RAM: divider %u (want 69), %u S/s", q.divider, q.rate_hz);
+        CHECK(dac_seq_overhead_clk(65) == 51 && dac_seq_overhead_clk(66) == 63 && dac_seq_overhead_clk(0) == 51,
+              "sequencer overhead: 51 clk48 up to v65, 63 from v66");
+        /* gateware v65 and older (24 MHz SCLK) */
+        dac_rate_plan_t q = dac_replay_plan(clk, 80000.f, false, 65);
+        CHECK(q.divider == 549 && q.rate_hz == 80000u, "v65 80 kS/s RAM: divider %u (want 549 = 600 - 51), %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 80000.f, true, 65);
+        CHECK(q.divider == 548 && q.rate_hz == 80000u, "v65 80 kS/s PSRAM: divider %u (want 548 = 600 - 52), %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 0.0f, false, 65);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 0, "v65 max RAM: divider %u, %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 0.0f, true, 65);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 857143u && q.clamped == 0, "v65 max PSRAM: divider %u, %u S/s", q.divider, q.rate_hz);
+        CHECK(dac_sample_clocks(0, false, 65) == 55 && dac_sample_clocks(3, true, 65) == 56 && dac_sample_clocks(4, false, 65) == 55, "v65 sample clocks floor the divider at 4");
+        /* gateware v66+ (19.2 MHz SCLK) */
+        q = dac_replay_plan(clk, 80000.f, false, 66);
+        CHECK(q.divider == 537 && q.rate_hz == 80000u, "80 kS/s RAM: divider %u (want 537 = 600 - 63), %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 80000.f, true, 66);
+        CHECK(q.divider == 536 && q.rate_hz == 80000u, "80 kS/s PSRAM: divider %u (want 536 = 600 - 64), %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 400000.f, false, 66);
+        CHECK(q.divider == 57 && q.rate_hz == 400000u, "400 kS/s RAM: divider %u (want 57), %u S/s", q.divider, q.rate_hz);
         /* the maximum: 0 asks for it; faster requests are clamped to it and flagged */
-        q = dac_replay_plan(clk, 0.0f, false);
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 0, "max RAM: divider %u, %u S/s", q.divider, q.rate_hz);
-        q = dac_replay_plan(clk, 0.0f, true);
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 857143u && q.clamped == 0, "max PSRAM: divider %u, %u S/s", q.divider, q.rate_hz);
-        q = dac_replay_plan(clk, 2.0e6f, false);
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 1, "2 MS/s RAM: clamp to the max (%u, %u S/s, flag %u)", q.divider, q.rate_hz, q.clamped);
-        q = dac_replay_plan(clk, 12.0e6f, true);
+        q = dac_replay_plan(clk, 0.0f, false, 66);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 716418u && q.clamped == 0, "max RAM: divider %u, %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 0.0f, true, 66);
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 705882u && q.clamped == 0, "max PSRAM: divider %u, %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 873000.f, false, 66);   /* the old maximum is now above the ceiling */
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.rate_hz == 716418u && q.clamped == 1, "873 kS/s RAM: clamp to the max (%u, %u S/s, flag %u)", q.divider, q.rate_hz, q.clamped);
+        q = dac_replay_plan(clk, 12.0e6f, true, 66);
         CHECK(q.divider == DAC_MIN_DIVIDER && q.clamped == 1, "12 MS/s PSRAM: clamp to the max (flag %u)", q.clamped);
-        q = dac_replay_plan(clk, 870000.f, false);   /* rounds to the minimum divider: not a clamp */
-        CHECK(q.divider == DAC_MIN_DIVIDER && q.clamped == 0, "870 kS/s RAM: divider %u flag %u", q.divider, q.clamped);
-        q = dac_replay_plan(clk, 100.f, false);       /* below 48 MHz / (65535 + 51) ~= 732 S/s */
+        q = dac_replay_plan(clk, 714000.f, false, 66);   /* rounds to the minimum divider: not a clamp */
+        CHECK(q.divider == DAC_MIN_DIVIDER && q.clamped == 0, "714 kS/s RAM: divider %u flag %u", q.divider, q.clamped);
+        q = dac_replay_plan(clk, 100.f, false, 66);       /* below 48 MHz / (65535 + 63) ~= 732 S/s */
         CHECK(q.divider == DAC_MAX_DIVIDER && q.clamped == 2 && q.rate_hz == 732u, "100 S/s: clamp to the slowest (%u, %u S/s, flag %u)", q.divider, q.rate_hz, q.clamped);
-        CHECK(dac_sample_clocks(0, false) == 55 && dac_sample_clocks(3, true) == 56 && dac_sample_clocks(4, false) == 55, "sample clocks floor the divider at 4");
+        CHECK(dac_sample_clocks(0, false, 66) == 67 && dac_sample_clocks(3, true, 66) == 68 && dac_sample_clocks(4, false, 66) == 67, "v66 sample clocks floor the divider at 4");
     }
 
     if (fails == 0) printf("PASS — all la_rate tests\n");

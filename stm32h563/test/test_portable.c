@@ -81,7 +81,7 @@ static void test_divider(void)
    real rate is HFOSC/(divider+K) and generate() must compute the period from THAT
    or the played frequency saturates far below the request. */
 #define T_HFOSC      48000000u   /* DAC engine runs on clk48 (gateware >= 13) */
-#define T_DAC_K      51u
+#define T_DAC_K      63u         /* DAC_SEQ_OVERHEAD_CLK on gateware v66+ (51 up to v65) */
 #define T_DAC_MIN    4u          /* DAC_MIN_DIVIDER: DAC8554 t9 frame gap (gateware v34-v58 floor at 3, v59+ at 4) */
 #define T_SIGNAL_MAX 2048u
 static float t_dac_eff_rate(uint32_t divider)

@@ -59,6 +59,7 @@ SRC = src/top_v2.v            \
       src/dsp_counter2.v      \
       src/lc_counter.v        \
       src/psram_pads.v        \
+      src/dac_pads.v          \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
@@ -424,21 +425,21 @@ cdctest:
 # DAC8551 datasheet pin timing (t5-t9) and the clk/sample the firmware's rate model assumes.
 dactest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac.vvp \
-	         sim/tb_dac8551.v src/dac8551_engine.v
+	         sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac.vvp
 	@rm -f /tmp/$(PROJECT)_dac.vvp
 
 # DAC8554 support (v49): the stream control byte and the one-shot static frame (OP_DAC_CTRL).
 dac8554test:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac8554.vvp \
-	         sim/tb_dac8554.v src/dac8551_engine.v
+	         sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac8554.vvp
 	@rm -f /tmp/$(PROJECT)_dac8554.vvp
 
 # Self-checking simulation of the DAC8551 waveform-loop terminal (sleft counter).
 daclooptest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dacloop.vvp \
-	         sim/tb_dac8551_loop.v src/dac8551_engine.v
+	         sim/tb_dac8551_loop.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacloop.vvp
 	@rm -f /tmp/$(PROJECT)_dacloop.vvp
 
@@ -465,7 +466,7 @@ dacpsramskewtest:
 # of the reader FIFO (reader -> dac8551_engine in psram_mode) to the DAC8551 frames.
 dacpsramreplaytest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrep.vvp \
-	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/dac_pads.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrep.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrep.vvp
 
@@ -529,7 +530,7 @@ looptest:
 # never {new high byte, old low byte} (v38; 176 of 1111 frames were torn before).
 loopframetest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_loopframe.vvp \
-	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v
+	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_loopframe.vvp
 	@rm -f /tmp/$(PROJECT)_loopframe.vvp
 

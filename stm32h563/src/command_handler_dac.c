@@ -506,8 +506,8 @@ void handle_load_bin(int conn_id, const char *json) {
 
      {"cmd":"replay","sample_rate_hz":80000,"samples":4096}
    `sample_rate_hz` should match the rate the trace was captured at so the
-   playback time-base matches; omit for the max rate (~873 kS/s from RAM, ~857 kS/s
-   from PSRAM; faster requests are clamped to it).  `samples` defaults to the full
+   playback time-base matches; omit for the max rate (~716 kS/s from RAM, ~706 kS/s
+   from PSRAM on gateware v66+; ~873 / ~857 kS/s before; faster requests are clamped to it).  `samples` defaults to the full
    recorded length.  The reply's `sample_rate_hz` is the rate it really plays at. */
 void handle_replay(int conn_id, const char *json) {
     char samples_s[16] = {0};

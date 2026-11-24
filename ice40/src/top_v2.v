@@ -316,6 +316,7 @@ module top (
     // closed-loop engine below (dac_loop): in closed-loop mode the loop drives the
     // sample_buf read (as a curve LUT) and feeds `v` in via the strm port.
     wire [11:0] dac_wave_addr;               // dac8551's own BRAM read addr (replay path)
+    wire        dac_sync_e, dac_sclk_a, dac_sclk_b, dac_din_a, dac_din_b;   // engine -> dac_pads
     dac8551_engine dac_i (
         .clk(clk48), .rst(rst48), .start(dac_start_48), .stop(dac_stop_48),
         .period_samples(dac_period_48), .divider(dac_divider_48),
@@ -325,9 +326,16 @@ module top (
         .strm_data(dac_loop_mode48 ? loop_strm_data : rd_strm_data),
         .strm_valid(dac_loop_mode48 ? loop_strm_valid : rd_strm_valid),
         .strm_pop(dac_strm_pop),
-        .dac_sync(dac_sync), .dac_sclk(dac_sclk), .dac_din(dac_din),
+        .dac_sync(dac_sync_e), .sclk_a(dac_sclk_a), .sclk_b(dac_sclk_b),
+        .din_a(dac_din_a), .din_b(dac_din_b),
         .running(dac_running_48)
     );
+    // v66: SCLK / DIN through DDR pads (19.2 MHz SCLK, 2 halves high / 3 low), SYNC through its
+    // pad's register, all one clk48 after the engine (dac_pads.v, dac8551_engine SERIAL TIMING).
+    dac_pads dac_pads_i (
+        .clk48(clk48), .sync(dac_sync_e), .sclk_a(dac_sclk_a), .sclk_b(dac_sclk_b),
+        .din_a(dac_din_a), .din_b(dac_din_b),
+        .dac_sync(dac_sync), .dac_sclk(dac_sclk), .dac_din(dac_din));
     // curve/BRAM read addr: loop when armed, else the DAC replay sequencer.
     assign wave_raddr   = dac_loop_mode48 ? loop_raddr : dac_wave_addr;
     // the deep-replay reader is popped only when the loop is NOT driving the DAC.
@@ -800,6 +808,13 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 66 = v65 + A 19.2 MHz DAC SCLK (dac8551_engine, dac_pads): SCLK and DIN leave
+    // through DDR pads, two bits per 5 clk48 (SCLK high 2 halves = 20.8 ns, low 3 halves = 31.3 ns),
+    // SYNC through its pad register, all one clk48 later.  The 2026-11-24 bench measured v65's 24 MHz
+    // SCLK at 21.8 / 19.8 ns high / low on the DAC connector (every iCE40 output here drops ~1 ns
+    // late), under the DAC8554's 20 ns t3 at IOVDD 3.3 V; now about 21.8 / 30.2 ns.  One DAC sample
+    // takes max(divider, 4) + 63 clk48 (was + 51): 716 kS/s at most from RAM, 706 kS/s from PSRAM.
+    // The firmware's DAC_SEQ_OVERHEAD_CLK follows the gateware version.
     // GATEWARE_VERSION 65 = v64 + THE EMULATION IMAGE SPLIT: the emulation image drops the bus-master
     // engine (swd_engine: SWD, the SPI master, the I2C master), 98.5% -> ~84% LC, and the deep image
     // drops SWIM (no firmware drives it yet), 88% -> ~76%.  FPGA_FEATURES bit 5 (0x20) is set on the
@@ -1300,7 +1315,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h29;   // closed-loop DAC control + JTAG master (v61) + bus masters (v65)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd65), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd66), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
