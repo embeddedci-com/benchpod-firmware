@@ -286,22 +286,26 @@ $(OUT).bin: $(OUT).asc
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
 # Loop image: seed 34 since v62 (local sweep 1-64, 47 ok: clk48 59.18 MHz, clk 26.33 MHz,
-# clk -> clk48 11.31 ns, clk48 -> clk 7.31 ns; 4334 LC, 82%).  CI not swept yet: run
-# ice40-seed-sweep.yml and pick from both before promoting.  (v61: seed 20.)
+# clk -> clk48 11.31 ns, clk48 -> clk 7.31 ns; 4334 LC, 82%).  CI sweep 1-64
+# (run 45292913037, 53 ok): seed 34 ok, clk48 52.63 MHz, clk 26.99 MHz, clk -> clk48 11.51 ns.
+# (v61: seed 20.)
 SEED_LOOP ?= 34
 # The next v62 seeds from the local sweep, by clk48 margin.
 SEED_LOOP_FALLBACK ?= 2 50 49 22 25
 # Deep image: seed 26 since v62 (local sweep 1-64, 18 ok: clk48 57.00 MHz, clk 26.75 MHz,
-# clk -> clk48 13.28 ns, clk48 -> clk 5.68 ns; 4616 LC, 87%, with the SWIM master).  CI not swept:
-# re-sweep in both toolchains (the ice40-seed-sweep workflow for CI's) before promoting.
-# (v60: seed 24.)
-SEED_DEEP ?= 26
-# The next v62 seeds from the local sweep, by clk48 margin.
-SEED_DEEP_FALLBACK ?= 49 55 58 2 59
+# clk -> clk48 13.28 ns, clk48 -> clk 5.68 ns; 4616 LC, 87%, with the SWIM master).  CI sweep 1-64
+# (run 45292913037): seed 26 fails the gate there (clk -> clk48 16.79 ns), and only 16 of 64 pass in CI.
+# Seed 35 passes both toolchains with the most margin: local clk48 53.74 MHz, clk 27.03 MHz,
+# clk -> clk48 13.88 ns; CI clk48 51.86 MHz, clk 27.35 MHz, clk -> clk48 13.27 ns, clk48 -> clk 6.12 ns.
+# (v60: seed 24; v62 first pin: seed 26.)
+SEED_DEEP ?= 35
+# Seeds that pass both toolchains, by margin (42, 34 and 2 are thinner on clk -> clk48).
+SEED_DEEP_FALLBACK ?= 42 34 2 12
 # Emulation image (USE_EMULATION): seed 30 since v62 (local sweep 1-32, 25 ok: clk48 57.20 MHz,
 # clk 27.69 MHz, clk -> clk48 11.48 ns, clk48 -> clk 6.87 ns; the v62 version constant re-rolled
 # its placement, seed 60 was not re-checked).  It is the fullest image: 5155/5280 LC (97.6%) at
-# v60, 30/30 block RAM, 4/4 SPRAM.  CI not swept: do that before promoting.  (v60: seed 60.)
+# v60, 30/30 block RAM, 4/4 SPRAM.  CI sweep 1-64 (run 45292913037, 53 ok): seed 30 ok, clk48 61.74 MHz, clk 25.77 MHz,
+# clk -> clk48 12.46 ns.  (v60: seed 60.)
 SEED_EMU ?= 30
 # The next v62 seeds from the local sweep, by clk48 margin.
 SEED_EMU_FALLBACK ?= 6 14 15 29 8
