@@ -27,9 +27,23 @@
 //            (v44) the same two slots carry SCK and MOSI, and a third slot drives
 //            CS push-pull (swd_cs_*); MISO is read-only (sampled via la_in).
 //
-// Each channel is a single SB_IO in PIN_TYPE 6'b1010_01 = combinational
-// tristate output (OUTPUT_ENABLE) + simple input (D_IN_0), so every channel
-// can be driven, released to high-Z, or read back (needed for SWDIO sampling).
+// Each channel is a single SB_IO in PIN_TYPE 6'b1101_01 = REGISTERED output and REGISTERED
+// output enable (both flops in the IO cell, on the rising clk edge) + simple input (D_IN_0), so
+// every channel can be driven, released to high-Z, or read back (needed for SWDIO sampling).
+// tools/check_la_pads.py fails the build if a pad here is anything else.
+//
+// Why registered (v64): up to v63 both were combinational (PIN_TYPE 6'b1010_01), so the pad
+// followed the eff_out / eff_oe cones below straight out of the fabric.  When a channel changed
+// hands (a step train ending, a UART closing, a GPIO_SET), the two cones settled at different,
+// placement-dependent times, and in between the pad could drive a level no owner asked for: a
+// few-ns pulse on the DUT's line.  On the bench's floating LA9 (v63 emu seeds 6 and 52, loop seed
+// 38) it lasted ~55 us and doubled the edges of every step, and no timing gate saw it, because a
+// combinational pad path has no capture register to time.  Now the pad changes only on a clock
+// edge, value and enable together, and nextpnr times the cones as ordinary clk paths.  Every LA
+// output reaches the pin 1 clk (41.7 ns) later than the engine state that drives it; the SPI, SWD,
+// JTAG, I2C and SWIM masters read their input through one flop instead of two (swd_engine), so
+// their read points stay where they were relative to the pins.  The SPI target (<= 2 MHz), the
+// I2C targets, the UART, DE, the stepper and GPIO only move 41.7 ns later.
 //
 // Channels here are 0-based (0..N-1).  The firmware exposes them to the host as
 // 1-based LA channel indices (LA1..LAN) and maps 1→0 on the wire.
@@ -161,10 +175,11 @@ module la_bank #(
     generate
         for (i = 0; i < N; i = i + 1) begin : g_io
             SB_IO #(
-                .PIN_TYPE(6'b1010_01),   // tristate output + simple input
+                .PIN_TYPE(6'b1101_01),   // registered output + registered OE + simple input
                 .PULLUP  (1'b0)
             ) io_i (
                 .PACKAGE_PIN  (la[i]),
+                .OUTPUT_CLK   (clk),
                 .OUTPUT_ENABLE(eff_oe[i]),
                 .D_OUT_0      (eff_out[i]),
                 .D_IN_0       (la_in[i])

@@ -257,14 +257,17 @@ all: $(OUT).bin
 # netlist while every RTL bench passed (synth/sb_mac16_keep.v).  The control loop's multipliers
 # are still $mul in that step, so -dsp infers them exactly as before.  synth/check_dsp.py then
 # fails the build (and removes the netlist) unless every dsp_counter cell came through intact.
+# synth/check_la_pads.py (v64) likewise fails it unless every LA pad is a registered-output,
+# registered-enable SB_IO (la_bank.v: a combinational pad let a hand-over glitch reach the DUT).
 SYNTH_FLAGS = -abc9 -dsp -spram -top top
-SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py
+SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py synth/check_la_pads.py
 define synth
 	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(or $(3),$(SRC)); \
 	  synth_ice40 $(SYNTH_FLAGS) -run :coarse; chtype -set SB_MAC16_KEEP t:SB_MAC16; \
 	  synth_ice40 $(SYNTH_FLAGS) -run coarse:map_ram; chtype -set SB_MAC16 t:SB_MAC16_KEEP; \
 	  synth_ice40 $(SYNTH_FLAGS) -run map_ram: -json $(2)"
 	python3 synth/check_dsp.py $(2) src || { rm -f $(2); exit 1; }
+	python3 synth/check_la_pads.py $(2) || { rm -f $(2); exit 1; }
 endef
 $(OUT).json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)

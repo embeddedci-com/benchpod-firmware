@@ -800,6 +800,13 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 64 = v63 + REGISTERED LA PADS (la_bank.v): each LA pad's output value and output
+    // enable are flops in its SB_IO (PIN_TYPE 6'b1101_01, rising clk edge) instead of combinational, so
+    // a channel changing hands can no longer put a few-ns pulse on the DUT's line (seen on v63 emu seeds
+    // 6 and 52 as a second pulse after every step on the bench's floating LA9).  Every LA output moves 1
+    // clk later; swd_engine's input synchroniser drops from 2 flops to 1, so the SPI/SWD/JTAG/I2C/SWIM
+    // masters read at the same point relative to the pins as before (6 MHz still at half = 2).
+    // tools/check_la_pads.py checks the pad type on every build.  tb_top_la_mux, tb_top_swdq.
     // GATEWARE_VERSION 63 = v62 + a LATER ADC SDO SAMPLE (adc_mcp33131.v) for timing margin with more
     // series resistance on the module cable: each bit is sampled on the falling clk edge in the middle
     // of SCLK high (the SDO SB_IO's DDR input register, now in adc_mcp33131), 20.8 ns later than v62,
@@ -1287,7 +1294,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h09;   // closed-loop DAC control + JTAG master (v61)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd63), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd64), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
