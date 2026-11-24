@@ -4,7 +4,7 @@
   "revision": 17,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "e8620749d5e461c9e24ac54465822a1423fb8076d2ca948264f8d1935b14cbe9",
+  "table_sha256": "5aaea199ff12e34b1c1958a91d549b6c9a63828a15286b5a00dcb463d1f3f46e",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -153,6 +153,11 @@
     {
       "firmware": "4.0.3",
       "gateware": 60,
+      "date": "2026-11-23"
+    },
+    {
+      "firmware": "4.0.4",
+      "gateware": 62,
       "date": "2026-11-23"
     }
   ],
@@ -842,14 +847,14 @@
     },
     "jtag": {
       "rev": 16,
-      "firmware": "next",
+      "firmware": "4.0.4",
       "gateware": 61,
       "board": "any",
       "docs": "dap-over-tunnel.md#jtag"
     },
     "prog_flash": {
       "rev": 17,
-      "firmware": "next",
+      "firmware": "4.0.4",
       "board": "any",
       "docs": "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
     }
