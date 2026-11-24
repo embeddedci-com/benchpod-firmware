@@ -288,26 +288,32 @@ $(OUT).bin: $(OUT).asc
 # v63 seeds: local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and CI sweep 1-64 (run 45406106727,
 # Yosys 0.65+7).  Each pin is the seed with the best worst relative margin over the four gates
 # (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk <= 15 ns) in BOTH toolchains.
-# Loop image: seed 38 since v63 (local 57 ok, CI 51 ok, 44 in both).  Local: clk48 54.97 MHz,
-# clk 29.69 MHz, clk -> clk48 11.82 ns, clk48 -> clk 7.52 ns.  CI: clk48 55.16 MHz, clk 28.50 MHz,
-# clk -> clk48 10.84 ns, clk48 -> clk 9.15 ns.  (v61: seed 20; v62: seed 34.)
-SEED_LOOP ?= 38
-# The next seeds that pass both toolchains, by worst relative margin.
-SEED_LOOP_FALLBACK ?= 11 13 51 49 45
+# Loop image: seed 11 since v63 (local 57 ok, CI 51 ok, 44 in both).  Local: clk48 56.69 MHz,
+# clk 27.93 MHz, clk -> clk48 10.62 ns, clk48 -> clk 8.50 ns.  CI: clk48 55.29 MHz, clk 29.24 MHz,
+# clk -> clk48 10.19 ns, clk48 -> clk 6.66 ns.  Seed 38 had the best margin but FAILED on hardware:
+# the LA sampled at 0.495x its reported rate (SDK e2e test_la_sample_rate_matches_the_host_clock,
+# 30a9f1, 5 of 5 runs; seed 11 and the v62 image pass on the same pod and firmware).  The four
+# gates do not catch that placement fault, so a new loop pin needs that test on hardware.
+# (v61: seed 20; v62: seed 34.)
+SEED_LOOP ?= 11
+# The next seeds that pass both toolchains, by worst relative margin (38 is excluded, see above).
+SEED_LOOP_FALLBACK ?= 13 51 49 45
 # Deep image: seed 31 since v63 (local 16 ok, CI 22 ok, only 31 and 63 in both; v62's seed 35
 # fails the local x48 gate at 19.05 ns).  Local: clk48 54.63 MHz, clk 26.24 MHz, clk -> clk48
 # 14.56 ns, clk48 -> clk 4.39 ns.  CI: clk48 52.55 MHz, clk 27.55 MHz, clk -> clk48 12.80 ns,
-# clk48 -> clk 4.39 ns.  (v60: seed 24; v62: seed 35.)
+# clk48 -> clk 4.39 ns.  Passes the LA sample-rate test on hardware.  (v60: seed 24; v62: seed 35.)
 SEED_DEEP ?= 31
 # 63 passes both toolchains (thinner on clk48 locally: 50.98 MHz); 51, 4 and 1 pass CI only.
 SEED_DEEP_FALLBACK ?= 63 51 4 1
-# Emulation image (USE_EMULATION): seed 52 since v63 (local 56 ok, CI 38 ok, 28 in both).
-# Local: clk48 59.75 MHz, clk 27.65 MHz, clk -> clk48 13.55 ns, clk48 -> clk 7.52 ns.  CI: clk48
-# 54.84 MHz, clk 28.75 MHz, clk -> clk48 11.27 ns, clk48 -> clk 7.96 ns.  It is the fullest image
-# (5202/5280 LC, 98.5%).  Loop 4339 LC (82%), deep 4655 LC (88%).  (v60: seed 60; v62: seed 30.)
-SEED_EMU ?= 52
-# The next seeds that pass both toolchains, by worst relative margin.
-SEED_EMU_FALLBACK ?= 6 41 63 57
+# Emulation image (USE_EMULATION): seed 41 since v63 (local 56 ok, CI 38 ok, 28 in both).
+# Local: clk48 65.32 MHz, clk 27.69 MHz, clk -> clk48 13.22 ns, clk48 -> clk 7.62 ns.  CI: clk48
+# 54.76 MHz, clk 28.83 MHz, clk -> clk48 13.86 ns, clk48 -> clk 7.75 ns.  Seeds 52 and 6 had more
+# margin but halved the LA sample rate on hardware, like loop seed 38 (see above); 41 and the v62
+# image pass.  It is the fullest image (5202/5280 LC, 98.5%).  Loop 4339 LC (82%), deep 4655 LC
+# (88%).  (v60: seed 60; v62: seed 30.)
+SEED_EMU ?= 41
+# The next seeds that pass both toolchains, by worst relative margin (52 and 6 are excluded).
+SEED_EMU_FALLBACK ?= 63 57 27 47
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
