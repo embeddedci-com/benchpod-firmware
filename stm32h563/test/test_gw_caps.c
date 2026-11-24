@@ -65,6 +65,17 @@ static void test_images(void)
         CHECK(c.img_deep_replay == ((f & FPGA_FEATURE_DEEP_REPLAY) != 0), "features %u deep", f);
         CHECK(c.img_emulation == ((f & FPGA_FEATURE_EMULATION) != 0), "features %u emulation", f);
     }
+    /* bus masters: every image up to v64, then only the images that set the bit (v65 split) */
+    for (unsigned v = 0; v <= 255; v++) {
+        CHECK(gw_caps_for((uint8_t)v, FPGA_FEATURE_EMULATION).bus_masters == (v < BUS_MASTERS_SPLIT_MIN_GW),
+              "v%u emulation image bus masters", v);
+        CHECK(gw_caps_for((uint8_t)v, FPGA_FEATURE_CONTROL_LOOP | FPGA_FEATURE_BUS_MASTERS).bus_masters,
+              "v%u loop image bus masters", v);
+    }
+    CHECK(BUS_MASTERS_SPLIT_MIN_GW == 65, "the split is v65");
+    CHECK(gw_caps_for(64, FPGA_FEATURE_EMULATION).bus_masters, "v64 emulation still has them");
+    CHECK(!gw_caps_for(65, FPGA_FEATURE_EMULATION).bus_masters, "v65 emulation has none");
+    CHECK(gw_caps_for(65, 0x2A).bus_masters && gw_caps_for(65, 0x29).bus_masters, "v65 deep and loop");
 }
 
 /* gw_caps() follows the running gateware: a new version or feature byte refills it. */

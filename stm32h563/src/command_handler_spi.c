@@ -142,6 +142,8 @@ void handle_spi_start(int conn_id, const char *json) {
     if ((mode == 1 || mode == 2) &&
         !require_gw(conn_id, gw_caps()->spi_modes12, "SPI modes 1 and 2", SPI_MODES12_MIN_GW)) return;
     if (fpga_spi_armed()) { bp_err_spi_session_open(conn_id); return; }
+    /* gateware v65: not in the emulation image (swap to loop, or BP0059 while sensors run) */
+    if (!require_bus_masters(conn_id, "the SPI master")) return;
 
     uint8_t pins[4];
     for (unsigned i = 0; i < 4; i++) pins[i] = (uint8_t)v[i];

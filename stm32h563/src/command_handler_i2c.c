@@ -117,6 +117,8 @@ void handle_i2c_start(int conn_id, const char *json) {
     bool external = strcmp(pu, "external") == 0;
     if (!external && strcmp(pu, "pod") != 0) { send_error(conn_id, "pullups must be pod or external"); return; }
     if (fpga_i2c_armed()) { bp_err_i2c_session_open(conn_id); return; }
+    /* gateware v65: not in the emulation image (swap to loop, or BP0059 while sensors run) */
+    if (!require_bus_masters(conn_id, "the I2C master")) return;
 
     uint8_t pins[2] = { (uint8_t)sda, (uint8_t)scl };
     for (unsigned i = 0; i < 2; i++)

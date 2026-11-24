@@ -367,31 +367,57 @@ void handle_fpga_image(int conn_id, const char *json) {
             return;
         }
     }
-    if (!heavy_begin(conn_id)) return;
+    uint8_t ver = 0, feats = 0;
+    if (!fpga_image_swap(conn_id, img, &ver, &feats)) return;
+    char payload[112];
+    snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
+             img, signal_engine_image_name(img), ver, feats);
+    send_ok_str(conn_id, payload);
+}
+
+bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out) {
+    if (!heavy_begin(conn_id)) return false;
     int rc = fpga_warmboot((uint8_t)img);
     uint8_t ver = signal_engine_fpga_version();
     uint8_t feats = signal_engine_fpga_features();
     heavy_release(conn_id);
-    if (rc == -1) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
+    if (rc == -1) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return false; }
     if (rc == -2) {
         char msg[128];
         snprintf(msg, sizeof(msg), "image %d is not installed on the pod (W25Q slot %s is empty): "
                  "install the gateware blobs", img, blob_name((blob_id_t)ice40_image_slot(img)));
         send_error(conn_id, msg);
-        return;
+        return false;
     }
-    if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return; }
-    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return; }
-    if (rc != 0)  { send_error(conn_id, "image switch failed"); return; }
+    if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return false; }
+    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return false; }
+    if (rc != 0)  { send_error(conn_id, "image switch failed"); return false; }
     /* The live image (and thus dac_control_loop / dac_deep_replay / dac_replay_max_samples) just
        changed — re-announce so the cloud/webapp gate on the NEW image, not the connect-time one. */
     cloud_client_request_caps_resend();
     /* A reconfigure can glitch the DAC's SPI lines: put an output stage back on its park level. */
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();
-    char payload[112];
-    snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
-             img, signal_engine_image_name(img), ver, feats);
-    send_ok_str(conn_id, payload);
+    if (ver_out) *ver_out = ver;
+    if (feats_out) *feats_out = feats;
+    return true;
+}
+
+/* Gateware v65 split the bus masters out of the emulation image (FPGA_FEATURE_BUS_MASTERS).
+   On that image with no emulated I2C/SPI/UART sensor running, swap to the loop image first
+   (~2-3 s, as the first sensor_start swaps the other way), so a client that never heard of the
+   split keeps working.  With a digital sensor running, refuse with BP0059: the swap would stop it. */
+bool require_bus_masters(int conn_id, const char *feature) {
+    if (gw_caps()->bus_masters) return true;
+    /* The cached FPGA_FEATURES could predate a reconfigure: read it once more before swapping. */
+    (void)signal_engine_fpga_features();
+    if (gw_caps()->bus_masters) return true;
+    char names[96];
+    if (sensor_mgr_digital_names(names, sizeof(names))) {
+        bp_err_fpga_image_sensors_first(conn_id, feature, "loop");
+        return false;
+    }
+    LOG_I("[image] %s needs the bus masters: leaving the emulation image for the loop image\n", feature);
+    return fpga_image_swap(conn_id, 0, NULL, NULL);
 }
 
 /* {"cmd":"psram_recover"} — one-click remote recovery for an inoperable PSRAM datapath: ack,

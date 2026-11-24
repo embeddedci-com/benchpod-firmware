@@ -117,6 +117,15 @@ int  heavy_owner_conn(void);                  /* the conn holding the gate, or -
 /* An optional "sample_rate_hz" field; 0.0f (= auto) when absent or not positive. */
 float parse_sample_rate_hz(const char *json);
 
+/* Reflash and reconfigure the iCE40 with image img (0 loop, 1 deep, 2 emulation) under the heavy
+   gate, then re-announce the caps and re-park the DAC.  false = the error was sent.  ver_out /
+   feats_out (may be NULL) get the new image's version and FPGA_FEATURES. command_handler_device.c */
+bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out);
+/* SWD, the SPI master and the I2C master (and the two-wire pin programmers on that engine) need an
+   image with the bus masters (gateware v65: loop or deep).  On the emulation image: swaps to the
+   loop image when no emulated digital sensor runs, else BP0059.  false = the error was sent. */
+bool require_bus_masters(int conn_id, const char *feature);
+
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
 
