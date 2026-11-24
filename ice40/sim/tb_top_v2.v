@@ -118,10 +118,10 @@ module tb_top_v2;
         // Wait out the internal power-on reset (64 clk48 + sync) with margin.
         #5000;
         cmd1(8'h01, r); check(r, 8'hA5, "PING");
-        cmd1(8'h02, r); check(r, 8'd61, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd62, "VERSION");
         // FPGA_FEATURES (0x18): which image this is (v54: three images).
 `ifdef USE_DEEP_REPLAY
-        cmd1(8'h18, r); check(r, 8'h0A, "FPGA_FEATURES deep");
+        cmd1(8'h18, r); check(r, 8'h1A, "FPGA_FEATURES deep");
 `elsif USE_EMULATION
         cmd1(8'h18, r); check(r, 8'h04, "FPGA_FEATURES emulation");
 `else

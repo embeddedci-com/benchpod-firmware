@@ -49,6 +49,7 @@ SRC = src/top_v2.v            \
       src/swd_engine.v        \
       src/i2c_master.v        \
       src/jtag_seq.v          \
+      src/swim_engine.v       \
       src/i2c_emu.v           \
       src/emu_fifo.v          \
       src/spi_target.v        \
@@ -233,7 +234,7 @@ define topbench
 	done
 endef
 
-.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest i2cmastertest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest swimtest i2cmastertest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -284,26 +285,30 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# Loop image: seed 20 since v61 (clk48 58.28 MHz, clk 27.42 MHz, clk -> clk48 11.35 ns,
-# clk48 -> clk 8.08 ns; 4323 LC, 81%).  CI: 53.91 / 26.99 / 14.95 / 6.22.  Local sweep 56 of 64 ok,
-# CI 54 of 64.  (v60: seed 2.)
-SEED_LOOP ?= 20
-# The next v61 seeds good in both toolchains, by their worst clk48 margin.
-SEED_LOOP_FALLBACK ?= 8 1 34 55 13
-# Deep image: seed 24 since v60; v61: clk48 55.60 MHz, clk 28.01 MHz, clk -> clk48 13.88 ns,
-# clk48 -> clk 4.39 ns.  CI: 55.67 / 27.25 / 14.85 / 4.39 (local 45, CI 40 of 64 ok).  Its clk -> clk48
-# margin to MAX_X48_NS is the smallest of the three images: re-sweep in both toolchains (the
-# ice40-seed-sweep workflow for CI's) when it moves.
-SEED_DEEP ?= 24
-# The next v61 seeds good in both toolchains, by their worst clk48 margin.
-SEED_DEEP_FALLBACK ?= 58 53 18 54 59
-# Emulation image (USE_EMULATION): seed 60 since v60; v61: clk48 58.64 MHz, clk 25.50 MHz,
-# clk -> clk48 11.86 ns, clk48 -> clk 6.77 ns; CI 58.95 / 27.00 / 14.20 / 8.08 (local 19, CI 53 of
-# 64 ok).  It is the fullest image: no JTAG master (HAS_JTAG 0, v61), 97.6% LC, 30/30 block RAM,
-# 4/4 SPRAM.  Its binding clock is clk (24 MHz, MIN_CLK_MHZ), not clk48.
-SEED_EMU ?= 60
-# The next v61 seeds good in both toolchains, by their worst gate margin.
-SEED_EMU_FALLBACK ?= 56 36 4 1 53
+# Loop image: seed 34 since v62 (local sweep 1-64, 47 ok: clk48 59.18 MHz, clk 26.33 MHz,
+# clk -> clk48 11.31 ns, clk48 -> clk 7.31 ns; 4334 LC, 82%).  CI sweep 1-64
+# (run 45292913037, 53 ok): seed 34 ok, clk48 52.63 MHz, clk 26.99 MHz, clk -> clk48 11.51 ns.
+# (v61: seed 20.)
+SEED_LOOP ?= 34
+# The next v62 seeds from the local sweep, by clk48 margin.
+SEED_LOOP_FALLBACK ?= 2 50 49 22 25
+# Deep image: seed 26 since v62 (local sweep 1-64, 18 ok: clk48 57.00 MHz, clk 26.75 MHz,
+# clk -> clk48 13.28 ns, clk48 -> clk 5.68 ns; 4616 LC, 87%, with the SWIM master).  CI sweep 1-64
+# (run 45292913037): seed 26 fails the gate there (clk -> clk48 16.79 ns), and only 16 of 64 pass in CI.
+# Seed 35 passes both toolchains with the most margin: local clk48 53.74 MHz, clk 27.03 MHz,
+# clk -> clk48 13.88 ns; CI clk48 51.86 MHz, clk 27.35 MHz, clk -> clk48 13.27 ns, clk48 -> clk 6.12 ns.
+# (v60: seed 24; v62 first pin: seed 26.)
+SEED_DEEP ?= 35
+# Seeds that pass both toolchains, by margin (42, 34 and 2 are thinner on clk -> clk48).
+SEED_DEEP_FALLBACK ?= 42 34 2 12
+# Emulation image (USE_EMULATION): seed 30 since v62 (local sweep 1-32, 25 ok: clk48 57.20 MHz,
+# clk 27.69 MHz, clk -> clk48 11.48 ns, clk48 -> clk 6.87 ns; the v62 version constant re-rolled
+# its placement, seed 60 was not re-checked).  It is the fullest image: 5155/5280 LC (97.6%) at
+# v60, 30/30 block RAM, 4/4 SPRAM.  CI sweep 1-64 (run 45292913037, 53 ok): seed 30 ok, clk48 61.74 MHz, clk 25.77 MHz,
+# clk -> clk48 12.46 ns.  (v60: seed 60.)
+SEED_EMU ?= 30
+# The next v62 seeds from the local sweep, by clk48 margin.
+SEED_EMU_FALLBACK ?= 6 14 15 29 8
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -628,14 +633,20 @@ swdqtest:
 # v55 I2C master (open drain, repeated START, NACK, clock stretching, arbitration) and SPI
 # modes 0-3, on swd_engine alone against behavioural targets.
 i2cmastertest:
-	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v
+	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
 	vvp -n /tmp/tb_i2c_master.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # v61 JTAG master: DAP_JTAG_Sequence sequences against a 2-TAP chain model (IDCODE, IR/BYPASS,
 # 64-cycle sequences, a queue that runs dry), at half periods 2, 3 and 13, on swd_engine alone.
 jtagtest:
-	iverilog -g2012 -o /tmp/tb_jtag.vvp -I src sim/tb_jtag.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v
+	iverilog -g2012 -o /tmp/tb_jtag.vvp -I src sim/tb_jtag.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
 	vvp -n /tmp/tb_jtag.vvp | tee /dev/stderr | grep -q '^PASS'
+
+# v62 SWIM master: entry + sync at two SWIM clock rates, SRST / ROTF / WOTF, NACK and retry, a chip
+# that never answers, a slow-rising line, high speed, on swd_engine alone against a behavioural STM8.
+swimtest:
+	iverilog -g2012 -o /tmp/tb_swim.vvp -I src sim/tb_swim.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
+	vvp -n /tmp/tb_swim.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:
@@ -664,7 +675,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest i2cmastertest check-protocol releasetooltest
+test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest swimtest i2cmastertest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:

@@ -181,6 +181,7 @@ uint16_t fpga_dac_loop_input(void);
 #define FPGA_FEATURE_DEEP_REPLAY   0x02u
 #define FPGA_FEATURE_EMULATION     0x04u   /* v54: the sensor-emulation image (I2C/SPI targets, UART2) */
 #define FPGA_FEATURE_JTAG          0x08u   /* v61: the JTAG master (loop and deep images, not emulation) */
+#define FPGA_FEATURE_SWIM          0x10u   /* v62: the SWIM master (deep image only) */
 uint8_t  signal_engine_fpga_features(void);
 /* The last FPGA_FEATURES reading, without an SPI read (gw_caps.h). */
 uint8_t  signal_engine_fpga_features_cached(void);
@@ -579,6 +580,8 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 #define SPI_MODES12_MIN_GW  55u   /* v55: SPI modes 1 and 2 (SPI_ARM flags bit 1 inverts SCK) */
 #define I2C_MASTER_MIN_GW   55u   /* v55: the I2C master (SPI_ARM flags bit 2, i2c_master.v) */
 #define JTAG_MIN_GW         61u   /* v61: the JTAG master (SPI_ARM flags bit 3, jtag_seq.v; FPGA_FEATURE_JTAG) */
+#define SWIM_MIN_GW         62u   /* v62: the SWIM master (SPI_ARM flags bit 4, swim_engine.v; FPGA_FEATURE_SWIM).
+                                     Constants only for now: the STM8 flash protocol follows. */
 #define SWD_QUEUE_MIN_GW    45u
 
 /* ---- SWD transfer queue (gateware >= SWD_QUEUE_MIN_GW; the SWD engine must be armed) ----
