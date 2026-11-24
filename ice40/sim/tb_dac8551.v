@@ -6,7 +6,7 @@
 // Timing (DAC8554 SLAS431B, IOVDD 2.7-3.6 V column — see the dac8551_engine header), checked in
 // HALF clk48 cycles (10.4 ns, the DDR pads' grid) on every frame, for dividers 0,1,2,3,4,8 (BRAM)
 // and 2,8 (stream):
-//   t2/t3  SCLK high exactly 2 halves (20.8 ns), low >= 2 halves inside a frame (the plan: 3)
+//   t2/t3  SCLK high >= 2 halves inside a frame (the plan: 3), low exactly 2 halves (20.8 ns)
 //   t5/t6  DIN stable for the 2 halves before each SCLK fall and the half after it
 //   t7     SYNC rises >= 1 half after the 24th SCLK fall
 //   t8     SYNC high >= 6 halves between frames
@@ -47,9 +47,9 @@ module tb_dac8551;
                    .dac_sync(sync), .dac_sclk(sclk), .dac_din(din));
 
     // ---- pin monitor (v66: per HALF clk48, 1 ns after each edge, through dac_pads) ----
-    // `h` counts halves (10.4 ns at 48 MHz).  DIN is taken at an Sclk fall with SYNC low, as the
-    // value BEFORE the fall.  Checks: t2 Sclk high exactly 2 halves and t3 low >= 2 halves inside
-    // a frame; t5 DIN stable for the 2 halves before each fall; t6 DIN unchanged in the half after
+    // `h` counts halves (10.4 ns at 48 MHz).  DIN is taken at an SCLK fall with SYNC low, as the
+    // value BEFORE the fall.  Checks: t2 SCLK high >= 2 halves and t3 low exactly 2 halves inside
+    // a frame (the plan: high 3, low 2); t5 DIN stable for the 2 halves before each fall; t6 DIN unchanged in the half after
     // it; t7 SYNC rises >= 1 half after the 24th fall; t8 SYNC high >= 6 halves; t9 24th fall ->
     // next SYNC fall >= 13 halves (135 ns >= 130).
     integer    errors = 0, h = 0, bits = 0, nfr = 0;
@@ -65,35 +65,35 @@ module tb_dac8551;
         if (chk_hold) begin
             chk_hold = 1'b0;
             if (din !== pd) begin
-                $display("FAIL t6: DIN changed in the half after an Sclk fall (half %0d, bit %0d)", h, bits);
+                $display("FAIL t6: DIN changed in the half after an SCLK fall (half %0d, bit %0d)", h, bits);
                 errors = errors + 1;
             end
         end
-        if (sclk !== pc && !ps && !sync) begin        // an Sclk edge inside a frame
-            if (pc && h_sclk_edge >= 0) begin           // Sclk fell: the high phase ended
+        if (sclk !== pc && !ps && !sync) begin        // an SCLK edge inside a frame
+            if (pc && h_sclk_edge >= 0) begin           // SCLK fell: the high phase ended
                 if (h - h_sclk_edge < min_hi) min_hi = h - h_sclk_edge;
                 if (h - h_sclk_edge > max_hi) max_hi = h - h_sclk_edge;
-                if (h - h_sclk_edge != 2) begin
-                    $display("FAIL t2: Sclk high for %0d halves (want 2), half %0d", h - h_sclk_edge, h);
+                if (h - h_sclk_edge < 2) begin
+                    $display("FAIL t2: SCLK high for %0d halves (want >= 2), half %0d", h - h_sclk_edge, h);
                     errors = errors + 1;
                 end
             end
-            if (!pc && bits > 0 && h_sclk_edge >= 0) begin   // Sclk rose after a bit: low phase
+            if (!pc && bits > 0 && h_sclk_edge >= 0) begin   // SCLK rose after a bit: low phase
                 if (h - h_sclk_edge < min_lo) min_lo = h - h_sclk_edge;
-                if (h - h_sclk_edge < 2) begin
-                    $display("FAIL t3: Sclk low for %0d halves (want >= 2), half %0d", h - h_sclk_edge, h);
+                if (h - h_sclk_edge != 2) begin
+                    $display("FAIL t3: SCLK low for %0d halves (want 2), half %0d", h - h_sclk_edge, h);
                     errors = errors + 1;
                 end
             end
             h_sclk_edge = h;
         end
-        if (!sclk && pc && !ps) begin          // Sclk fell with SYNC low: the DAC takes DIN
+        if (!sclk && pc && !ps) begin          // SCLK fell with SYNC low: the DAC takes DIN
             if (pd !== ppd) begin
-                $display("FAIL t5: DIN changed one half before the Sclk fall (half %0d, bit %0d)", h, bits);
+                $display("FAIL t5: DIN changed one half before the SCLK fall (half %0d, bit %0d)", h, bits);
                 errors = errors + 1;
             end
             if (din !== pd) begin
-                $display("FAIL t5/t6: DIN changed on the Sclk falling edge (half %0d, bit %0d)", h, bits);
+                $display("FAIL t5/t6: DIN changed on the SCLK falling edge (half %0d, bit %0d)", h, bits);
                 errors = errors + 1;
             end
             chk_hold = 1'b1;
@@ -107,7 +107,7 @@ module tb_dac8551;
         end
         if (sync && !ps) begin                 // SYNC rose
             if (h_fall24 >= 0 && h - h_fall24 < 1) begin
-                $display("FAIL t7: SYNC rose on the 24th Sclk falling edge (half %0d)", h);
+                $display("FAIL t7: SYNC rose on the 24th SCLK falling edge (half %0d)", h);
                 errors = errors + 1;
             end
             h_sync_rise = h;
@@ -115,7 +115,7 @@ module tb_dac8551;
         if (!sync && ps) begin                 // SYNC fell: a frame starts
             if (h_fall24 >= 0 && h - h_fall24 < min_t9) min_t9 = h - h_fall24;
             if (h_fall24 >= 0 && h - h_fall24 < 13) begin
-                $display("FAIL t9: SYNC fell %0d halves after the 24th Sclk fall (want >= 13)", h - h_fall24);
+                $display("FAIL t9: SYNC fell %0d halves after the 24th SCLK fall (want >= 13)", h - h_fall24);
                 errors = errors + 1;
             end
             if (h_sync_rise >= 0 && h - h_sync_rise < 6) begin
@@ -165,7 +165,7 @@ module tb_dac8551;
         run_case(4, 0); run_case(0, 0); run_case(1, 0); run_case(2, 0); run_case(3, 0); run_case(8, 0);
         run_case(2, 1); run_case(8, 1);
         if (errors == 0)
-            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t2-t9 on the pins (high %0d-%0d, low >= %0d, t9 >= %0d halves) and max(div,4)+63 clk/sample for div 0,1,2,3,4,8", min_hi, max_hi, min_lo, min_t9);
+            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t2-t9 on the pins (high %0d-%0d, low %0d, t9 >= %0d halves) and max(div,4)+63 clk/sample for div 0,1,2,3,4,8", min_hi, max_hi, min_lo, min_t9);
         else
             $display("FAIL tb_dac8551: %0d error(s)", errors);
         $finish;

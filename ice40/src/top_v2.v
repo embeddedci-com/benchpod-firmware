@@ -809,10 +809,11 @@ module top (
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
     // GATEWARE_VERSION 66 = v65 + A 19.2 MHz DAC SCLK (dac8551_engine, dac_pads): SCLK and DIN leave
-    // through DDR pads, two bits per 5 clk48 (SCLK high 2 halves = 20.8 ns, low 3 halves = 31.3 ns),
+    // through DDR pads, two bits per 5 clk48 (SCLK high 3 halves = 31.3 ns, low 2 halves = 20.8 ns),
     // SYNC through its pad register, all one clk48 later.  The 2026-11-24 bench measured v65's 24 MHz
-    // SCLK at 21.8 / 19.8 ns high / low on the DAC connector (every iCE40 output here drops ~1 ns
-    // late), under the DAC8554's 20 ns t3 at IOVDD 3.3 V; now about 21.8 / 30.2 ns.  One DAC sample
+    // SCLK at 21.8 / 19.8 ns high / low on the DAC connector, under the DAC8554's 20 ns t3 at IOVDD
+    // 3.3 V.  Through the DDR pads one clk48 of SCLK high measured 0.5 ns SHORT (a 2-high / 3-low
+    // try read 20.3 / 31.8 ns), so the one-clk48 phase is the low one: about 30.7 / 21.3 ns.  One DAC sample
     // takes max(divider, 4) + 63 clk48 (was + 51): 716 kS/s at most from RAM, 706 kS/s from PSRAM.
     // The firmware's DAC_SEQ_OVERHEAD_CLK follows the gateware version.
     // GATEWARE_VERSION 65 = v64 + THE EMULATION IMAGE SPLIT: the emulation image drops the bus-master

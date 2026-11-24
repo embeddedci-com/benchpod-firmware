@@ -18,20 +18,22 @@
 // every line, so the one timing serves both boards.  SCLK and DIN leave through DDR pads
 // (dac_pads), so their edges sit on a half-clk48 grid (10.4 ns).  Two bits take 5 clk:
 //     halves   q0    q1    q2    q3    q4
-//     SCLK     H H   L L   L H   H L   L L        19.2 MHz: high 2 halves, low 3 halves
+//     SCLK     H H   H L   L H   H H   L L        19.2 MHz: high 3 halves, low 2 halves
 //     DIN      e e   e e   e o   o o   o o        (e/o = the even/odd bit of the pair)
 //   t1 SCLK period 2.5 clk = 52.1 ns (>= 40)
-//   t2 SCLK high 1 clk = 20.8 ns (>= 20): always two halves of the SAME edge type (rise to rise
-//      or fall to fall), so it does not depend on the oscillator's duty cycle
-//   t3 SCLK low 1.5 clk = 31.3 ns (>= 20): this one moves with the duty cycle, with 10 ns spare
+//   t2 SCLK high 1.5 clk = 31.3 ns (>= 20): moves with the oscillator's duty cycle, 10 ns spare
+//   t3 SCLK low 1 clk = 20.8 ns (>= 20): always two halves of the SAME edge type (fall to fall
+//      or rise to rise), so it does not depend on the duty cycle
 //   t4 SYNC fall -> SCLK rise 1 clk (>= 0)        t5/t6 DIN changes on SCLK RISES only: setup
-//                                                 20.8 ns, hold 31.3 ns (>= 5 / 4.5)
-//   t7 24th SCLK fall -> SYNC rise 1.5 clk (>= 0) t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
-//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3.5 clk = 156 ns (>= 130)   (divider floor 4)
-// Why (2026-11-24 bench, benchpod-emc si-sim/dac-sclk-alternatives.md): every iCE40 output here
-// shows its falling edge about 1 ns later than its rising edge, so v65's 24 MHz SCLK (1 clk high,
-// 1 clk low) measured 21.8 / 19.8 ns at the DAC connector, under t3.  At 24 MHz no split can fix
-// that (41.7 ns against 2 x 20); 19.2 MHz gives about 21.8 / 30.2 ns at the pin.
+//                                                 31.3 ns, hold 20.8 ns (>= 5 / 4.5)
+//   t7 24th SCLK fall -> SYNC rise 2 clk (>= 0)   t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
+//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3 clk = 146 ns (>= 130)   (divider floor 4)
+// Why (2026-11-24 bench, benchpod-emc si-sim/dac-sclk-alternatives.md): v65's 24 MHz SCLK (1 clk
+// high, 1 clk low, from a fabric flop) measured 21.8 / 19.8 ns at the DAC connector, under t3.
+// At 24 MHz no split fixes that (41.7 ns against 2 x 20).  Through the DDR pads the offset turns
+// round: a first v66 build with 2 halves high / 3 low measured 20.3 / 31.8 ns (high at t2), i.e.
+// one clk48 of SCLK high comes out about 0.5 ns short there.  So the one-clk48 phase is the LOW
+// one: expected about 30.7 / 21.3 ns at the pin.
 // Every frame gap, static frames on an idle engine included, goes through the divider floor
 // below, so t8/t9 hold whatever divider the firmware last sent.
 // One sample takes max(divider, DIV_MIN) + 63 clk (v65 and older: + 51) — the firmware's
@@ -200,16 +202,16 @@ module dac8551_engine #(
                 dac_sync<=1'b0; st<=S_SHIFT;       // (sh loads {ctrl, high, low})
             end
             S_SHIFT: begin
-                // v66: two bits per 5 clk, halves H H L L L | H H L L L (see the header).
+                // v66: two bits per 5 clk, halves H H H L L | H H H L L (see the header).
                 // (sh/pcnt/last/q step in the datapath block below)
-                sclk_a <= q[0] | q[3];
-                sclk_b <= q[0] | q[2];
+                sclk_a <= q[0] | q[1] | q[3];
+                sclk_b <= q[0] | q[2] | q[3];
                 if (q[0])             din_a <= sh[23];        // even bit, both halves
                 else if (q[2] | q[3]) din_a <= din_b;         // q2: even bit held; q3: odd bit
                 if (q[0] | q[2])      din_b <= sh[23];        // q0: even bit; q2: odd bit
                 if (q[4] & last)
-                    // The 24th SCLK fall is in the second half of the q3 cycle; SYNC rises in
-                    // S_IDLE one clk after this one (t7 = 1.5 clk), never on the fall itself.
+                    // The 24th SCLK fall starts the q4 cycle; SYNC rises in
+                    // S_IDLE one clk after this one (t7 = 2 clk), never on the fall itself.
                     // (the stream steps in its own block below, off `fe`)
                     st<=S_IDLE;
             end
