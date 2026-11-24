@@ -79,7 +79,7 @@ static int sim_uart_config(void *io, uint32_t baud, bool parity_even, bool stop2
 
 static int sim_uart_write(void *io, const uint8_t *b, size_t n) {
     prog_sim_t *s = io;
-    prog_sim_uart_reply(s, b, n);    /* the half-duplex line echoes */
+    /* no echo: the gateware's half-duplex receiver ignores the line while the pod sends */
     if (s->m.on_uart_rx) s->m.on_uart_rx(s, b, n, s->baud, s->parity_even, s->stop2);
     return 0;
 }
