@@ -285,30 +285,35 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# Loop image: seed 34 since v62 (local sweep 1-64, 47 ok: clk48 59.18 MHz, clk 26.33 MHz,
-# clk -> clk48 11.31 ns, clk48 -> clk 7.31 ns; 4334 LC, 82%).  CI sweep 1-64
-# (run 45292913037, 53 ok): seed 34 ok, clk48 52.63 MHz, clk 26.99 MHz, clk -> clk48 11.51 ns.
-# (v61: seed 20.)
-SEED_LOOP ?= 34
-# The next v62 seeds from the local sweep, by clk48 margin.
-SEED_LOOP_FALLBACK ?= 2 50 49 22 25
-# Deep image: seed 26 since v62 (local sweep 1-64, 18 ok: clk48 57.00 MHz, clk 26.75 MHz,
-# clk -> clk48 13.28 ns, clk48 -> clk 5.68 ns; 4616 LC, 87%, with the SWIM master).  CI sweep 1-64
-# (run 45292913037): seed 26 fails the gate there (clk -> clk48 16.79 ns), and only 16 of 64 pass in CI.
-# Seed 35 passes both toolchains with the most margin: local clk48 53.74 MHz, clk 27.03 MHz,
-# clk -> clk48 13.88 ns; CI clk48 51.86 MHz, clk 27.35 MHz, clk -> clk48 13.27 ns, clk48 -> clk 6.12 ns.
-# (v60: seed 24; v62 first pin: seed 26.)
-SEED_DEEP ?= 35
-# Seeds that pass both toolchains, by margin (42, 34 and 2 are thinner on clk -> clk48).
-SEED_DEEP_FALLBACK ?= 42 34 2 12
-# Emulation image (USE_EMULATION): seed 30 since v62 (local sweep 1-32, 25 ok: clk48 57.20 MHz,
-# clk 27.69 MHz, clk -> clk48 11.48 ns, clk48 -> clk 6.87 ns; the v62 version constant re-rolled
-# its placement, seed 60 was not re-checked).  It is the fullest image: 5155/5280 LC (97.6%) at
-# v60, 30/30 block RAM, 4/4 SPRAM.  CI sweep 1-64 (run 45292913037, 53 ok): seed 30 ok, clk48 61.74 MHz, clk 25.77 MHz,
-# clk -> clk48 12.46 ns.  (v60: seed 60.)
-SEED_EMU ?= 30
-# The next v62 seeds from the local sweep, by clk48 margin.
-SEED_EMU_FALLBACK ?= 6 14 15 29 8
+# v63 seeds: local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and CI sweep 1-64 (run 45406106727,
+# Yosys 0.65+7).  Each pin is the seed with the best worst relative margin over the four gates
+# (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk <= 15 ns) in BOTH toolchains.
+# Loop image: seed 11 since v63 (local 57 ok, CI 51 ok, 44 in both).  Local: clk48 56.69 MHz,
+# clk 27.93 MHz, clk -> clk48 10.62 ns, clk48 -> clk 8.50 ns.  CI: clk48 55.29 MHz, clk 29.24 MHz,
+# clk -> clk48 10.19 ns, clk48 -> clk 6.66 ns.  Seed 38 had the best margin but FAILED on hardware:
+# the LA sampled at 0.495x its reported rate (SDK e2e test_la_sample_rate_matches_the_host_clock,
+# 30a9f1, 5 of 5 runs; seed 11 and the v62 image pass on the same pod and firmware).  The four
+# gates do not catch that placement fault, so a new loop pin needs that test on hardware.
+# (v61: seed 20; v62: seed 34.)
+SEED_LOOP ?= 11
+# The next seeds that pass both toolchains, by worst relative margin (38 is excluded, see above).
+SEED_LOOP_FALLBACK ?= 13 51 49 45
+# Deep image: seed 31 since v63 (local 16 ok, CI 22 ok, only 31 and 63 in both; v62's seed 35
+# fails the local x48 gate at 19.05 ns).  Local: clk48 54.63 MHz, clk 26.24 MHz, clk -> clk48
+# 14.56 ns, clk48 -> clk 4.39 ns.  CI: clk48 52.55 MHz, clk 27.55 MHz, clk -> clk48 12.80 ns,
+# clk48 -> clk 4.39 ns.  Passes the LA sample-rate test on hardware.  (v60: seed 24; v62: seed 35.)
+SEED_DEEP ?= 31
+# 63 passes both toolchains (thinner on clk48 locally: 50.98 MHz); 51, 4 and 1 pass CI only.
+SEED_DEEP_FALLBACK ?= 63 51 4 1
+# Emulation image (USE_EMULATION): seed 41 since v63 (local 56 ok, CI 38 ok, 28 in both).
+# Local: clk48 65.32 MHz, clk 27.69 MHz, clk -> clk48 13.22 ns, clk48 -> clk 7.62 ns.  CI: clk48
+# 54.76 MHz, clk 28.83 MHz, clk -> clk48 13.86 ns, clk48 -> clk 7.75 ns.  Seeds 52 and 6 had more
+# margin but halved the LA sample rate on hardware, like loop seed 38 (see above); 41 and the v62
+# image pass.  It is the fullest image (5202/5280 LC, 98.5%).  Loop 4339 LC (82%), deep 4655 LC
+# (88%).  (v60: seed 60; v62: seed 30.)
+SEED_EMU ?= 41
+# The next seeds that pass both toolchains, by worst relative margin (52 and 6 are excluded).
+SEED_EMU_FALLBACK ?= 63 57 27 47
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -469,17 +474,17 @@ dacpsramreplaytest:
 # Self-checking simulation of the v2 MCP33131D-10 serial ADC capture engine.
 adctest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_adc.vvp \
-	         sim/tb_adc_mcp33131.v src/adc_mcp33131.v
+	         sim/tb_adc_mcp33131.v src/adc_mcp33131.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_adc.vvp
 	@rm -f /tmp/$(PROJECT)_adc.vvp
 
-# Timing + throughput sign-off of the PRODUCTION adc_mcp33131 at 48 MHz against the
-# analog-accurate mcp33131_model (real tDO + pad round-trip).  Proves the shipping
-# SCLK_DIV=2 config reads correctly, reports the achieved sample rate, and shows
-# SCLK_DIV=1 (24 MHz SCLK) as the failing edge.  See docs/adc-clock-analysis.md.
+# Timing + throughput sign-off of the PRODUCTION adc_mcp33131 (24 MHz clk, 12 MHz SCLK, its SDO
+# SB_IO from the cells model) against the analog-accurate mcp33131_model (tEN/tDO + pad and cable
+# round trip).  Measures setup and hold at the falling-edge sample (v63) from zero delay to a
+# 45.5 ns round trip, and shows a round trip over 1.5 clk as the failing edge.
 adctimingtest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_adct.vvp \
-	         sim/tb_adc_timing.v sim/mcp33131_model.v src/adc_mcp33131.v
+	         sim/tb_adc_timing.v sim/mcp33131_model.v src/adc_mcp33131.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_adct.vvp
 	@rm -f /tmp/$(PROJECT)_adct.vvp
 

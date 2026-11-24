@@ -463,10 +463,9 @@ module top (
 
     // ---- ADC engine (serial MCP33131, 24 MHz clk, free-running) ----
     // (adc_sample / adc_sample_stb forward-declared above for the closed-loop block)
-    wire        adc_sdo_pu;
+    // (v63: the SDO pad's SB_IO, with its pull-up, is inside adc_mcp33131: a DDR input register
+    //  samples SDO on the falling clk edge.)
     wire [15:0] adc_sample_sel;   // real ADC, or the self-test ramp
-    SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_adc_sdo (
-        .PACKAGE_PIN(adc_sdo), .D_IN_0(adc_sdo_pu));
     wire adc_sample_stb_raw;
     // v52: restart the free-running engine on the t0 of a capture that includes the ADC, so its
     // sample i is converted at t0 + (i+1)*divider like the LA producer's (see adc_mcp33131).  An
@@ -479,7 +478,7 @@ module top (
     adc_mcp33131 adc_i (
         .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider), .restart(adc_restart),
         .adc_cnvst(adc_cnvst), .adc_sclk(adc_sclk),
-        .adc_sdi(adc_sdi), .adc_sdo(adc_sdo_pu),
+        .adc_sdi(adc_sdi), .adc_sdo(adc_sdo),
         .sample(adc_sample), .sample_stb(adc_sample_stb_raw)
     );
     // Self-test ramp (+0x0101/sample) so the whole capture->writer->PSRAM->readback
@@ -801,6 +800,11 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 63 = v62 + a LATER ADC SDO SAMPLE (adc_mcp33131.v) for timing margin with more
+    // series resistance on the module cable: each bit is sampled on the falling clk edge in the middle
+    // of SCLK high (the SDO SB_IO's DDR input register, now in adc_mcp33131), 20.8 ns later than v62,
+    // and one idle clk after CNVST falls gives the MSB 41.7 ns more.  Start-to-strobe is 59 clk (58);
+    // sample periods (>= 60) and the v52 t0 alignment are unchanged.  tb_adc_timing.
     // GATEWARE_VERSION 62 = v61 + a SWIM MASTER (the STM8's one-wire debug interface) as the SWD engine's
     // fifth job (swim_engine.v; SPI_ARM flags bit 4): the dio slot is the open-drain SWIM wire, SWD_FEED
     // carries tokens (entry + sync measurement, command and data frames with ACK/retry, receive, config,
@@ -1283,7 +1287,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h09;   // closed-loop DAC control + JTAG master (v61)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd62), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd63), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
