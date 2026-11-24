@@ -3,7 +3,7 @@
 
 /* prog_updi — UPDI programming (tinyAVR 0/1/2, megaAVR 0, AVR DA/DB/DD) for prog_flash.h.
  *
- * Wiring: one pin, UART engine, half duplex, 8E2. Every byte sent comes back as an echo.
+ * Wiring: one pin, UART engine, half duplex, 8E2. The pod does not read back its own bytes.
  *
  * What the host passes (prog_ctx_t):
  *   baud   link rate, 0 = 115200, at most 225000 (the chip's default UPDI clock)
