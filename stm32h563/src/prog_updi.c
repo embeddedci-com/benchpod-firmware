@@ -256,8 +256,18 @@ static void leave(prog_ctx_t *c, bool run) {
     if (!s->linked) return;
     c->phase = "leave";
     stcs(c, ASI_RESET, RESET_ASSERT);
+    pause_us(c, 1000);
     if (run) {
+        /* On the bench (ATtiny1607) the reset release and UPDIDIS sent back to back left the chip
+           in NVM programming mode with its CPU stopped. Wait until it is out of programming mode
+           (a few ms, as pymcuprog's serial latency gives it) before disabling the UPDI. */
+        uint8_t v = 0;
         stcs(c, ASI_RESET, 0);
+        uint32_t t0 = now(c);
+        do {
+            pause_us(c, 1000);
+            if (ldcs(c, ASI_SYS_STAT, &v)) break;
+        } while ((v & SYS_NVMPROG) && now(c) - t0 < 50);
         stcs(c, CS_CTRLB, CTRLB_UPDIDIS | CTRLB_CCDETDIS);
     }
 }
