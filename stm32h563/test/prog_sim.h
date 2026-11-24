@@ -10,6 +10,11 @@
  * flush. The sim also records whether the clock was low at a flush (sim->low_at_flush) and the
  * longest clock-low time in simulated us (delay_us adds to the clock), for the C2/PDI rules.
  *
+ * Byte time: with sim->byte_ns set, every queued command (set, drive, sample) advances the simulated
+ * time by that much first, as the pod's byte mode does (one SPI byte per command); sim->ns is the
+ * time in ns (us follows it), and the longest clock low is also kept in ns (clk_low_max_ns). Left at 0,
+ * time passes only in delay_us() as before.
+ *
  * UPDI: uart_write() hands bytes to the model (on_uart_rx) and also echoes them into the RX queue,
  * as the half-duplex line does; the model answers with prog_sim_uart_reply().
  */
@@ -43,6 +48,9 @@ struct prog_sim {
     size_t   nsamples;
     uint32_t us;                 /* simulated time */
     uint32_t clk_low_since, clk_low_max_us;
+    uint32_t byte_ns;            /* simulated time per command, 0 = off */
+    uint64_t ns;                 /* simulated time in ns */
+    uint64_t clk_low_since_ns, clk_low_max_ns;
     unsigned contention, low_at_flush;
     bool     nrst_low;
     uint32_t baud; bool parity_even, stop2;

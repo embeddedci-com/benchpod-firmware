@@ -24,6 +24,7 @@
    low phase. The headroom is for the bytes between two high levels (a strobe queues < 8). */
 #define FEED_SOFT   (FEED_MAX - 16u)
 #define SAMPLES_MAX 128u
+#define SAMPLES_SOFT (SAMPLES_MAX - 32u)   /* op_set flushes at a clock-high edge past this */
 
 typedef struct {
     uint8_t  clk, data;          /* LA channels (2-wire) */
@@ -31,6 +32,7 @@ typedef struct {
     uint8_t  feed[FEED_MAX];
     uint16_t nfeed;
     uint8_t  samples[SAMPLES_MAX];   /* taken by an automatic flush, handed out by the next flush() */
+    uint16_t nsampq;                 /* 'c' bytes in feed[] (samples the next feed returns) */
     uint16_t nsamples;
     int      err;                /* a feed failed (engine disarmed) */
     la_pull_token_t data_pull;
@@ -56,12 +58,16 @@ static void feed_now(wire_t *w_)
         if (used == 0 || quit) { w->err = -1; break; }
     }
     w->nfeed = 0;
+    w->nsampq = 0;
 }
 
 static void push(wire_t *w, uint8_t b)
 {
-    /* A 'c' needs room in samples[]: flush first when the queue could overflow either buffer. */
-    if (w->nfeed >= FEED_MAX || (b == 'c' && w->nsamples + w->nfeed >= SAMPLES_MAX)) feed_now(w);
+    /* A 'c' needs room in samples[]: flush first when the queue could overflow either buffer. These
+       are the hard limits; op_set flushes earlier, with the clock high, so they are not reached in a
+       normal frame (a flush inside a clock-low phase stretches it by a whole SPI transaction). */
+    if (w->nfeed >= FEED_MAX || (b == 'c' && w->nsamples + w->nsampq >= SAMPLES_MAX)) feed_now(w);
+    if (b == 'c') w->nsampq++;
     w->feed[w->nfeed++] = b;
 }
 
@@ -69,7 +75,7 @@ static void op_set(void *io, int clk, int data)
 {
     wire_t *w = io;
     push(w, (uint8_t)('d' + (clk ? 2 : 0) + (data ? 1 : 0)));
-    if (clk && w->nfeed >= FEED_SOFT) feed_now(w);
+    if (clk && (w->nfeed >= FEED_SOFT || w->nsamples + w->nsampq >= SAMPLES_SOFT)) feed_now(w);
 }
 
 static void op_drive(void *io, bool drive) { push((wire_t *)io, drive ? 'O' : 'o'); }
@@ -200,7 +206,7 @@ void prog_wire_close(prog_wire_ops_t *ops)
     wire_t *w = ops ? ops->io : NULL;
     if (!w) return;
     if (w->two_wire) {
-        w->nfeed = 0;
+        w->nfeed = 0; w->nsampq = 0;
         op_drive(w, false);
         op_set(w, 1, 1);
         feed_now(w);
