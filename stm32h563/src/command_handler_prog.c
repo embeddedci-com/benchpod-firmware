@@ -120,6 +120,13 @@ void handle_prog_flash(int conn_id, const char *json) {
     if (has_key(json, "baud") && (!get_u32(json, "baud", &p.baud) || p.baud > 2000000)) {
         send_error(conn_id, "invalid baud"); return;
     }
+    /* pic: the byte address of the config word with the code-protect bit (prog_pic.h); it travels
+       in the same context field as UPDI's baud, which pic does not use. */
+    if (has_key(json, "cp_addr")) {
+        if (strcmp(p.proto->name, "pic") != 0) { send_error(conn_id, "cp_addr is for pic only"); return; }
+        if (has_key(json, "baud")) { send_error(conn_id, "pic takes cp_addr, not baud"); return; }
+        if (!get_u32(json, "cp_addr", &p.baud)) { send_error(conn_id, "invalid cp_addr"); return; }
+    }
     if (has_key(json, "flags") && !get_u32(json, "flags", &p.flags)) { send_error(conn_id, "invalid flags"); return; }
     char idv[24] = {0};
     if (bp_json_get(json, "expect_id", idv, sizeof(idv)) && idv[0] &&

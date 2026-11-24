@@ -3319,6 +3319,7 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 | `erase` | `chip` (also unlocks a locked chip), `page` (default: only the pages written) or `none` |
 | `expect_id` | hex bytes the chip's ID must start with; the pod stops before erasing anything when it does not |
 | `baud` | `updi` only: the link rate after entry (default 115200) |
+| `cp_addr` | `pic` only: the byte address (as `addr` counts) of the configuration word that holds the code-protect bit, so a protected chip reports `locked`; 0 or absent: no lock check. The bit itself is in `flags` |
 | `flags` | protocol options, for example the PIC command set (the SDK sets them) |
 | `run` | `true` (default): let the chip start its program at the end |
 
