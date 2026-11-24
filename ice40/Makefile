@@ -257,14 +257,17 @@ all: $(OUT).bin
 # netlist while every RTL bench passed (synth/sb_mac16_keep.v).  The control loop's multipliers
 # are still $mul in that step, so -dsp infers them exactly as before.  synth/check_dsp.py then
 # fails the build (and removes the netlist) unless every dsp_counter cell came through intact.
+# synth/check_la_pads.py (v64) likewise fails it unless every LA pad is a registered-output,
+# registered-enable SB_IO (la_bank.v: a combinational pad let a hand-over glitch reach the DUT).
 SYNTH_FLAGS = -abc9 -dsp -spram -top top
-SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py
+SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py synth/check_la_pads.py
 define synth
 	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(or $(3),$(SRC)); \
 	  synth_ice40 $(SYNTH_FLAGS) -run :coarse; chtype -set SB_MAC16_KEEP t:SB_MAC16; \
 	  synth_ice40 $(SYNTH_FLAGS) -run coarse:map_ram; chtype -set SB_MAC16 t:SB_MAC16_KEEP; \
 	  synth_ice40 $(SYNTH_FLAGS) -run map_ram: -json $(2)"
 	python3 synth/check_dsp.py $(2) src || { rm -f $(2); exit 1; }
+	python3 synth/check_la_pads.py $(2) || { rm -f $(2); exit 1; }
 endef
 $(OUT).json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
@@ -285,35 +288,39 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# v63 seeds: local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and CI sweep 1-64 (run 45406106727,
+# v64 seeds: local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and CI sweep 1-64 (run 45479653263,
 # Yosys 0.65+7).  Each pin is the seed with the best worst relative margin over the four gates
-# (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk <= 15 ns) in BOTH toolchains.
-# Loop image: seed 11 since v63 (local 57 ok, CI 51 ok, 44 in both).  Local: clk48 56.69 MHz,
-# clk 27.93 MHz, clk -> clk48 10.62 ns, clk48 -> clk 8.50 ns.  CI: clk48 55.29 MHz, clk 29.24 MHz,
-# clk -> clk48 10.19 ns, clk48 -> clk 6.66 ns.  Seed 38 had the best margin but FAILED on hardware:
-# the LA sampled at 0.495x its reported rate (SDK e2e test_la_sample_rate_matches_the_host_clock,
-# 30a9f1, 5 of 5 runs; seed 11 and the v62 image pass on the same pod and firmware).  The four
-# gates do not catch that placement fault, so a new loop pin needs that test on hardware.
-# (v61: seed 20; v62: seed 34.)
-SEED_LOOP ?= 11
-# The next seeds that pass both toolchains, by worst relative margin (38 is excluded, see above).
-SEED_LOOP_FALLBACK ?= 13 51 49 45
-# Deep image: seed 31 since v63 (local 16 ok, CI 22 ok, only 31 and 63 in both; v62's seed 35
-# fails the local x48 gate at 19.05 ns).  Local: clk48 54.63 MHz, clk 26.24 MHz, clk -> clk48
-# 14.56 ns, clk48 -> clk 4.39 ns.  CI: clk48 52.55 MHz, clk 27.55 MHz, clk -> clk48 12.80 ns,
-# clk48 -> clk 4.39 ns.  Passes the LA sample-rate test on hardware.  (v60: seed 24; v62: seed 35.)
-SEED_DEEP ?= 31
-# 63 passes both toolchains (thinner on clk48 locally: 50.98 MHz); 51, 4 and 1 pass CI only.
-SEED_DEEP_FALLBACK ?= 63 51 4 1
-# Emulation image (USE_EMULATION): seed 41 since v63 (local 56 ok, CI 38 ok, 28 in both).
-# Local: clk48 65.32 MHz, clk 27.69 MHz, clk -> clk48 13.22 ns, clk48 -> clk 7.62 ns.  CI: clk48
-# 54.76 MHz, clk 28.83 MHz, clk -> clk48 13.86 ns, clk48 -> clk 7.75 ns.  Seeds 52 and 6 had more
-# margin but halved the LA sample rate on hardware, like loop seed 38 (see above); 41 and the v62
-# image pass.  It is the fullest image (5202/5280 LC, 98.5%).  Loop 4339 LC (82%), deep 4655 LC
-# (88%).  (v60: seed 60; v62: seed 30.)
-SEED_EMU ?= 41
-# The next seeds that pass both toolchains, by worst relative margin (52 and 6 are excluded).
-SEED_EMU_FALLBACK ?= 63 57 27 47
+# (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk <= 15 ns) in BOTH toolchains,
+# then checked on hardware with the LA rate test and a step-train release check on LA9.
+# Up to v63 some placements put a few-ns pulse on an LA pad when its owner let go of it (la_bank's
+# pads were combinational, PIN_TYPE 6'b1010_01): v63 loop seed 38 and emu seeds 52 and 6 showed it
+# on the bench's floating LA9 as a second pulse per step, and the e2e host-clock rate fit read
+# 0.495x.  No timing gate can see a combinational pad path.  v64 registers every LA pad's output and
+# enable (synth/check_la_pads.py enforces it), so a placement can no longer do that; the old bad
+# seeds, rebuilt as v64, pass the LA9 check (loop 38, emu 6; emu 52 now fails the x48 gate and the
+# PSRAM write check, so it would not be pinned anyway).
+# Loop image: seed 36 since v64 (local 54 ok, CI 41 ok, 31 in both).  Local: clk48 54.29 MHz,
+# clk 28.40 MHz, clk -> clk48 12.58 ns, clk48 -> clk 7.10 ns.  CI: clk48 54.24 MHz, clk 27.11 MHz,
+# clk -> clk48 12.46 ns, clk48 -> clk 8.17 ns.  4328 LC (81%).
+# (v62: seed 34; v63: seed 11.)
+SEED_LOOP ?= 36
+# The next seeds that pass both toolchains, by worst relative margin.
+SEED_LOOP_FALLBACK ?= 37 15 62 58
+# Deep image: seed 59 since v64 (local 19 ok, CI 17 ok, 5 in both; v63's seed 31 fails the local
+# x48 gate at 15.21 ns).  Local: clk48 53.97 MHz, clk 28.44 MHz, clk -> clk48 14.09 ns, clk48 ->
+# clk 5.58 ns.  CI: clk48 55.60 MHz, clk 26.86 MHz, clk -> clk48 13.81 ns, clk48 -> clk 6.87 ns.
+# 4629 LC (87%).  (v62: seed 35; v63: seed 31.)
+SEED_DEEP ?= 59
+# The other seeds that pass both toolchains, by worst relative margin.
+SEED_DEEP_FALLBACK ?= 37 30 51 63
+# Emulation image (USE_EMULATION): seed 20 since v64 (local 41 ok, CI 51 ok, 34 in both).
+# Local: clk48 54.71 MHz, clk 29.11 MHz, clk -> clk48 10.08 ns, clk48 -> clk 5.68 ns.  CI: clk48
+# 58.01 MHz, clk 27.69 MHz, clk -> clk48 12.78 ns, clk48 -> clk 7.41 ns.  It is the fullest image
+# (5171/5280 LC, 97.9%; the pad registers sit in the IO cells, 31 LC fewer than v63).
+# (v62: seed 30; v63: seed 41.)
+SEED_EMU ?= 20
+# The next seeds that pass both toolchains, by worst relative margin (6 is HW-verified too).
+SEED_EMU_FALLBACK ?= 42 22 62 6
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell

@@ -199,5 +199,16 @@ int main(void) {
         CHECK(la_psram_max_samples_at(HFOSC, 3.0e6f, 4000000u) == 4000000u, "3 MS/s fits any depth");
         CHECK(la_psram_max_samples_at(HFOSC, 12.0e6f, 1000u) == 1000u, "a limit below the edge");
     }
+    /* la_change_trigger_tick: one 48 MHz sample back when the change was on trig - 1. */
+    CHECK(la_change_trigger_tick(100u, 1u, 1, 0) == 99u,  "rising, edge on trig-1 -> trig-1");
+    CHECK(la_change_trigger_tick(100u, 1u, 0, 0) == 100u, "rising, edge on trig -> trig");
+    CHECK(la_change_trigger_tick(100u, 2u, 0, 1) == 99u,  "falling, edge on trig-1 -> trig-1");
+    CHECK(la_change_trigger_tick(100u, 2u, 1, 1) == 100u, "falling, edge on trig -> trig");
+    CHECK(la_change_trigger_tick(100u, 3u, 1, 1) == 100u, "high, already high before -> trig");
+    CHECK(la_change_trigger_tick(100u, 3u, 1, 0) == 99u,  "high, went high on trig-1 -> trig-1");
+    CHECK(la_change_trigger_tick(100u, 4u, 0, 1) == 99u,  "low, went low on trig-1 -> trig-1");
+    CHECK(la_change_trigger_tick(100u, 1u, -1, 0) == 100u, "unknown level -> trig");
+    CHECK(la_change_trigger_tick(1u, 1u, 1, 0) == 1u,     "trig < 2 -> trig");
+    CHECK(la_change_trigger_tick(100u, 0u, 1, 0) == 100u, "no trigger mode -> trig");
     return fails ? 1 : 0;
 }

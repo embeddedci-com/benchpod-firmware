@@ -16,7 +16,8 @@
 // Bit timing, one TCK cycle = `half` clk low then `half` clk high: TDI and TMS change while TCK
 // is low (at the falling edge, or when a sequence starts), TCK rises, and TDO is taken at the END
 // of the high half.  The target changes TDO on the falling edge, so it has been stable for a whole
-// cycle; through the 2-flop synchroniser the value used is the pin 2 clk before the falling edge.
+// cycle; through swd_engine's input flop the value used is the pin 1 clk before the falling edge
+// (since v64 the pins lag the engine by 1 clk, la_bank; up to v63 2 flops and combinational pads).
 // TCK rests LOW between sequences and while a TDI byte has not arrived yet (JTAG allows stopping
 // the clock low); TMS and TDI keep their last level.
 // ============================================================================
