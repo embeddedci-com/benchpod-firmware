@@ -15,8 +15,9 @@
  * time in ns (us follows it), and the longest clock low is also kept in ns (clk_low_max_ns). Left at 0,
  * time passes only in delay_us() as before.
  *
- * UPDI: uart_write() hands bytes to the model (on_uart_rx) and also echoes them into the RX queue,
- * as the half-duplex line does; the model answers with prog_sim_uart_reply().
+ * UPDI: uart_write() hands bytes to the model (on_uart_rx) and echoes nothing, as the gateware's
+ * half-duplex receiver ignores the line while the pod sends; the model answers with
+ * prog_sim_uart_reply().
  */
 
 #include <stdbool.h>

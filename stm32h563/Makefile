@@ -689,6 +689,7 @@ $(OBJECTS): $(DEFS_STAMP)
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	@OBJDUMP=$(PREFIX)objdump OBJCOPY=$(CP) SIZE=$(SZ) python3 tools/check_xip_refs.py --self-test || { rm -f $@; exit 1; }
 	@NM=$(PREFIX)nm OBJDUMP=$(PREFIX)objdump OBJCOPY=$(CP) SIZE=$(SZ) python3 tools/check_xip_refs.py $@ $(BUILD_DIR) || { rm -f $@; exit 1; }
 	@OBJCOPY=$(CP) python3 tools/xip_finish.py $@ $(BLOB_DIR) || { rm -f $@; exit 1; }
 	$(SZ) $@

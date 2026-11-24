@@ -251,7 +251,8 @@ static void args_done(chip_t *c) {
     case C_RPT: c->rpt = (uint32_t)c->arg[0] + 1; c->ps = P_SYNC; break;
     case C_KEY: {
         char k[9]; for (int i = 0; i < 8; i++) k[i] = (char)c->arg[7 - i]; k[8] = 0;
-        if (!strcmp(k, "NVMProg ")) { c->keynvm = true; c->cs[7] |= 0x10; }
+        /* bench (ATtiny1607): a chip already in programming mode ignores the key, KEY_STATUS reads 0 */
+        if (!strcmp(k, "NVMProg ")) { if (!c->prog) { c->keynvm = true; c->cs[7] |= 0x10; } }
         else if (!strcmp(k, "NVMErase")) { c->keyerase = true; c->cs[7] |= 0x08; }
         c->ps = P_SYNC; break; }
     }
@@ -410,16 +411,16 @@ static void test_model_raw(void) {
     r->chip.enabled = true;
     r->ops.uart_write(s, ldcs, sizeof(ldcs));
     uint8_t rx[4]; size_t n = r->ops.uart_read(s, rx, 3, 1);
-    CHECK_EQ(n, 3); CHECK_EQ(rx[0], 0x55); CHECK_EQ(rx[1], 0x80); CHECK_EQ(rx[2], 0x30);
+    CHECK_EQ(n, 1); CHECK_EQ(rx[0], 0x30);   /* the reply only: the pod never reads its own bytes */
     const uint8_t sib[] = { 0x55, 0xE5 };
     r->ops.uart_write(s, sib, sizeof(sib));
     uint8_t b[18]; n = r->ops.uart_read(s, b, 18, 1);
-    CHECK_EQ(n, 18); CHECK(!memcmp(b + 2, "tinyAVR P:0D:0-3", 16));
+    CHECK_EQ(n, 16); CHECK(!memcmp(b, "tinyAVR P:0D:0-3", 16));
     free(r);
     r = rig_new(2); r->chip.silent = true; r->chip.enabled = true;
     r->ops.uart_write(&r->sim, ldcs, sizeof(ldcs));
     n = r->ops.uart_read(&r->sim, rx, 3, 1);
-    CHECK_EQ(n, 2);   /* only the echo */
+    CHECK_EQ(n, 0);   /* silent: nothing comes back */
     free(r);
 }
 
@@ -443,6 +444,12 @@ static void check_entry(int nvm, uint8_t sig1, uint8_t sig2) {
     CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
     p->leave(&r->ctx, false);
     CHECK(!r->chip.disabled); CHECK(r->chip.inreset);
+    /* the next job finds it still in programming mode (a failed job's leave keeps it there): it
+       skips the key, which the chip would ignore, and reads the ID */
+    memset(&r->ctx.state, 0, sizeof(r->ctx.state)); r->ctx.id_len = 0;
+    r->chip.cs[7] = 0;   /* KEY_STATUS read 0x00 on the bench in this state */
+    CHECK_EQ(run(&r->ctx, p->enter), PROG_OK);
+    CHECK_EQ(r->ctx.id_len, 3); CHECK_EQ(r->ctx.id[1], sig1);
     free(r);
 }
 
