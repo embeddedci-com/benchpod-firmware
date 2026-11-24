@@ -469,17 +469,17 @@ dacpsramreplaytest:
 # Self-checking simulation of the v2 MCP33131D-10 serial ADC capture engine.
 adctest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_adc.vvp \
-	         sim/tb_adc_mcp33131.v src/adc_mcp33131.v
+	         sim/tb_adc_mcp33131.v src/adc_mcp33131.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_adc.vvp
 	@rm -f /tmp/$(PROJECT)_adc.vvp
 
-# Timing + throughput sign-off of the PRODUCTION adc_mcp33131 at 48 MHz against the
-# analog-accurate mcp33131_model (real tDO + pad round-trip).  Proves the shipping
-# SCLK_DIV=2 config reads correctly, reports the achieved sample rate, and shows
-# SCLK_DIV=1 (24 MHz SCLK) as the failing edge.  See docs/adc-clock-analysis.md.
+# Timing + throughput sign-off of the PRODUCTION adc_mcp33131 (24 MHz clk, 12 MHz SCLK, its SDO
+# SB_IO from the cells model) against the analog-accurate mcp33131_model (tEN/tDO + pad and cable
+# round trip).  Measures setup and hold at the falling-edge sample (v63) from zero delay to a
+# 45.5 ns round trip, and shows a round trip over 1.5 clk as the failing edge.
 adctimingtest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_adct.vvp \
-	         sim/tb_adc_timing.v sim/mcp33131_model.v src/adc_mcp33131.v
+	         sim/tb_adc_timing.v sim/mcp33131_model.v src/adc_mcp33131.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_adct.vvp
 	@rm -f /tmp/$(PROJECT)_adct.vvp
 

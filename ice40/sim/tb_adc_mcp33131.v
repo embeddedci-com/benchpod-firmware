@@ -3,8 +3,10 @@
 // falling edge) and checks the captured `sample` matches after one conversion,
 // then checks the free-running sample period is EXACTLY `divider` clocks — the firmware
 // reports the ADC rate as 24 MHz / divider.  v40: the 60-clock floor moved to the firmware
-// (adc_min_divider); below it the engine runs conversions back to back (58 clocks, ~414 kS/s,
-// inside the MCP33131-10's 1 MS/s), so a too-small divider is inexact but never unsafe.
+// (adc_min_divider); below it the engine runs conversions back to back (59 clocks since v63, 58
+// before; ~407 kS/s, inside the MCP33131-10's 1 MS/s), so a too-small divider is inexact but never
+// unsafe.  The SDO pad is the engine's own SB_IO (v63), so this bench needs the cells model.
+// The zero-delay SDO here checks function; tb_adc_timing checks the sampling point.
 `timescale 1ns/1ps
 module tb_adc_mcp33131;
     reg clk = 0;
@@ -69,10 +71,10 @@ module tb_adc_mcp33131;
         check_period(16'd100, 100);
         check_period(16'd61,   61);
         check_period(16'd60,   60);   // the floor itself (~400 kS/s)
-        check_period(16'd2,    58);   // below the firmware floor: back-to-back conversions
+        check_period(16'd2,    59);   // below the firmware floor: back-to-back conversions (v63: 59)
         check_period(16'd240, 240);   // 100 kS/s
-        check_period(16'd1,    58);   // v52: 0 and 1 wrapped the countdown (a 65536-clock period)
-        check_period(16'd0,    58);
+        check_period(16'd1,    59);   // v52: 0 and 1 wrapped the countdown (a 65536-clock period)
+        check_period(16'd0,    59);
 
         // v52: restart (the capture's t0) at every phase of a conversion and of its read: the
         // next strobe always comes the same number of clocks later, and carries a good sample.
@@ -96,15 +98,16 @@ module tb_adc_mcp33131;
                     errors = errors + 1;
                 end
             end
-            // the first conversion starts `divider` - 3 clk after the restart; start-to-strobe is 58 clk
-            if (lat0 != 100 - 3 + 58) begin
-                $display("FAIL tb_adc_mcp33131: restart-to-strobe %0d clk (want divider - 3 + 58 = 155)", lat0);
+            // the first conversion starts `divider` - 3 clk after the restart; start-to-strobe is 59 clk
+            // (v63; 58 before): the conversion start, and so the t0 alignment, did not move
+            if (lat0 != 100 - 3 + 59) begin
+                $display("FAIL tb_adc_mcp33131: restart-to-strobe %0d clk (want divider - 3 + 59 = 156)", lat0);
                 errors = errors + 1;
             end
         end
 
         if (errors == 0)
-            $display("PASS tb_adc_mcp33131: sample = %04h, period == divider (>= 60; back-to-back 58 below, 0/1 too), restart latency fixed", PATTERN);
+            $display("PASS tb_adc_mcp33131: sample = %04h, period == divider (>= 60; back-to-back 59 below, 0/1 too), restart latency fixed", PATTERN);
         else
             $display("FAIL tb_adc_mcp33131: %0d error(s)", errors);
         $finish;
