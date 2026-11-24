@@ -1,6 +1,7 @@
 /* prog_updi.c — UPDI (AVR tinyAVR 0/1/2, megaAVR 0, AVR DA/DB/DD) for prog_flash (prog_flash.h).
- * See prog_updi.h for what the host passes. One pin, UART engine, half duplex 8E2: every byte
- * sent comes back as an echo, which is read and checked before the chip's reply.
+ * See prog_updi.h for what the host passes. One pin, UART engine, half duplex 8E2. The gateware's
+ * receiver ignores the line while the pod sends, so the pod never reads back its own bytes: what
+ * arrives is the chip's reply only (pymcuprog, on a plain serial adapter, reads and drops an echo).
  * Sequences cross-checked against pymcuprog's serialupdi (application, link, nvmp0, nvmp2). */
 #include "prog_flash.h"
 #include "prog_updi.h"
@@ -16,6 +17,7 @@
 #define ASI_KEY_STAT 0x07
 #define ASI_RESET    0x08
 #define ASI_SYS_STAT 0x0B
+#define SYS_NVMPROG   0x08   /* ASI_SYS_STATUS bit 3, in NVM programming mode */
 #define SYS_ERASEFAIL 0x40   /* ASI_SYS_STATUS bit 6, chip erase key failed */
 /* CTRLA: IBDLY, RSD (no ACK on stores), GTVAL = 2 cycles. RSD is only for streams the chip can take
    at line speed (flash words); EEPROM, fuse and user row bytes are ACKed, the ACK waits for the write. */
@@ -61,20 +63,19 @@ static st_t *S(prog_ctx_t *c) { return (st_t *)c->state; }
 static uint32_t now(prog_ctx_t *c) { return c->w->now_ms(c->w->io); }
 static void pause_us(prog_ctx_t *c, uint32_t us) { c->w->delay_us(c->w->io, us); }
 
-/* Write tx, read and check its echo, then read nrx reply bytes. The timeouts count 15 bit times per
-   byte (frame 12 bits with 2 stop bits, plus the inter-byte delay and some slack). */
+/* Write tx, then read nrx reply bytes. No echo to skip: the half-duplex receiver ignores the line
+   while the pod sends. The timeout counts the frames still being sent (12 bits each with 2 stop
+   bits) plus 15 bit times per reply byte (frame, the chip's guard time and some slack). */
 static int xfer(prog_ctx_t *c, const uint8_t *tx, size_t ntx, uint8_t *rx, size_t nrx) {
     const prog_wire_ops_t *w = c->w;
     uint32_t baud = S(c)->baud;
+    /* The chip only speaks when asked, so anything already waiting is stale (a late reply to a
+       request that timed out): drop it, or every reply after it would be one byte off. */
+    w->uart_rx_clear(w->io);
     if (w->uart_write(w->io, tx, ntx) < 0) return PROG_E_PROTOCOL;
-    uint8_t e[16];
-    for (size_t i = 0; i < ntx;) {
-        size_t k = ntx - i < sizeof(e) ? ntx - i : sizeof(e);
-        if (w->uart_read(w->io, e, k, 20 + (uint32_t)(k * 15000u / baud)) != k) return PROG_E_NO_ANSWER;
-        if (memcmp(e, tx + i, k)) return PROG_E_PROTOCOL;
-        i += k;
-    }
-    if (nrx && w->uart_read(w->io, rx, nrx, 20 + (uint32_t)(nrx * 15000u / baud)) != nrx) return PROG_E_NO_ANSWER;
+    if (nrx && w->uart_read(w->io, rx, nrx,
+                            20 + (uint32_t)((ntx * 12u + nrx * 15u) * 1000u / baud)) != nrx)
+        return PROG_E_NO_ANSWER;
     return PROG_OK;
 }
 
@@ -124,9 +125,8 @@ static int key(prog_ctx_t *c, const char *k) {
 
 /* A BREAK is one 0x00 at 300 baud: 12 bits (start, 8 data, even parity, 2 stop) low for the first
    10, about 33 ms. Two in a row reset the UPDI state. The SYNC must follow soon after the BREAK
-   (the UPDI times out on a long idle line), so wait for the frame by its length, not for its echo:
-   the half-duplex line does not always hand the 300 baud frame back (on the bench the echo never
-   came and the 80 ms read timeout put the SYNC 47 ms after the BREAK). */
+   (the UPDI times out on a long idle line), so wait for the frame by its length: the half-duplex
+   receiver never hands the pod's own frames back. */
 #define BREAK_FRAME_US  41000u   /* 12 bits at 300 baud = 40 ms, plus margin */
 static void brk(prog_ctx_t *c) {
     const prog_wire_ops_t *w = c->w;
@@ -203,6 +203,11 @@ static int enter(prog_ctx_t *c) {
         s->stage = 1;
         return PROG_RUNNING;
     case 1:   /* NVMProg key, reset toggle */
+        /* Already in programming mode (an earlier job that failed left it there, or the chip kept
+           it from a session that ended without a reset): the key is ignored then and KEY_STATUS
+           reads 0, so go straight to the status poll, as pymcuprog does. */
+        TRY(ldcs(c, ASI_SYS_STAT, &v));
+        if (v & SYS_NVMPROG) { s->t0 = now(c); s->stage = 2; return PROG_RUNNING; }
         TRY(stcs(c, ASI_RESET, RESET_ASSERT));
         TRY(key(c, "NVMProg "));
         TRY(ldcs(c, ASI_KEY_STAT, &v));
