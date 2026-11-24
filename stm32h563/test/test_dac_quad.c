@@ -118,8 +118,8 @@ static void test_park_codes(void) {
     }
     dac_limits_t lim = { .enabled = 1, .path = 1, .inverted = 1, .min_mv = 1000, .max_mv = 4000 };
     dac_limits_set_active(&lim);
-    CHECK(dac_quad_park_code(DAC_QUAD_B) == (uint16_t)(dac_limits_park_code() << 8),
-          "B park %u with limits on 5v, want %u", dac_quad_park_code(DAC_QUAD_B), dac_limits_park_code() << 8);
+    CHECK(dac_quad_park_code(DAC_QUAD_B) == dac_limits_park_code16(),
+          "B park %u with limits on 5v, want %u", dac_quad_park_code(DAC_QUAD_B), dac_limits_park_code16());
     CHECK(dac_quad_park_code(DAC_QUAD_A) == 0, "A park unchanged by limits on 5v");
     dac_limits_set_active(&none);
     cal_data_select(BOARD_REV_V2);

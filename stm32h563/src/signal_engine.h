@@ -490,21 +490,16 @@ int fpga_ping(int attempts, uint8_t *out_version);
    from the console after init. */
 int fpga_status_read(uint8_t *out_status);
 
-/* Force the DAC to output a single byte value continuously (loaded as a
-   1-sample waveform).  Useful for DC-level debugging with a multimeter on
-   the analog side.  divider selects the DAC clock rate (sample_rate =
-   FPGA_HFOSC_HZ / divider).  Use a large divider (e.g. 240 → 100 kHz) when
+/* Hold the DAC at one 16-bit code (loaded as a 1-sample waveform): dac_set, dac_out,
+   current_out, the dac_limits park and the DMM calibration.  divider selects the DAC clock rate
+   (sample_rate = FPGA_HFOSC_HZ / divider).  Use a large divider (e.g. 240 → 100 kHz) when
    debugging with a 24 MS/s logic analyzer that can't resolve 12 MHz cleanly.
    dac_stop() halts it. */
-int dac_set_constant(uint8_t value, uint32_t divider);
-
-/* The same hold with the full 16-bit DAC8551 code (dac_set_constant puts its byte in the high
-   half). Used by the 4-20 mA output, where an 8-bit step is 63 uA. */
 int dac_set_constant16(uint16_t code, uint32_t divider);
 
 /* Single-sample ADC capture.  Returns the byte the ADC pins are showing
    after one capture cycle (subject to ADC chip pipeline delay).  Useful
-   paired with dac_set_constant() to verify the analog DAC→ADC path with
+   paired with dac_set_constant16() to verify the analog DAC→ADC path with
    no waveform sequencing involved.
    Returns 0 on success, -1 on timeout. */
 int adc_probe_one(uint8_t *out_value);

@@ -11,7 +11,7 @@
 #include "command_handler.h"
 #include "command_handler_internal.h"
 #include "bp_json.h"
-#include "signal_engine.h"  /* dac_set_constant*, adc_capture_psram */
+#include "signal_engine.h"  /* dac_set_constant16, adc_capture_psram */
 #include "i2c_bus.h"        /* dacmux_*, calsw_*, analog_path_* */
 #include "cal_data.h"
 #include "current_out.h"   /* 4-20 mA output (J9): uA <-> DAC code */

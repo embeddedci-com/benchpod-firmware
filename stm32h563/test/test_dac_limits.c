@@ -95,9 +95,9 @@ static void test_inverted_solar(void) {
     CHECK(refused("dac_control_loop", j, "HIGHEST"), "trip allowed on inverted");
 
     /* park rounds INTO the window */
-    uint8_t code = dac_limits_park_code();
-    float v = DAC_CAL[1].a + DAC_CAL[1].b * (float)code;
-    CHECK(v <= 3.6f && v > 3.55f, "park code %u = %.3f V", code, (double)v);
+    uint16_t code = dac_limits_park_code16();
+    float v = dac_volts_for_code16(1, code);
+    CHECK(v <= 3.6f && v > 3.5995f, "park code %u = %.3f V", code, (double)v);
 }
 
 static void test_normal_stage(void) {
@@ -112,9 +112,9 @@ static void test_normal_stage(void) {
     char j[96];
     snprintf(j, sizeof(j), "{\"vmin\":%ld,\"vmax\":%ld,\"in_trip\":900}", page_code(0.3), page_code(3.9));
     CHECK(allowed("dac_control_loop", j), "trip refused on a normal stage");
-    uint8_t code = dac_limits_park_code();
-    float v = DAC_CAL[1].a + DAC_CAL[1].b * (float)code;
-    CHECK(v >= 0.2f && v < 0.25f, "normal park code %u = %.3f V", code, (double)v);
+    uint16_t code = dac_limits_park_code16();
+    float v = dac_volts_for_code16(1, code);
+    CHECK(v >= 0.2f && v < 0.2005f, "normal park code %u = %.3f V", code, (double)v);
 }
 
 static void test_store(void) {

@@ -4,7 +4,7 @@
  */
 #include "dac_limits.h"
 #include "i2c_bus.h"         /* analog_path_set, analog_path_from_name */
-#include "signal_engine.h"   /* dac_set_constant */
+#include "signal_engine.h"   /* dac_set_constant16 */
 #include "dac_quad.h"
 #include "bp_log.h"
 
@@ -15,16 +15,16 @@ int dac_limits_park_now(void) {
     if (!l->enabled) return 1;
     analog_path_t p;
     if (analog_path_from_name(dac_limits_path_name(l->path), &p) != 0) return -1;
-    uint8_t code = dac_limits_park_code();
+    uint16_t code = dac_limits_park_code16();
     /* Level first, then route: the path then connects straight onto the safe level instead of
        whatever the DAC held (0 at boot, i.e. full output on an inverted stage).  Analog v3r2 has
        no mux to connect: the route points the DAC at the path's channel, which is then set (the
        boot park, dac_quad_boot, already put it at this level). */
     if (dac_quad_present()) {
         if (analog_path_set(p) != 0) { LOG_E("[dac-limits] park: route failed\n"); return -1; }
-        if (dac_set_constant(code, 240) != 0) { LOG_E("[dac-limits] park: DAC set failed\n"); return -1; }
+        if (dac_set_constant16(code, 240) != 0) { LOG_E("[dac-limits] park: DAC set failed\n"); return -1; }
     } else {
-        if (dac_set_constant(code, 240) != 0) { LOG_E("[dac-limits] park: DAC set failed\n"); return -1; }
+        if (dac_set_constant16(code, 240) != 0) { LOG_E("[dac-limits] park: DAC set failed\n"); return -1; }
         if (analog_path_set(p) != 0) { LOG_E("[dac-limits] park: route failed\n"); return -1; }
     }
     log_printf("[dac-limits] parked %s at code %u (%ld mV)\n", dac_limits_path_name(l->path), code,
