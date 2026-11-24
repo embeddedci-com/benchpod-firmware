@@ -290,10 +290,14 @@ $(OUT).bin: $(OUT).asc
 # (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk <= 15 ns) in BOTH toolchains.
 # Loop image: seed 11 since v63 (local 57 ok, CI 51 ok, 44 in both).  Local: clk48 56.69 MHz,
 # clk 27.93 MHz, clk -> clk48 10.62 ns, clk48 -> clk 8.50 ns.  CI: clk48 55.29 MHz, clk 29.24 MHz,
-# clk -> clk48 10.19 ns, clk48 -> clk 6.66 ns.  Seed 38 had the best margin but FAILED on hardware:
-# the LA sampled at 0.495x its reported rate (SDK e2e test_la_sample_rate_matches_the_host_clock,
-# 30a9f1, 5 of 5 runs; seed 11 and the v62 image pass on the same pod and firmware).  The four
-# gates do not catch that placement fault, so a new loop pin needs that test on hardware.
+# clk -> clk48 10.19 ns, clk48 -> clk 6.66 ns.  Seed 38 had the best margin but failed SDK e2e
+# test_la_sample_rate_matches_the_host_clock on 30a9f1 (0.495x, 5 of 5 runs one day, passing the
+# next).  The LA itself samples at the right rate there: la_bank's LA pads have a combinational
+# output and output enable (SB_IO PIN_TYPE 6'b1010_01), and on some placements a pad drives a
+# few-ns pulse when its owner lets go of it.  A step train on LA9 (the F446's floating TDI wire on
+# the bench) then shows a second ~55 us pulse per step, and the host-clock fit halves.  Nothing
+# times a combinational pad path, so none of the four gates sees it: run that test on hardware
+# before pinning a new seed.
 # (v61: seed 20; v62: seed 34.)
 SEED_LOOP ?= 11
 # The next seeds that pass both toolchains, by worst relative margin (38 is excluded, see above).
@@ -308,8 +312,8 @@ SEED_DEEP_FALLBACK ?= 63 51 4 1
 # Emulation image (USE_EMULATION): seed 41 since v63 (local 56 ok, CI 38 ok, 28 in both).
 # Local: clk48 65.32 MHz, clk 27.69 MHz, clk -> clk48 13.22 ns, clk48 -> clk 7.62 ns.  CI: clk48
 # 54.76 MHz, clk 28.83 MHz, clk -> clk48 13.86 ns, clk48 -> clk 7.75 ns.  Seeds 52 and 6 had more
-# margin but halved the LA sample rate on hardware, like loop seed 38 (see above); 41 and the v62
-# image pass.  It is the fullest image (5202/5280 LC, 98.5%).  Loop 4339 LC (82%), deep 4655 LC
+# margin but glitch LA9 when a step train releases it, like loop seed 38 (see above; every run on
+# 30a9f1); 41 and the v62 image do not.  It is the fullest image (5202/5280 LC, 98.5%).  Loop 4339 LC (82%), deep 4655 LC
 # (88%).  (v60: seed 60; v62: seed 30.)
 SEED_EMU ?= 41
 # The next seeds that pass both toolchains, by worst relative margin (52 and 6 are excluded).
