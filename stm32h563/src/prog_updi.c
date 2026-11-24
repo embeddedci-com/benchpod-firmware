@@ -122,16 +122,18 @@ static int key(prog_ctx_t *c, const char *k) {
     return xfer(c, t, 10, NULL, 0);
 }
 
-/* A BREAK is one 0x00 at 300 baud (a frame of about 40 ms low); two in a row reset the UPDI state.
-   The echo of the frame marks its end: the caller sends the SYNC right after it (the UPDI times out
-   on a long idle line), so no extra wait here. */
+/* A BREAK is one 0x00 at 300 baud: 12 bits (start, 8 data, even parity, 2 stop) low for the first
+   10, about 33 ms. Two in a row reset the UPDI state. The SYNC must follow soon after the BREAK
+   (the UPDI times out on a long idle line), so wait for the frame by its length, not for its echo:
+   the half-duplex line does not always hand the 300 baud frame back (on the bench the echo never
+   came and the 80 ms read timeout put the SYNC 47 ms after the BREAK). */
+#define BREAK_FRAME_US  41000u   /* 12 bits at 300 baud = 40 ms, plus margin */
 static void brk(prog_ctx_t *c) {
     const prog_wire_ops_t *w = c->w;
     static const uint8_t z = 0;
-    uint8_t e;
     w->uart_config(w->io, 300, true, true);
     w->uart_write(w->io, &z, 1);
-    w->uart_read(w->io, &e, 1, 80);
+    pause_us(c, BREAK_FRAME_US);
     w->uart_rx_clear(w->io);
 }
 static void set_link(prog_ctx_t *c) {
@@ -146,11 +148,10 @@ static void set_link(prog_ctx_t *c) {
 static void enable_pulse(prog_ctx_t *c) {
     const prog_wire_ops_t *w = c->w;
     static const uint8_t z = 0;
-    uint8_t e;
     set_link(c);
     w->uart_write(w->io, &z, 1);
-    w->uart_read(w->io, &e, 1, 2);
-    pause_us(c, 500);
+    /* the frame itself (12 bits) by its length, then the 500 us gap before the first SYNC */
+    pause_us(c, 12u * 1000000u / S(c)->baud + 1u + 500u);
     w->uart_rx_clear(w->io);
 }
 
