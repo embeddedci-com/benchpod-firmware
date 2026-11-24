@@ -123,3 +123,10 @@ uint32_t la_psram_max_samples_at(uint32_t cap_hz, float rate_hz, uint32_t limit)
     }
     return lo;
 }
+
+uint64_t la_change_trigger_tick(uint64_t trig, uint8_t edge, int lvl_m1, int lvl_m2)
+{
+    if (trig < 2u || edge < 1u || edge > 4u || lvl_m1 < 0 || lvl_m2 < 0) return trig;
+    const int want = (edge == 1u || edge == 3u) ? 1 : 0;      /* rising / high: 1; falling / low: 0 */
+    return (lvl_m1 == want && lvl_m2 != want) ? trig - 1u : trig;
+}

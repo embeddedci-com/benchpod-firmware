@@ -136,4 +136,14 @@ uint32_t la_change_divisor(float sample_rate_hz, uint8_t gw_version);
    rate up to 48 MS/s); rate 0 ("max") keeps the raw default of 12 MS/s (k = 4).  0 = older gateware. */
 uint32_t la_change_divisor_pre(float sample_rate_hz, uint8_t gw_version);
 
+/* The trigger tick of a change capture, refined to the 48 MHz sample.  The gateware's trigger looks
+   at the LA in the 24 MHz clk domain while the change capture samples at 48 MHz, so the tick it
+   marks is the edge's sample when the edge fell in the second half of a clk period and one sample
+   late when it fell in the first half.  (A DUT's edges land in either half; since gateware v64 the
+   pod's own registered outputs land in the first.)  `trig` is the marked tick, `edge` the trigger
+   mode (la_edge_t: 1 rising, 2 falling, 3 high, 4 low), `lvl_m1` / `lvl_m2` the trigger channel's
+   level at trig - 1 / trig - 2 (0, 1, or -1 unknown).  Returns trig - 1 when the condition already
+   held at trig - 1 and not at trig - 2 (the change was on trig - 1), else trig. */
+uint64_t la_change_trigger_tick(uint64_t trig, uint8_t edge, int lvl_m1, int lvl_m2);
+
 #endif /* LA_RATE_H */
