@@ -618,6 +618,21 @@ static void test_out_of_memory(void) {
     CHECK(g_fpga.allocs == 0, "nothing leaked: %ld", g_fpga.allocs);
 }
 
+/* The compiler runs from the W25Q on the pod (sensor_port_compile): a refusal (a capture is running,
+   the blob is missing) answers before the upload, with the port's words, and leaks nothing. */
+static void test_compile_refused(void) {
+    fresh();
+    g_fpga.compile_refuse = "busy: a capture, upload or update is using the PSRAM bus; try again when it ends";
+    unsigned before = g_fpga.compiles;
+    CHECK(!define_fixture("env", "bme280") && strcmp(g_err, g_fpga.compile_refuse) == 0, "%s", g_err);
+    CHECK(g_fpga.compiles == before && !sm_upload_received(), "no compile ran, the upload is dropped");
+    g_fpga.compile_refuse = NULL;
+    CHECK(define_fixture("env", "bme280"), "defines again once the port allows it: %s", g_err);
+    CHECK(g_fpga.compiles == before + 1, "compiled once");
+    sm_reset();
+    CHECK(g_fpga.allocs == 0, "nothing leaked: %ld", g_fpga.allocs);
+}
+
 int main(void) {
     test_define();
     test_bme280_mpu();
@@ -629,6 +644,7 @@ int main(void) {
     test_analog();
     test_reply_sizes();
     test_out_of_memory();
+    test_compile_refused();
     if (fails) { printf("test_sensor_mgr: %d FAILURE(S)\n", fails); return 1; }
     printf("test_sensor_mgr: all passed\n");
     return 0;

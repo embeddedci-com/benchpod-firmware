@@ -502,6 +502,18 @@ ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
 
+# The sensor definition compiler (sensor_def_compile.o, sensor_def_expr.o) is linked into the
+# xip_prog image by the linker script (lines marked XIP_PROG_SENSOR_COMPILE). The EMC test build
+# defines its emi_uart sensor without an XIP session, on boards that cannot map the W25Q, so it
+# keeps the compiler in internal flash: its linker script has those lines removed.
+ifeq ($(EMI_TEST),1)
+EMI_LD := $(BUILD_DIR)/emi_flash.ld
+$(EMI_LD): $(LDSCRIPT) Makefile | $(BUILD_DIR)
+	@grep -v XIP_PROG_SENSOR_COMPILE $< > $@
+$(BUILD_DIR)/$(TARGET).elf: $(EMI_LD)
+LDSCRIPT := $(EMI_LD)
+endif
+
 # XIP_RAM=1: both images (xip_image.h) are linked over adc_pool (src/adc_pool.h), the one shared
 # sample buffer, which gets a fixed region at the end of RAM (POOL). The pool is idle during a session
 # (adc_pool_overlay_begin refuses while a capture or upload uses it), so an image may take all of it:

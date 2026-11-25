@@ -846,6 +846,9 @@ int sm_define_chunk(const char *inst, uint32_t offset, uint32_t total, const uin
                     bool dry_run, bp_emit_t *e, char *err, size_t cap) {
     la_pins_set_owner_namer(sm_slot_name);
     if (!name_ok(inst)) { seterr(err, cap, "instance must be 1..%u characters of a-z, 0-9 and _", SM_NAME_MAX); return -1; }
+    /* The compiler runs from the xip_prog image (sensor_port.h): refuse before the upload when a
+       capture is running or the blob is missing, not after the last chunk. */
+    if (offset == 0 && sensor_port_compile_ready(err, cap) != 0) return -1;
     int rc = upload_chunk(false, inst, offset, total, data, n, SD_JSON_MAX, err, cap);
     if (rc <= 0) return rc;
 
@@ -862,9 +865,14 @@ int sm_define_chunk(const char *inst, uint32_t offset, uint32_t total, const uin
     }
     size_t plen = 0;
     sd_err_t se;
-    rc = sd_compile((const char *)s_up.buf, total, prog, SD_PROG_MAX, work, SD_COMPILE_WORK, &plen, &se);
+    rc = sensor_port_compile((const char *)s_up.buf, total, prog, SD_PROG_MAX, work, SD_COMPILE_WORK, &plen, &se,
+                             err, cap);
     sensor_port_free(work);
     upload_drop();
+    if (rc == SM_COMPILE_REFUSED) {   /* no compile ran (a capture started meanwhile, ...): err says why */
+        sensor_port_free(prog); sensor_port_free(in);
+        return -1;
+    }
     if (rc != SD_OK) {
         char m[160];
         sd_err_format(&se, m, sizeof(m));

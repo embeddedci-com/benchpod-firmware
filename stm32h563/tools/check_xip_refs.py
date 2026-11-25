@@ -53,7 +53,8 @@ IMAGES = (
     ("prog", ".xip_prog", "xip_prog_table", "__xip_prog_start"),
 )
 # The XIP objects of each image, by object file pattern, for the "no static state" rule.
-OBJECTS = ("xip_mod_*.o", "xip_prog_mod.o", "prog_updi.o", "prog_pic.o", "prog_c2.o", "prog_tpi.o", "prog_pdi.o", "prog_sbw.o")
+OBJECTS = ("xip_mod_*.o", "xip_prog_mod.o", "prog_updi.o", "prog_pic.o", "prog_c2.o", "prog_tpi.o", "prog_pdi.o", "prog_sbw.o",
+           "sensor_def_compile.o", "sensor_def_expr.o")
 
 
 def symbols(elf):

@@ -45,6 +45,12 @@ xip_mode_t  xip_mode(void);
 const char *xip_mode_name(xip_mode_t m);
 const char *xip_err_text(xip_err_t e);
 
+/* Would a session for `img` find its image: the board and build can run it, the firmware was linked
+   with it and the blob slot holds that image (length and SHA-256 as recorded at install time, not
+   re-read)? XIP_OK or the error begin would answer for these. Takes nothing: for a caller that
+   wants to refuse early (sensor_define, before the upload). */
+xip_err_t xip_image_check_slot(xip_img_t img);
+
 /* Start a session for image `img` (xip_image.h): XIP_ERR_ACTIVE while another session, of either
    image, runs (they share the RAM region (the adc_pool) and the bus). Release with xip_session_end on every path. */
 xip_err_t xip_session_begin(xip_img_t img);

@@ -118,6 +118,8 @@ SECTIONS
     *prog_tpi.o(.text .text* .rodata .rodata*)
     *prog_pdi.o(.text .text* .rodata .rodata*)
     *prog_sbw.o(.text .text* .rodata .rodata*)
+    *sensor_def_compile.o(.text .text* .rodata .rodata*)   /* XIP_PROG_SENSOR_COMPILE (the EMC test build drops these two lines) */
+    *sensor_def_expr.o(.text .text* .rodata .rodata*)      /* XIP_PROG_SENSOR_COMPILE */
     . = ALIGN(4);
     __xip_prog_end = .;
   } >XIP_PROG

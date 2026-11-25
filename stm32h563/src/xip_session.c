@@ -155,10 +155,8 @@ static xip_err_t check_image(const xip_image_t *im, uint32_t len)
     return XIP_OK;
 }
 
-xip_err_t xip_session_begin(xip_img_t img)
+xip_err_t xip_image_check_slot(xip_img_t img)
 {
-    const uint32_t t0 = now_us();
-    if (s_active) return XIP_ERR_ACTIVE;
     const xip_image_t *im = xip_image(img);
     if (!im) return XIP_ERR_NO_IMAGE;
     const xip_mode_t mode = xip_mode();
@@ -168,6 +166,17 @@ xip_err_t xip_session_begin(xip_img_t img)
     const blob_info_t *have = blob_store_info(im->blob);
     if (!have || !have->present || have->len != want->m.len || memcmp(have->sha256, want->m.sha256, 32) != 0)
         return XIP_ERR_SLOT;
+    return XIP_OK;
+}
+
+xip_err_t xip_session_begin(xip_img_t img)
+{
+    const uint32_t t0 = now_us();
+    if (s_active) return XIP_ERR_ACTIVE;
+    xip_err_t ce = xip_image_check_slot(img);
+    if (ce != XIP_OK) return ce;
+    const xip_image_t *im = xip_image(img);
+    const xip_hash_t *want = im->expected;
 
 #if defined(BENCHPOD_XIP_RAM)
     /* The image runs from the adc_pool: refuse while a capture or upload uses it, and drop any kept

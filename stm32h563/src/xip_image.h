@@ -8,7 +8,8 @@
  *
  *   image   section     slot       code
  *   usb     .xip        xip        the USB flash protocols (src/xip_mod_*.c)
- *   prog    .xip_prog   xip_prog   the pin programmers of prog_flash (xip_prog_mod.c, prog_<proto>.c)
+ *   prog    .xip_prog   xip_prog   the pin programmers of prog_flash (xip_prog_mod.c, prog_<proto>.c) and
+ *                                  the sensor definition compiler (sensor_def_compile.c, sensor_def_expr.c)
  *
  * Memory-mapped (XIP_RAM=0, digital v3r4): OCTOSPI1 maps the W25Q at 0x90000000. The usb image runs
  * at 0x90201000 (slot "xip", W25Q 0x200000 + the 4 KB header) and the prog image at 0x90241000
@@ -31,8 +32,8 @@
  *    and no function pointer to XIP code in internal code or data.
  *  - XIP code passes no pointer to its own functions anywhere (a callback would be called from
  *    another task or an ISR, outside the session); only the table holds XIP function addresses.
- *  - XIP objects (src/xip_mod_*.c, and the prog_<proto>.c files of the prog image) have no .data or
- *    .bss: their state lives in the session's context.
+ *  - XIP objects (src/xip_mod_*.c, and the prog_<proto>.c and sensor_def_{compile,expr}.c files of the
+ *    prog image) have no .data or .bss: their state lives in the session's context.
  *  - An image never refers to the other one (they share one RAM region, the adc_pool, in XIP_RAM=1 builds).
  * XIP code may call internal functions freely: the linker adds long-branch veneers.
  * Internal code may hold the address of an XIP table and of the image's start; that is all.
@@ -46,7 +47,7 @@ typedef enum { XIP_IMG_USB = 0, XIP_IMG_PROG, XIP_IMG_COUNT } xip_img_t;
 
 #define XIP_TABLE_MAGIC  0x50495842u   /* "BXIP" */
 #define XIP_ABI          2u            /* the usb image: bump when its table's entries change meaning */
-#define XIP_PROG_ABI     1u            /* the prog image */
+#define XIP_PROG_ABI     2u            /* the prog image */
 
 /* The usb image's entries, by index. */
 enum {
@@ -61,6 +62,7 @@ enum {
 enum {
     XIP_PROG_FN_SELFTEST = 0,  /* uint32_t (*)(uint32_t seed) */
     XIP_PROG_FN_CALL,          /* int (*)(prog_ctx_t *ctx, unsigned proto, unsigned op): prog_flash.h */
+    XIP_PROG_FN_SD_COMPILE,    /* int (*)(sd_compile_args_t *): sd_compile, the sensor definition compiler (sensor_def.h) */
     XIP_PROG_FN_COUNT
 };
 

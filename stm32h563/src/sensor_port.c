@@ -19,6 +19,8 @@
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "la_pull.h"                    /* la_pull_mask_now */
+#include "xip_session.h"
+#include "hw_worker.h"
 #include "pico/time.h"
 
 #include <math.h>
@@ -31,6 +33,61 @@ uint64_t sensor_port_now_us(void) { return time_us_64(); }
 void    *sensor_port_alloc(size_t n) { return pvPortMalloc(n); }
 void     sensor_port_free(void *p)   { if (p) vPortFree(p); }
 size_t   sensor_port_heap_free(void) { return sys_health_heap_free(); }
+
+/* ---- the definition compiler, from the xip_prog image ---- */
+#if defined(BENCHPOD_EMI_TEST)
+/* The EMC test build links the compiler into internal flash (the linker script's
+   XIP_PROG_SENSOR_COMPILE lines are dropped, Makefile) and defines its emi_uart sensor itself
+   with no XIP session: it runs on boards that cannot map the W25Q. */
+int sensor_port_compile_ready(char *err, size_t cap) { (void)err; (void)cap; return 0; }
+int sensor_port_compile(const char *json, size_t json_len, void *prog, size_t prog_cap, void *work,
+                        size_t work_cap, size_t *prog_len, sd_err_t *se, char *err, size_t cap)
+{
+    (void)err; (void)cap;
+    return sd_compile(json, json_len, prog, prog_cap, work, work_cap, prog_len, se);
+}
+#else
+/* Why no session: the busy answers are BP0048 (what holds the bus, bus_busy_reason's words), a
+   missing or foreign xip_prog blob BP0083 with the install-the-blobs fix. */
+static void compile_refused(xip_err_t xe, char *err, size_t cap)
+{
+    const char *busy = bus_busy_reason();
+    if (xe == XIP_ERR_POOL_BUSY || xe == XIP_ERR_ACTIVE) {
+        snprintf(err, cap, "%s", busy ? busy : bp_tag_storage_bus_busy(
+                 "busy: a capture, upload or flash is using the sample buffer; try again when it ends",
+                 "a capture or upload is running"));
+    } else if (xe == XIP_ERR_SLOT || xe == XIP_ERR_NO_IMAGE) {
+        bp_note_xip_unavailable(err, cap, "sensor_define needs the xip_prog blob, which is missing or "
+                                "from another build: install the blobs (benchpod install-blobs)");
+    } else {
+        bp_note_xip_unavailable(err, cap, xip_img_err_text(XIP_IMG_PROG, xe));
+    }
+}
+
+int sensor_port_compile_ready(char *err, size_t cap)
+{
+    const char *busy = bus_busy_reason();   /* the test every user of the W25Q bus makes first */
+    if (busy) { snprintf(err, cap, "%s", busy); return -1; }
+    xip_err_t xe = xip_image_check_slot(XIP_IMG_PROG);
+    if (xe != XIP_OK) { compile_refused(xe, err, cap); return -1; }
+    return 0;
+}
+
+int sensor_port_compile(const char *json, size_t json_len, void *prog, size_t prog_cap, void *work,
+                        size_t work_cap, size_t *prog_len, sd_err_t *se, char *err, size_t cap)
+{
+    /* One XIP session at a time, on the hw worker only (xip_session.h): every sensor command runs
+       there (command_handler_sensors.c). */
+    if (!hw_worker_is_current()) { snprintf(err, cap, "internal error: sensor_define off the hw worker"); return SM_COMPILE_REFUSED; }
+    if (sensor_port_compile_ready(err, cap) != 0) return SM_COMPILE_REFUSED;
+    xip_err_t xe = xip_session_begin(XIP_IMG_PROG);
+    if (xe != XIP_OK) { compile_refused(xe, err, cap); return SM_COMPILE_REFUSED; }
+    sd_compile_args_t a = { json, json_len, prog, prog_cap, work, work_cap, prog_len, se };
+    int rc = xip_session_call_ctx(XIP_PROG_FN_SD_COMPILE, &a);
+    xip_session_end();
+    return rc;
+}
+#endif
 
 int sensor_port_image(void) { return signal_engine_image_kind(); }
 
