@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 20
+revision = 21
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -1021,3 +1021,10 @@ board = "analog"
 dated = "code"
 docs = "API.md#dac_out--route-an-output-path-and-set-a-calibrated-voltage"
 note = "dac_out and generate take path cal1: the level is set on the 5 V stage routed into the ADC loopback (K1 energized, the 5 V output disconnected meanwhile), with the 5 V calibration, so adc_read source cal1 needs no relay switching in between. With DAC limits on an inverted stage, cal1 is refused like any route away from the limited output (it used to be allowed on the 5v path)."
+
+[features.prog_named]
+rev = 21
+firmware = "next"
+dated = "code"
+docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
+note = "prog_flash takes the chip's protocol options as named fields (updi flash_base; pic cmd_set, pc, ee_erase, cp_high, q10, id_split, key_flip, cp_bit; tpi write_words, page_erase; c2 fpdat, no_setup) instead of the packed flags integer, which is still accepted but not together with a named field."

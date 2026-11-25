@@ -3300,13 +3300,13 @@ AVR TPI and XMEGA PDI notes:
   "Apply 5V", 4.75-5.5 V). The pod's 1.8 and 3.3 V I/O cannot program them: use the board's own 5 V
   with a level shifter. The ATtiny102/104 datasheet contradicts itself (1.8-5.5 V
   in one place, 5 V in another): try it. XMEGA: 3.3 V is fine, 1.8 V when BODLEVEL is below VCC.
-- `tpi` `flags` (the SDK sets them from its device table): bits 0-2 = words per flash write (0 or 1:
-  ATtiny4/5/9/10 and 102/104; 2: ATtiny20; 4: ATtiny40), bit 3 (8) = the chip has a page erase
-  (ATtiny102/104). `page` must be a multiple of the write size (2, 4 or 8 bytes). The chips erase
+- `tpi` fields (the SDK sets them from its device table): `write_words` = words per flash write (1:
+  ATtiny4/5/9/10 and 102/104; 2: ATtiny20; 4: ATtiny40), `page_erase` = the chip has a page erase
+  (ATtiny102/104). Before firmware 4.0.6 these were bits of `flags` (bits 0-2 and bit 3). `page` must be a multiple of the write size (2, 4 or 8 bytes). The chips erase
   flash only as a whole code section, so `erase: "page"` is one section erase before the first page
   (the whole code section is gone, also outside the written range); with the page-erase flag it
   erases each page it writes. Use `erase: "chip"` when in doubt.
-- `pdi`: needs no flags. The PDI turns itself off when its clock runs slower than about 10 kHz; the
+- `pdi`: needs no chip fields. The PDI turns itself off when its clock runs slower than about 10 kHz; the
   pod keeps the clock running while it waits and re-enters programming mode when a pause between
   two steps of a job switched it off. The chip may start its program for a moment in such a pause.
 
@@ -3340,13 +3340,26 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 | `expect_id` | hex bytes the chip's ID must start with; the pod stops before erasing anything when it does not |
 | `baud` | `updi` only: the link rate after entry (default 115200) |
 | `cp_addr` | `pic` only: the byte address (as `addr` counts) of the configuration word that holds the code-protect bit, so a protected chip reports `locked`; 0 or absent: no lock check. The bit itself is in `flags` |
-| `flags` | protocol options, for example the PIC command set (the SDK sets them) |
+| chip fields | Firmware 4.0.6 and later (feature `prog_named`): the chip's protocol options as named fields, set by the SDK from its device table; see below. Unknown values, a field of another protocol and a mix with `flags` are refused |
+| `flags` | the same options as one packed integer, as firmware 4.0.5 and older read them; still accepted for one release, not together with a named field |
 | `run` | `true` (default): let the chip start its program at the end |
 
 Write one memory region per `start`; the SDK splits a `.hex` or `.elf` file. Every page written is
 read back and compared.
 
-`pic` `flags` (the SDK sets them from its device table; bit values in `stm32h563/src/prog_pic.h`):
+Chip fields (firmware 4.0.6 and later; each one replaces the `flags` bit given in brackets):
+
+| `proto` | Field | Meaning |
+|---|---|---|
+| `updi` | `flash_base` | the chip's flash in the UPDI data space: 0x8000 tinyAVR 0/1/2, 0x4000 megaAVR 0, 0x800000 AVR DA/DB/DD (`flags` was this number); absent: from the chip's SIB |
+| `pic` | `cmd_set` | `"6bit"` (default) or `"8bit"` (bit 0) |
+| `pic` | `pc` | `"word"` (default) or `"byte"`, the PIC18 Q program counter in bytes (bit 1); needs `"8bit"` |
+| `pic` | `ee_erase`, `cp_high`, `q10`, `id_split`, `key_flip` | booleans for bits 2, 3, 4, 5 and 6, described below; `q10` needs `pc` `"byte"` |
+| `pic` | `cp_bit` | the code-protect bit number, 0..15 (bits 8..11) |
+| `tpi` | `write_words`, `page_erase` | 1, 2 or 4 words per flash write; the chip has a page erase |
+| `c2` | `fpdat`, `no_setup` | the FPDAT register address (0 = by device ID); skip the per-device setup writes |
+
+`pic` `flags` (before firmware 4.0.6; bit values in `stm32h563/src/prog_pic.h`):
 bit 0 8-bit command set (PIC16F18xxx, PIC18 Q), bit 1 PIC18 Q (byte PC), bit 2 chip erase also
 clears the data EEPROM (6-bit set), bit 3 code-protect bit is 1 when protected, bits 8..11 the
 code-protect bit number, bit 4 PIC18 Q10 (bulk erase without a region payload, 16-bit config
