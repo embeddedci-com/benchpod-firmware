@@ -36,6 +36,7 @@ typedef enum {
     XIP_ERR_HASH,          /* the bytes read back do not match the expected SHA-256 */
     XIP_ERR_TABLE,         /* bad table magic, ABI or count */
     XIP_ERR_ACTIVE,        /* a session is already running */
+    XIP_ERR_POOL_BUSY,     /* RAM mode: a capture or upload is using the adc_pool the image overlays */
 } xip_err_t;
 
 xip_mode_t  xip_mode(void);

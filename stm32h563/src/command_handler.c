@@ -244,6 +244,15 @@ bool capture_or_upload_busy(void) {
     return capture_busy() || heavy_owner != -1 || load_bin_owner() >= 0;
 }
 
+/* The asynchronous users of the shared sample pool (adc_pool.h): a capture, a paced send or a
+   load_bin upload that spans polls. The synchronous ones (SCPI, the console, a JSON handler) run to
+   completion on the hw worker under the heavy gate, so cannot be mid-way when a session begins.
+   A trace merely HELD (a JSON `load` waiting for its replay, a SCPI READ?) is not a use: the
+   session takes the pool over and the holder's replay then says nothing is left. */
+bool adc_pool_users_busy(void) {
+    return capture_busy() || load_bin_owner() >= 0;
+}
+
 bool heavy_or_claimed(void) {
     return heavy_in_flight() || heavy_owner != -1 || load_bin_owner() >= 0;
 }
