@@ -19,6 +19,7 @@ typedef struct {
     uint32_t file_len;
     int fail_write_at;     /* nth write fails (0 = never) */
     int writes;
+    uint32_t wlog[4096];   /* the LBA of each write, in order */
 } rig_t;
 
 static int rd(void *io, uint32_t lba, uint8_t *buf, uint32_t n)
@@ -31,6 +32,7 @@ static int rd(void *io, uint32_t lba, uint8_t *buf, uint32_t n)
 static int wr(void *io, uint32_t lba, const uint8_t *buf, uint32_t n)
 {
     rig_t *r = io;
+    if (r->writes < 4096) r->wlog[r->writes] = lba;
     if (++r->writes == r->fail_write_at || lba + n > r->sectors) return -1;
     memcpy(r->disk + (size_t)lba * 512, buf, (size_t)n * 512);
     return 0;
@@ -153,6 +155,19 @@ static void test_file(geo_t g, uint32_t len)
     uint8_t info[2 * 128 * 512];
     CHECK(read_back(&r, g, "INFO    TXT", info, 0) == (long)(g.spc * 512 + 100));   /* untouched */
     CHECK(c.run_start >= 4);                                     /* not over INFO.TXT's clusters */
+    /* The FAT chain and the directory entry are written before the first data sector (a debugger
+       drive such as Microchip's nEDBG drops data no directory entry points to yet). */
+    {
+        uint32_t root = g.vol + g.rsv + g.nfats * g.fatsz, data = root + (g.root_ent * 32 + 511) / 512;
+        int dir_at = -1, data_at = -1, fat_at = -1;
+        for (int i = 0; i < r.writes && i < 4096; i++) {
+            uint32_t lba = r.wlog[i];
+            if (lba >= data && data_at < 0) data_at = i;
+            if (lba >= root && lba < data) dir_at = i;
+            if (lba >= g.vol + g.rsv && lba < root && fat_at < 0) fat_at = i;
+        }
+        CHECK(fat_at >= 0 && dir_at > fat_at && data_at > dir_at);
+    }
 
     /* Again with the same name: it takes the entry over and the file reads back again. */
     for (uint32_t i = 0; i < len; i++) file[i] ^= 0x5A;
