@@ -19,6 +19,7 @@
 #define ASI_SYS_STAT 0x0B
 #define SYS_NVMPROG   0x08   /* ASI_SYS_STATUS bit 3, in NVM programming mode */
 #define SYS_ERASEFAIL 0x40   /* ASI_SYS_STATUS bit 6, chip erase key failed */
+#define SYS_RSTSYS    0x20   /* ASI_SYS_STATUS bit 5, the chip is held in reset */
 /* CTRLA: IBDLY, RSD (no ACK on stores), GTVAL = 2 cycles. RSD is only for streams the chip can take
    at line speed (flash words); EEPROM, fuse and user row bytes are ACKed, the ACK waits for the write. */
 #define CTRLA_ON     0x86
@@ -207,7 +208,19 @@ static int enter(prog_ctx_t *c) {
            it from a session that ended without a reset): the key is ignored then and KEY_STATUS
            reads 0, so go straight to the status poll, as pymcuprog does. */
         TRY(ldcs(c, ASI_SYS_STAT, &v));
-        if (v & SYS_NVMPROG) { s->t0 = now(c); s->stage = 2; return PROG_RUNNING; }
+        if (v & SYS_NVMPROG) {
+            /* A job that ended with run = false (the SDK's earlier regions) or failed left the
+               chip held in reset: its memory answers nothing until the reset is released, so the
+               ID read would time out (AVR128DA48 on the bench). avrdude releases it the same way. */
+            if (v & SYS_RSTSYS) {
+                TRY(stcs(c, ASI_RESET, 0));
+                /* The AVR DA leaves programming mode with that release: then take the normal
+                   key path below. */
+                pause_us(c, 2000);
+                TRY(ldcs(c, ASI_SYS_STAT, &v));
+            }
+            if (v & SYS_NVMPROG) { s->t0 = now(c); s->stage = 2; return PROG_RUNNING; }
+        }
         TRY(stcs(c, ASI_RESET, RESET_ASSERT));
         TRY(key(c, "NVMProg "));
         TRY(ldcs(c, ASI_KEY_STAT, &v));

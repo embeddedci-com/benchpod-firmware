@@ -295,6 +295,7 @@ static void decode_op(chip_t *c) {
         unsigned mode = (op >> 2) & 3, dsz = (op & 3) + 1;
         uint32_t units = c->rpt ? c->rpt : 1; c->rpt = 0;
         if (mode == 2) { uint8_t o[3] = { (uint8_t)c->ptr, (uint8_t)(c->ptr >> 8), (uint8_t)(c->ptr >> 16) }; reply(c, o, dsz); break; }
+        if (c->inreset) break;   /* the data bus is held in reset: a memory load gets no answer (AVR128DA48 bench) */
         for (uint32_t u = 0; u < units; u++) {
             uint8_t o[4]; for (unsigned i = 0; i < dsz; i++) o[i] = mrd(c, c->ptr + i);
             reply(c, o, dsz);
@@ -309,7 +310,7 @@ static void decode_op(chip_t *c) {
     case 0x8: {
         unsigned reg = op & 15; uint8_t v = c->cs[reg];
         if (reg == 0x0B) v = (uint8_t)((c->locked ? 1 : 0) | ((c->prog && c->sim->us >= c->prog_at) ? 8 : 0) |
-                                       (c->erasefail ? 0x40 : 0));
+                                       (c->inreset ? 0x20 : 0) | (c->erasefail ? 0x40 : 0));
         reply(c, &v, 1); break; }
     case 0xC: c->cls = C_STCS; c->need = 1; c->ps = P_ARGS; break;
     case 0xA: c->cls = C_RPT; c->need = 1; c->ps = P_ARGS; break;
