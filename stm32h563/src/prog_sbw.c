@@ -32,6 +32,8 @@
 #define IR_COREIP_ID         0x17u
 #define IR_DEVICE_ID         0x87u
 #define IR_JMB_EXCHANGE      0x61u
+#define IR_ADDR_CAPTURE      0x84u
+#define IR_DATA_QUICK        0x43u
 
 #define JID_XV1  0x89u
 #define JID_FR4  0x98u            /* FR2xx, FR4xx */
@@ -201,6 +203,37 @@ static void wr_raw(prog_ctx_t *c, uint32_t a, unsigned d)
     tclk(c, 1); tclk(c, 0); tclk(c, 1);
 }
 
+/* TI SetPC_430Xv2 (MOVA #imm20, PC through the JTAG data bus) and ReadMemQuick_430Xv2 for one word:
+   the read goes through the CPU's fetch path at the new PC. The device descriptor (0x1A00 on the FR2433)
+   reads as vacant memory (0x3FFF) with the plain data read on the bench and TI reads the device ID this
+   way. Needs the CPU in Full-Emulation-State (after por()). */
+static void set_pc(prog_ctx_t *c, uint32_t a)
+{
+    ir(c, IR_CNTRL_SIG_CAPTURE);
+    if (!(dr16(c, 0) & 0x0301u)) { ST(c)->err = PROG_E_PROTOCOL; return; }
+    tclk(c, 0);
+    ir(c, IR_DATA_16BIT); tclk(c, 1); dr16(c, 0x0080u | ((a >> 8) & 0x0F00u));
+    ir(c, IR_CNTRL_SIG_16BIT); dr16(c, 0x1400);
+    ir(c, IR_DATA_16BIT); tclk(c, 0); tclk(c, 1); dr16(c, a & 0xFFFFu);
+    tclk(c, 0); tclk(c, 1); dr16(c, 0x4303);
+    tclk(c, 0);
+    ir(c, IR_ADDR_CAPTURE); dr20(c, 0);
+    tclk(c, 1);
+}
+
+static uint16_t rd_quick(prog_ctx_t *c, uint32_t a)
+{
+    set_pc(c, a);
+    ir(c, IR_CNTRL_SIG_16BIT); dr16(c, 0x0501);
+    ir(c, IR_ADDR_CAPTURE);
+    ir(c, IR_DATA_QUICK);
+    tclk(c, 1); tclk(c, 0);
+    uint16_t v = (uint16_t)dr16(c, 0);
+    ir(c, IR_CNTRL_SIG_CAPTURE);
+    tclk(c, 1);                                  /* TCLK high again, as the other accesses leave it */
+    return v;
+}
+
 static bool emu_ok(prog_ctx_t *c)
 {
     ir(c, IR_CNTRL_SIG_CAPTURE);
@@ -275,7 +308,7 @@ static int bring_up(prog_ctx_t *c, bool rst_low)
     if (st->err) return PROG_E_PROTOCOL;
     int rc = sync_por(c);
     if (rc) return rc;
-    uint16_t dev = rd_raw(c, st->devptr + 4u);        /* docs 8: the device ID word is at pointer + 4 */
+    uint16_t dev = rd_quick(c, st->devptr + 4u);      /* docs 8: the device ID word is at pointer + 4 */
     c->id[1] = (uint8_t)dev; c->id[2] = (uint8_t)(dev >> 8); c->id_len = 3;
     st->ready = 1;
     return st->err ? PROG_E_PROTOCOL : PROG_OK;
