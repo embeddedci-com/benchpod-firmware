@@ -103,8 +103,8 @@ SECTIONS
 
   /* The second W25Q image: the table first, then the pin programmers (prog_flash) and xip_prog_mod.c.
      Memory-mapped builds link it at its own W25Q address. A RAM build (XIP_RAM=1) replaces the XIP
-     and XIP_PROG lines above with the same 20 KB RAM region (the Makefile): the two images overlay
-     each other there, which is why AT() gives this one a load address of its own, the one the
+     and XIP_PROG lines above with the adc_pool's RAM region, up to 64 KB (the Makefile): the two
+     images overlay each other and the pool there, which is why AT() gives this one a load address of its own, the one the
      mapped build uses (the linker refuses two sections with the same load address). The image is
      extracted by section name (tools/xip_finish.py), so the load address is not used. */
   .xip_prog : AT(0x90241000)
@@ -122,6 +122,11 @@ SECTIONS
     __xip_prog_end = .;
   } >XIP_PROG
   __xip_prog_region_end = ORIGIN(XIP_PROG) + LENGTH(XIP_PROG);
+
+  /* XIP_RAM=1 builds (the Makefile fills this in): adc_pool (src/adc_pool.h) at its own fixed
+     region, the end of RAM, and both W25Q images linked at that same address (the XIP and
+     XIP_PROG regions above): a session copies its image over the idle pool. */
+  /* ADC_POOL_SECTION */
 
   /* What the post-link step found in .xip (src/xip_image.c, patched by tools/xip_finish.py). */
   .xip_hash :

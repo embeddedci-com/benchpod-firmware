@@ -370,8 +370,8 @@ endif
 
 # W25Q code (src/xip_image.h, src/xip_session.h; defines here, before CFLAGS expands DEFS; the
 # linker script switch is further down):
-#   XIP_RAM=1        (the default, releases too) link the image at a 20 KB RAM region (taken from the
-#                    FreeRTOS heap) and copy it there at session start: runs on every board. The
+#   XIP_RAM=1        (the default, releases too) link the images over the adc_pool buffer (up to 64 KB
+#                    each, nothing taken from the heap) and copy one there at session start: runs on every board. The
 #                    pods shipped so far (before digital v3r4) cannot memory-map their W25Q.
 #                    XIP_RAM=0 builds the memory-mapped image (digital v3r4, or the PB6 bodge).
 #   XIP_BODGE_PB6=1  the W25Q's chip-select is PB6 (a wire from PB6 to the W25Q's /CS, PE3 left an
@@ -420,13 +420,11 @@ C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
 endif
 
 # Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
-# USB_HOST=1 6 KB (the host stack and its classes, a 1 KB descriptor buffer, the HID class), XIP_RAM=1 20 KB (the RAM copy of the image).
+# USB_HOST=1 6 KB (the host stack and its classes, a 1 KB descriptor buffer, the HID class). XIP_RAM=1
+# takes none: its images run from the adc_pool's RAM (XIP_RAM_KB below).
 HEAP_KB := 259
 ifeq ($(USB_HOST),1)
 HEAP_KB := $(shell expr $(HEAP_KB) - 6)
-endif
-ifeq ($(XIP_RAM),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 20)
 endif
 ifeq ($(USB_HOST_LOG),1)
 HEAP_KB := $(shell expr $(HEAP_KB) - 3)
@@ -490,7 +488,7 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
           -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common -fstack-usage -MMD -MP
 
-# The W25Q image has 20 KB in the default (XIP_RAM=1) build: the drive writer, the largest module
+# The W25Q images have up to 64 KB in the default (XIP_RAM=1) build (it was 20 KB): the drive writer, the largest module
 # (FAT12/16/32 and exFAT), is optimized for size: -Os saves 0.8 KB there, and at -O2 the compiler also
 # puts literal-pool addresses of flash data into it, which check_xip_refs.py refuses.
 $(BUILD_DIR)/xip_mod_msc_flash.o: CFLAGS += -Os
@@ -504,14 +502,30 @@ ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
 
-# XIP_RAM=1: both images (xip_image.h) at ONE 20 KB RAM region (an overlay), the top 20 KB of the 640 KB of RAM (the defines are set above, with USB_HOST).
+# XIP_RAM=1: both images (xip_image.h) are linked over adc_pool (src/adc_pool.h), the one shared
+# sample buffer, which gets a fixed region at the end of RAM (POOL). The pool is idle during a session
+# (adc_pool_overlay_begin refuses while a capture or upload uses it), so an image may take all of it:
+# up to XIP_RAM_KB (the pool's 64 KB) each, and nothing is carved from the FreeRTOS heap for them.
+# XIP_RAM_KB is the one number: the link asserts it equals the pool's size.
+XIP_RAM_KB     := 64
+XIP_RAM_ORIGIN := 0x20090000
+XIP_RAM_RAM_KB := 576
 ifeq ($(XIP_RAM),1)
 XIP_RAM_LD := $(BUILD_DIR)/xip_ram.ld
-$(XIP_RAM_LD): $(LDSCRIPT) | $(BUILD_DIR)
-	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 620K|' \
-	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' \
-	     -e 's|^  XIP_PROG    (rx)    : ORIGIN = 0x90241000,   LENGTH = 252K|  XIP_PROG    (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' $< > $@
-	@test "$$(grep -c '0x2009B000' $@)" = 2 && grep -q 'LENGTH = 620K' $@ || { echo "xip_ram.ld: the linker script's RAM, XIP or XIP_PROG line changed"; rm -f $@; exit 1; }
+XIP_POOL_LD := $(BUILD_DIR)/xip_pool_section.ld
+$(XIP_POOL_LD): Makefile | $(BUILD_DIR)
+	@printf '%s\n' \
+	  '  .adc_pool (NOLOAD) : { . = ALIGN(4); KEEP(*(.adc_pool)) } >POOL' \
+	  '  ASSERT(ADDR(.adc_pool) == ORIGIN(POOL), "adc_pool is not at the start of the POOL region")' \
+	  '  ASSERT(SIZEOF(.adc_pool) == LENGTH(POOL), "POOL (XIP_RAM_KB in the Makefile) and ADC_POOL_BYTES differ")' \
+	  '  ASSERT(ORIGIN(XIP) == ORIGIN(POOL) && ORIGIN(XIP_PROG) == ORIGIN(POOL), "the XIP images are not linked at the adc_pool")' \
+	  '  ASSERT(SIZEOF(.xip) <= SIZEOF(.adc_pool) && SIZEOF(.xip_prog) <= SIZEOF(.adc_pool), "a W25Q image does not fit the adc_pool it overlays")' > $@
+$(XIP_RAM_LD): $(LDSCRIPT) $(XIP_POOL_LD) Makefile | $(BUILD_DIR)
+	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = $(XIP_RAM_RAM_KB)K\n  POOL        (rwx)   : ORIGIN = $(XIP_RAM_ORIGIN),   LENGTH = $(XIP_RAM_KB)K|' \
+	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = $(XIP_RAM_ORIGIN),   LENGTH = $(XIP_RAM_KB)K|' \
+	     -e 's|^  XIP_PROG    (rx)    : ORIGIN = 0x90241000,   LENGTH = 252K|  XIP_PROG    (rwx)   : ORIGIN = $(XIP_RAM_ORIGIN),   LENGTH = $(XIP_RAM_KB)K|' \
+	     -e '/ADC_POOL_SECTION/r $(XIP_POOL_LD)' $< > $@
+	@test "$$(grep -c '$(XIP_RAM_ORIGIN)' $@)" = 3 && grep -q 'LENGTH = $(XIP_RAM_RAM_KB)K' $@ && grep -q '>POOL' $@ || { echo "xip_ram.ld: the linker script's RAM, XIP, XIP_PROG or ADC_POOL_SECTION line changed"; $(RM) $@; exit 1; }
 $(BUILD_DIR)/$(TARGET).elf: $(XIP_RAM_LD)
 LDSCRIPT := $(XIP_RAM_LD)
 endif

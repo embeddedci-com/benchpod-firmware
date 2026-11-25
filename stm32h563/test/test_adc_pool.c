@@ -3,12 +3,17 @@
  */
 #include "adc_pool.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 
 static int failures;
 #define CHECK(cond) do { \
     if (!(cond)) { printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); failures++; } \
 } while (0)
+
+/* The asynchronous pool users (command_handler.c's adc_pool_users_busy) as a switch. */
+static bool g_busy;
+bool adc_pool_users_busy(void) { return g_busy; }
 
 int main(void) {
     CHECK(!adc_pool_holds(0));
@@ -24,6 +29,16 @@ int main(void) {
     CHECK(ADC_POOL_TRACE_BYTES + ADC_POOL_SCRATCH_BYTES == sizeof(adc_pool));
     CHECK(((uintptr_t)adc_pool_scratch() & 3u) == 0);
     CHECK(ADC_POOL_SCRATCH_BYTES >= SIGNAL_BUF_SIZE);   /* the JSON sensor/I2C-LA byte buffer */
+
+    /* an XIP session overlays the pool (xip_session.c): refused, nothing changed, while a capture or
+       upload uses it; else every kept trace is gone, so a SCPI replay or JSON replay refuses */
+    uint32_t kept = adc_pool_take();
+    g_busy = true;
+    CHECK(!adc_pool_overlay_begin());
+    CHECK(adc_pool_holds(kept));
+    g_busy = false;
+    CHECK(adc_pool_overlay_begin());
+    CHECK(!adc_pool_holds(kept));
 
     /* a new generation is never 0 */
     for (int i = 0; i < 5; i++) CHECK(adc_pool_take() != 0);

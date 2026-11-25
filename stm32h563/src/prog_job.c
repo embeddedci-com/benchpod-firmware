@@ -86,6 +86,8 @@ static void xip_refused(xip_err_t xe, char *err, size_t cap)
         snprintf(err, cap, "busy: %s", xip_session_image() == XIP_IMG_USB
                  ? "a flash over USB (usb_flash) is running; try again when it ends"
                  : "another pin programmer job is running");
+    } else if (xe == XIP_ERR_POOL_BUSY) {
+        snprintf(err, cap, "%s", xip_err_text(xe));
     } else {
         snprintf(err, cap, "prog_flash needs the xip_prog image: %s", xip_img_err_text(XIP_IMG_PROG, xe));
     }

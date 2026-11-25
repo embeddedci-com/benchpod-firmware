@@ -43,4 +43,15 @@ uint32_t adc_pool_take(void);
 /* Is the trace region still what generation `gen` put there? false for 0. */
 bool adc_pool_holds(uint32_t gen);
 
+/* The pool is also the RAM the XIP images run from (XIP_RAM=1, xip_session.h): a session overlays
+   the whole pool, so nothing may read or write it meanwhile, and what it held is gone.
+   Every pool user is either synchronous on the hw worker under the heavy gate (heavy_begin /
+   command_handler_acquire_adc, which refuse while xip_session_active()), or asynchronous, and the
+   asynchronous ones are what adc_pool_users_busy() reports (command_handler.c: a capture, a paced
+   send or an upload in flight; the default here says none). */
+bool adc_pool_users_busy(void);
+/* A session is about to overlay the pool: false (nothing changed) while adc_pool_users_busy();
+   else true, and every kept trace is gone (a new generation, so adc_pool_holds() says no). */
+bool adc_pool_overlay_begin(void);
+
 #endif /* ADC_POOL_H */

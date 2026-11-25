@@ -7,6 +7,7 @@
 #include "psram.h"
 #include "board_pins.h"
 #include "bp_log.h"
+#include "adc_pool.h"
 
 #include "mbedtls/sha256.h"
 #include "stm32h5xx_hal.h"
@@ -50,6 +51,7 @@ const char *xip_err_text(xip_err_t e)
     case XIP_ERR_HASH:        return "the W25Q image does not match its SHA-256";
     case XIP_ERR_TABLE:       return "the W25Q image has a bad table";
     case XIP_ERR_ACTIVE:      return "a W25Q code session is already running";
+    case XIP_ERR_POOL_BUSY:   return "busy: a capture or upload is using the sample buffer; try again when it ends";
     }
     return "?";
 }
@@ -167,6 +169,11 @@ xip_err_t xip_session_begin(xip_img_t img)
     if (!have || !have->present || have->len != want->m.len || memcmp(have->sha256, want->m.sha256, 32) != 0)
         return XIP_ERR_SLOT;
 
+#if defined(BENCHPOD_XIP_RAM)
+    /* The image runs from the adc_pool: refuse while a capture or upload uses it, and drop any kept
+       trace (SCPI's scpi_trace_held() and the JSON replay see their trace gone). */
+    if (!adc_pool_overlay_begin()) return XIP_ERR_POOL_BUSY;
+#endif
     if (w25q_session_open() != 0) { w25q_session_close(); return XIP_ERR_BUS; }
     s_active = true;
     s_img = img;

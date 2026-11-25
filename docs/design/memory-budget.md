@@ -61,26 +61,38 @@ The 896 KB code limit is fixed by the linker script and by the start of the non-
 (`main.c icache_init`, a linker `ASSERT` keeps the two together). Large data (DAC waveforms,
 captures, the EMI run log, staged OTA images, gateware blobs) lives in the 8 MB PSRAM or the W25Q.
 
-## Code that runs from the W25Q (XIP): two images, one RAM region
+## Code that runs from the W25Q (XIP): two images, one RAM region (the adc_pool)
 
 Rarely used code is linked into images that live in W25Q blob slots instead of internal flash
 (`src/xip_image.h`, `src/xip_session.h`). There are two, each with its own table, expected hash
 (patched into internal flash by `tools/xip_finish.py`) and blob slot:
 
-| Image | Section | Slot (W25Q) | Code | Size (release = dev build) | Of the 20 KB region |
+| Image | Section | Slot (W25Q) | Code | Size (release = dev build) | Of the 64 KB region |
 |---|---|---|---|---|---|
-| usb | `.xip` | `xip` (0x200000) | the USB flash protocols (`xip_mod_*.c`) | 17,684 B | 86.4% |
-| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`) and the dispatch (`xip_prog_mod.c`) | 15,916 B | 77.7% |
+| usb | `.xip` | `xip` (0x200000) | the USB flash protocols (`xip_mod_*.c`) | 17,700 B | 27.0% |
+| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`) and the dispatch (`xip_prog_mod.c`) | 16,340 B | 24.9% |
 
-- **XIP_RAM=1 (the release default, every board shipped so far):** both images are linked at the
-  same 20 KB RAM region (`0x2009B000`, taken from the FreeRTOS heap), an overlay. A session names
-  its image and `xip_session_begin(img)` copies that image's slot into the region after checking
+- **XIP_RAM=1 (the release default, every board shipped so far):** both images are linked over
+  `adc_pool` (the 64 KB shared sample buffer, below), an overlay of all three. From 2026-11-25 the
+  pool has a fixed region of its own at the end of RAM (linker region `POOL`, 64 KB at
+  `0x20090000`, a NOLOAD `.adc_pool` section; RAM is 576 KB, `_estack` is the pool's start), and
+  `XIP` and `XIP_PROG` are linked at that same address with the pool's length. Until then the
+  images had a separate 20 KB region (`0x2009B000`) taken from the FreeRTOS heap: that is back in
+  the heap, and an image may now be up to 64 KB (`XIP_RAM_KB` in the Makefile; the link asserts it
+  equals the pool's size, that both images start at the pool and that each fits it). A session names
+  its image and `xip_session_begin(img)` copies that image's slot over the pool after checking
   its length and SHA-256. Only one session runs at a time (a `usb_flash` or a `prog_flash` job
-  holds its image until it ends), so the second image costs no RAM; each image only has to fit
-  the 20 KB. The prog image has 9 KB of room, the usb image 2.8 KB.
+  holds its image until it ends), so the second image costs no RAM.
+  The pool is idle then: `heavy_in_flight()` includes `xip_session_active()`, so every pool user
+  that runs under the heavy gate is refused (BP0048); `adc_pool_overlay_begin()` makes begin refuse
+  (`XIP_ERR_POOL_BUSY`) while a capture, a paced send or a `load_bin` upload is mid-way, and takes a
+  new pool generation so a kept trace (a SCPI `READ?`, a JSON `capture`/`load`) is gone: its replay
+  says "nothing to replay" or refuses. The pool does not feed the DAC or any DMA after the call
+  that arms it (`fpga_load_wave` copies it into the FPGA BRAM with a blocking SPI write). Code that
+  must survive a session may not keep data in the pool.
 - **XIP_RAM=0 (memory-mapped, digital v3r4):** each image at its own W25Q address (usb
   `0x90201000`, prog `0x90241000`), no copy. The linker script keeps three regions for this: `XIP`,
-  `XIP_PROG`, and the RAM build's sed swaps both for the same RAM region.
+  `XIP_PROG`, and the RAM build's sed swaps both for the pool's RAM region (and adds `POOL`).
 - Moving the protocols out of internal flash saved about 10 KB of code in both builds, and no static RAM:
 
 | Build | Internal flash before | after | Static RAM before | after |
@@ -92,6 +104,17 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
   change of PR 239. The expected-hash records of the two images are in internal flash and are
   also the blobs' manifest entries, so the image bookkeeping takes no RAM.) The EMC test build
   (`EMI_TEST=1`) overflows its RAM by 24 B before and after this change.
+- Images over the adc_pool (2026-11-25, main `4b3d6cd` plus this change; the table is the 20 KB
+  region against the pool overlay):
+
+| Build | FreeRTOS heap before | after | Static RAM before (of) | after (of) | Internal flash left before | after |
+|---|---|---|---|---|---|---|
+| release (`make RELEASE=1`) | 233 KB | 253 KB | 629,672 B (620 KB) | 584,616 B (576 KB) | 21,684 B | 21,508 B |
+| dev (`make`) | 233 KB | 253 KB | 634,024 B (620 KB) | 588,968 B (576 KB) | about 8,020 B | 7,844 B |
+
+  Static RAM now excludes the pool (it is its own 64 KB region), so the free RAM at link time is the
+  same as before (5,208 B release): the 20 KB moved from the region to the heap, the pool moved
+  from `.bss` to `POOL`. Flash grew by 176 B (the pool takeover and one error code).
 - What stays in internal flash: the protocol metadata (`prog_flash.c`: name, uart, uses_nrst,
   mems), `prog_job.c`, `prog_wire.c` (its functions are the callbacks the job stores in
   `prog_wire_ops_t`, and internal code may not hold pointers to XIP functions) and the command.
@@ -99,7 +122,7 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
   `tools/check_xip_refs.py`: internal code reaches an image only through its table, an image
   hands out no pointer to its own functions, XIP objects have no `.data`/`.bss`.
 
-## RAM: 640 KB, 99.1% assigned at link time
+## RAM: 640 KB, 99.1% assigned at link time (576 KB + the 64 KB adc_pool region in XIP_RAM builds)
 
 Static RAM is 649,296 B (99.07%) in the release build and 653,424 B (99.70%) in the dev build
 (main `a594c0e`). Almost all of it is pools sized at build time. What matters is how full each
@@ -108,11 +131,11 @@ top of this page).
 
 | Pool | Size | Peak used | Notes |
 |---|---|---|---|
-| FreeRTOS heap (`ucHeap`, `configTOTAL_HEAP_SIZE`) | 259 KB (243 KB up to 4.0.0) | 209 KB of 259 KB (49.9 KB free at worst; 33.5 KB of 243 KB on 4.0.0) | mbedTLS (cloud link, LAN TLS: 22,000 B per open LAN session), task stacks, cloud buffers. 164.8 KB free when idle and connected (148.4 KB on 4.0.0). |
+| FreeRTOS heap (`ucHeap`, `configTOTAL_HEAP_SIZE`) | 259 KB (243 KB up to 4.0.0); 2026-11-25 builds with USB host mode: 253 KB (233 KB before the XIP images moved onto the adc_pool) | 209 KB of 259 KB (49.9 KB free at worst; 33.5 KB of 243 KB on 4.0.0) | mbedTLS (cloud link, LAN TLS: 22,000 B per open LAN session), task stacks, cloud buffers. 164.8 KB free when idle and connected (148.4 KB on 4.0.0). |
 | lwIP heap (`ram_heap`, `MEM_SIZE`) | 48 KB (64 KB up to 4.0.0) | 19.4 KB | TCP send data (`PBUF_RAM`). |
 | Ethernet RX pool (`RX_POOL`) | 25 KB | | 16 x 1.5 KB zero-copy receive buffers (`ETH_RX_BUFFER_CNT`). |
 | lwIP PBUF pool (`PBUF_POOL`) | 25 KB | 2 of 16 | 16 x 1.5 KB (lwIP default). |
-| `adc_pool` | 64 KB | full by design | The one sample/trace buffer shared by JSON, SCPI and the console. |
+| `adc_pool` | 64 KB | full by design | The one sample/trace buffer shared by JSON, SCPI and the console. In XIP_RAM=1 builds also where the W25Q images run (above): its own `POOL` region at 0x20090000, 64 KB. |
 | Other fixed buffers | about 110 KB | | Largest: per-connection TX rings (`conn_tx.c s_rings`, 16 KB), cloud receive buffer (`cloud_client.c s_rx`, 16 KB), JSON line assembly per connection (`command_handler_transport.c line_asm`, 12.6 KB), ESP32-C3 SPI TX (`esp_hosted_spi.c`, 9.4 KB), USB NCM endpoints (9.4 KB), USB CDC RX + TX (8.9 KB), signal engine sample buffers (16 KB), OTA commit sector copy (`ota_commit.c s_sector`, 8 KB). |
 
 Task stacks (free bytes at worst, 2026-11-20 run): `IDLE` 400, `usb` 2,672, `console` 2,208,
