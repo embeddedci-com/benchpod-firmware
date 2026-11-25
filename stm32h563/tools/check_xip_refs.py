@@ -14,7 +14,8 @@
    around it.
 2. Inside .xip, function addresses appear only in the table: XIP code hands no callback to
    anything that could run it outside a session.
-3. XIP objects (xip_mod_*.o) have no .data or .bss.
+3. XIP objects (xip_mod_*.o, the prog image's protocol files, sensor_def_compile.o and
+   sensor_def_expr.o) have no .data or .bss.
 """
 import glob
 import os
