@@ -58,6 +58,8 @@ typedef struct {
     bool img_deep_replay;      /* FPGA_FEATURE_DEEP_REPLAY */
     bool img_emulation;        /* FPGA_FEATURE_EMULATION */
     bool jtag;                 /* JTAG_MIN_GW + FPGA_FEATURE_JTAG: the running image has the JTAG master */
+    bool bus_masters;          /* the running image has SWD, the SPI master and the I2C master: every image
+                                  up to v64, FPGA_FEATURE_BUS_MASTERS from BUS_MASTERS_SPLIT_MIN_GW v65 */
 } gw_caps_t;
 
 /* The capabilities of a gateware version and FPGA_FEATURES byte.  Pure (host tests). */

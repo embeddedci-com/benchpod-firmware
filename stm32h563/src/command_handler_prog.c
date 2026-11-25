@@ -16,6 +16,8 @@
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "prog_flash.h"
+#include "gw_caps.h"
+#include "sensor_mgr.h"   /* sensor_mgr_digital_names: the bus-master gate */
 #include "la_pins.h"
 #include "bp_json.h"
 
@@ -158,6 +160,19 @@ void handle_prog_flash(int conn_id, const char *json) {
         command_handler_release_adc(conn_id);
     }
 
+    /* The two-wire protocols run on the bus-master engine, which gateware v65 left out of the
+       emulation image (UPDI uses the UART proxy, in every image).  No automatic swap for a start:
+       its data is staged in PSRAM, which a reconfiguration overwrites. */
+    if (!p.proto->uart && !gw_caps()->bus_masters) {
+        if (info) {
+            if (!require_bus_masters(conn_id, "prog_flash")) return;
+        } else {
+            char names[96];
+            if (sensor_mgr_digital_names(names, sizeof(names))) bp_err_fpga_image_sensors_first(conn_id, "prog_flash", "deep");
+            else bp_err_fpga_image_required(conn_id, "prog_flash", "deep");
+            return;
+        }
+    }
     char err[160] = {0};
     if (prog_flash_start(&p, err, sizeof(err)) != 0) { send_error(conn_id, err); return; }
     char r[64];

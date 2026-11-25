@@ -198,6 +198,14 @@ module tb_top_la_mux;
 
             gpio_set(cs, 2'd0);      expect_pad("static low on cs pad", cs, 1'b0, 1'b1, 14'd0);
             spi_arm(c, mo, mi, cs, 1'b1);   // CPOL 1: SCK idles high, CS released (driven high)
+`ifdef USE_EMULATION
+            // v65: the emulation image has no bus-master engine, so SPI_ARM takes no pad: the
+            // pin map keeps c (released), the static low stays on cs, nothing else is driven.
+            expect_pad("no spi master: i2c kept", c, 1'b0, 1'b0, (14'd1 << cs));
+            expect_pad("no spi master: static cs", cs, 1'b0, 1'b1, 14'd0);
+            if (oe[mo] !== 1'b0 || oe[mi] !== 1'b0) begin $display("FAIL %0s: MOSI/MISO pad driven", run); errors = errors + 1; end
+            if (dut.engines_i.swd_armed !== 1'b0) begin $display("FAIL %0s: bus-master engine armed", run); errors = errors + 1; end
+`else
             expect_pad("spi sck over i2c", c, 1'b1, 1'b1, spi_pads);
             expect_pad("spi cs over static", cs, 1'b1, 1'b1, (14'd1 << c) | (14'd1 << mo));
             if (oe[mi] !== 1'b0) begin $display("FAIL %0s: MISO pad driven", run); errors = errors + 1; end
@@ -207,6 +215,7 @@ module tb_top_la_mux;
             if (edges != 0) begin $display("FAIL %0s: step under spi: %0d edges on SCK", run, edges); errors = errors + 1; end
             if (la[c] !== 1'b1) begin $display("FAIL %0s: SCK left idle during the step", run); errors = errors + 1; end
             wait_step_idle;
+`endif
 
             cmd0(8'h53);                    // SWD_DISARM: back to i2c on c, static low on cs
             expect_pad("disarm: i2c again", c, 1'b0, 1'b0, (14'd1 << cs));
@@ -220,7 +229,11 @@ module tb_top_la_mux;
 
             gpio_set(c, 2'd2); gpio_set(cs, 2'd2);
             expect_pad("all released", c, 1'b0, 1'b0, 14'd0);
+`ifdef USE_EMULATION
+            $display("  [%0s] LA%0d: static, uart, i2c, step, SPI_ARM ignored (no bus masters, v65) and back down", run, c + 1);
+`else
             $display("  [%0s] LA%0d: static, uart, i2c, step, spi (step under it) and back down", run, c + 1);
+`endif
         end
     endtask
 

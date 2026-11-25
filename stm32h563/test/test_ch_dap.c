@@ -88,6 +88,17 @@ static gw_caps_t g_caps;
 const gw_caps_t *gw_caps(void) { return &g_caps; }
 static int g_image = 0;
 int signal_engine_image_kind(void) { return g_image; }
+/* require_bus_masters (command_handler_device.c): 0 = the image has them, 1 = refuse with BP0059
+   (sensors run), 2 = swap to the loop image (g_image becomes 0) */
+static int g_bm_mode, g_bm_calls;
+static char g_bm_feature[16];
+bool require_bus_masters(int c, const char *feature) {
+    g_bm_calls++;
+    snprintf(g_bm_feature, sizeof(g_bm_feature), "%s", feature);
+    if (g_bm_mode == 1) { bp_err_fpga_image_sensors_first(c, feature, "loop"); return false; }
+    if (g_bm_mode == 2) { g_image = 0; g_caps.jtag = g_caps.jtag_gw; }
+    return true;
+}
 uint8_t swd_ll_transfer(uint8_t req, uint32_t *data) { (void)req; *data = 0; return SWD_ACK_OK; }
 void swd_ll_seq_out(const uint8_t *d, uint32_t nbits) { (void)d; (void)nbits; }
 uint16_t la_pins_mask_fn(la_fn_t fn) { (void)fn; return 0; }
@@ -256,8 +267,30 @@ static void test_start_jtag(void) {
     g_image = 0;
 }
 
+/* Gateware v65: the emulation image has no SWD/JTAG engine.  dap_start asks for the bus masters
+   before it claims a pin or arms anything. */
+static void test_bus_masters(void) {
+    g_caps.jtag_gw = true; g_caps.jtag = false; g_image = 2;
+    g_bm_mode = 1; g_bm_calls = 0;
+    dap_conn_closed(0);
+    g_proto[0] = PROTO_JSON;
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"swclk\":1,\"swdio\":2}");
+    CHECK(g_ecode == BP_E_FPGA_IMAGE_SENSORS_FIRST && g_bm_calls == 1, "code %d reply %s", g_ecode, g_reply);
+    CHECK(strcmp(g_bm_feature, "SWD") == 0, "feature %s", g_bm_feature);
+    CHECK(!g_armed && g_proto[0] == PROTO_JSON, "armed while sensors run");
+    jtag_start("{\"cmd\":\"dap_start\",\"tck\":3,\"tms\":4,\"tdi\":5,\"tdo\":6}");
+    CHECK(strcmp(g_bm_feature, "JTAG") == 0 && !g_jarmed, "JTAG refused, feature %s", g_bm_feature);
+    /* no sensors: the swap to the loop image runs, then JTAG arms */
+    g_bm_mode = 2;
+    jtag_start("{\"cmd\":\"dap_start\",\"tck\":3,\"tms\":4,\"tdi\":5,\"tdo\":6}");
+    CHECK(g_image == 0 && g_jarmed, "JTAG after the swap: reply %s", g_reply);
+    dap_conn_closed(0);
+    g_bm_mode = 0; g_caps.jtag = true; g_image = 0;
+}
+
 int main(void) {
     test_start();
+    test_bus_masters();
     test_start_jtag();
     test_reassembly();
     test_leave();

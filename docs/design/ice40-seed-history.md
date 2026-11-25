@@ -403,3 +403,27 @@ largest; the fallbacks are the next ones in that order. Local results on the pin
 CI on the same seeds: loop 56.02 / 29.66 / 10.73 / 6.98, deep 57.67 / 28.72 / 13.27 / 6.85,
 emu 56.06 / 28.36 / 11.78 / 8.17. The first emu pick, seed 57 (the best local seed), fails timing
 in CI's toolchain (clk48 43.83 MHz), so emu is pinned from the seeds good in both. Hardware-verified on benchpod-30a9f1 on 2026-11-20 (`ice40/release/MANIFEST`).
+
+## v65
+
+The emulation image split: the emulation image drops the bus-master engine (SWD, the SPI master,
+the I2C master) and the deep image drops SWIM, on top of v64's registered LA pads. Swept 1..64 in
+the local toolchain (Homebrew yosys 0.65, nextpnr 0.10) and in CI's (yosys 0.65+7, run
+45485242806). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 50/64 | 50/64 | 38 |
+| deep  | 36/64 | 44/64 | 24 |
+| emu   | 62/64 | 63/64 | 61 |
+
+Each pin is the seed whose worst relative margin over the four gates, in both toolchains, is the
+largest. Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns | logic cells |
+|-------|------|-----------|---------|-----------------|-----------------|-------------|
+| loop  | 12   | 54.96 (56.53) | 28.21 (29.36) | 11.31 (12.03) | 5.58 (6.85) | 4306/5280 (82%) |
+| deep  | 1    | 55.27 (55.60) | 27.35 (29.36) | 13.22 (13.11) | 6.66 (4.39) | 4036/5280 (76%) |
+| emu   | 26   | 68.40 (68.16) | 28.90 (29.17) | 11.92 (9.98)  | 4.39 (5.03) | 4418/5280 (84%) |
+
+The emulation image went from 98.5% LC (v63) and the fewest good seeds to the most.

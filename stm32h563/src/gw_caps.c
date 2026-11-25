@@ -37,6 +37,7 @@ gw_caps_t gw_caps_for(uint8_t v, uint8_t f)
     c.img_deep_replay     = (f & FPGA_FEATURE_DEEP_REPLAY) != 0;
     c.img_emulation       = (f & FPGA_FEATURE_EMULATION) != 0;
     c.jtag                = c.jtag_gw && (f & FPGA_FEATURE_JTAG) != 0;
+    c.bus_masters         = v < BUS_MASTERS_SPLIT_MIN_GW || (f & FPGA_FEATURE_BUS_MASTERS) != 0;
     return c;
 }
 

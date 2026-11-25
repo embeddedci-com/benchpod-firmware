@@ -414,14 +414,25 @@ module engine_block #(
 
     // ---- SWD bit-bang engine + SPI master (SWDIO / MISO sampled back via la_in[swd_in_ch]) ----
 `ifdef HAS_EMULATION
-    localparam SWD_HAS_JTAG = 0;   // v61: no room for the JTAG master in the emulation image
-    localparam SWD_HAS_SWIM = 0;   // v62: nor for the SWIM master
-`elsif HAS_DAC_LOOP
+    // v65: the emulation image has NO bus-master engine (SWD, SPI master, I2C master; JTAG and SWIM
+    // were already out).  At 98.5% LC the image was seed-fragile; without swd_engine it is ~84%.
+    // FPGA_FEATURES bit 5 (bus masters) is clear here: the firmware refuses the master commands on
+    // this image, or swaps to the loop image first when no emulated digital sensor runs.  The tie-offs
+    // keep cmd_dispatch and la_bank unchanged: no reply bytes, never armed, never driving a pad.
+    assign swd_rd_data = 8'd0; assign swd_reply_count = 16'd0; assign swd_armed = 1'b0;
+    assign spi_mode = 1'b0; assign spi_busy = 1'b0; assign q_done = 8'd0; assign q_flags = 8'd0;
+    assign swd_clk_ch = 4'd0; assign swd_clk_val = 1'b0; assign swd_clk_oe = 1'b0;
+    assign swd_dio_ch = 4'd0; assign swd_dio_val = 1'b0; assign swd_dio_oe = 1'b0;
+    assign swd_in_ch = 4'd0; assign swd_cs_ch = 4'd0; assign swd_cs_val = 1'b1; assign swd_cs_on = 1'b0;
+`else
+`ifdef HAS_DAC_LOOP
     localparam SWD_HAS_JTAG = 1;
     localparam SWD_HAS_SWIM = 0;   // v62: the loop image places only without it (5333 LC at first, ~4900 slimmed: noplace)
 `else
     localparam SWD_HAS_JTAG = 1;
-    localparam SWD_HAS_SWIM = 1;   // v62: the deep image has the room
+    // v65: SWIM out of the deep image too (no firmware drives it yet; -623 LC, 88% -> ~76%).
+    // swim_engine.v stays in the tree for a later programmer image.
+    localparam SWD_HAS_SWIM = 0;
 `endif
     swd_engine #(.REPLY_AW(9), .HAS_JTAG(SWD_HAS_JTAG), .HAS_SWIM(SWD_HAS_SWIM)) swd_i (
         .clk(clk), .rst(rst),
@@ -439,6 +450,7 @@ module engine_block #(
         .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe),
         .in_ch(swd_in_ch), .cs_ch(swd_cs_ch), .cs_val(swd_cs_val), .cs_on(swd_cs_on)
     );
+`endif
 
     // ---- LA GPIO bank: arbitration of all the engine drivers onto the pads,
     //      plus the la_in readback that I2C/UART/SWD sample above ----
