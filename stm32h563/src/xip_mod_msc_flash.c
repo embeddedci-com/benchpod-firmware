@@ -290,8 +290,14 @@ static int fat_scan_step(msc_flash_ctx_t *c)
         if (v == 0) {
             if (c->run_len++ == 0) c->run_start = c->pos;
             if (c->run_len == c->need_clusters) {
-                c->phase = MSC_PH_DATA;
+                /* FAT12/16: the FAT chain and the directory entry go first, then the data, the order an
+                   operating system writes a new file in (a debugger drive streams the data of a file it
+                   already knows into the target and drops sectors no entry points to yet). */
+                c->phase = MSC_PH_FAT;
                 c->pos = 0;
+                c->fat_copy = c->fat_rd;
+                c->fat_cached = NONE;
+                c->fat_dirty = false;
                 return MSC_FLASH_RUNNING;
             }
         } else {
@@ -314,6 +320,7 @@ static int data_step(msc_flash_ctx_t *c)
         c->done = c->pos + 1;
     }
     if (c->pos < c->total) return MSC_FLASH_RUNNING;
+    if (!c->is_exfat && c->fat_bits != 32) return finish(c, MSC_FLASH_DONE);   /* FAT and entry went first */
     c->phase = c->is_exfat ? MSC_PH_XBITMAP : MSC_PH_FAT;   /* exFAT: a contiguous file needs no FAT */
     c->pos = 0;
     c->fat_copy = c->fat_rd;
@@ -364,7 +371,11 @@ static int dir_step(msc_flash_ctx_t *c)
     wr16(e + 26, c->run_start + c->dir_extend);
     wr32(e + 28, c->len);
     if (c->ops.write(c->ops.io, c->dir_lba, c->buf, 1) != 0) return finish(c, MSC_FLASH_E_IO);
-    if (c->fat_bits != 32) return finish(c, MSC_FLASH_DONE);
+    if (c->fat_bits != 32) {                                 /* FAT12/16: the data comes last */
+        c->phase = MSC_PH_DATA;
+        c->pos = 0;
+        return MSC_FLASH_RUNNING;
+    }
     if (c->old_first != 0) {                                 /* a replaced file: free its clusters */
         c->phase = MSC_PH_FREE_OLD;
         c->free_cur = c->old_first;
