@@ -222,12 +222,19 @@ static int tpi_read(prog_ctx_t *c) {
 
 static void tpi_leave(prog_ctx_t *c, bool run) {
     const prog_wire_ops_t *w = c->w;
-    (void)run;                                   /* the chip runs once RESET is released */
     c->phase = "leave";
     avr12_tx(w, OP_SSTCS | REG_TPISR); avr12_tx(w, 0);   /* NVMEN off */
     w->set(w->io, 1, 1);
     w->data_drive(w->io, false);
     (void)avr12_commit(w);
+    w->nrst(w->io, false);
+    if (!run) return;
+    /* A real ATtiny104 that was written does not start on this release: it sits idle with RESET
+       high until the next reset (an ID-only session starts fine). One more reset pulse, with no
+       TPICLK clocks so the TPI stays off, starts the new program. */
+    w->delay_us(w->io, 1000);
+    w->nrst(w->io, true);
+    w->delay_us(w->io, 1000);
     w->nrst(w->io, false);
 }
 
