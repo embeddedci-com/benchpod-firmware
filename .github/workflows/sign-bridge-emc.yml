@@ -7,9 +7,9 @@
 # it with FW_SIGNING_KEY.
 #
 # Run it by hand (Actions > Sign bridge EMC image > Run workflow). The job runs in the `release`
-# environment, so it waits for a required reviewer before it gets FW_SIGNING_KEY. Optional input
-# `ref`: the branch, tag or commit to build (default: the one the workflow runs on). The reviewer
-# approves the run with that ref's code, so check what the ref changes before approving.
+# environment, so it waits for a required reviewer before it gets FW_SIGNING_KEY. It builds the
+# branch picked in "Run workflow" (normally main): the reviewer approves running that branch's code
+# with the release key.
 #
 # The result is the artifact `bridge-emc-<version>` (kept 7 days): blob-bridge.bin,
 # blob-bridge.bin.sig and blobs-manifest.json. Install it with the CLI, on a paired pod that runs
@@ -29,12 +29,6 @@ name: Sign bridge EMC image
 
 on:
   workflow_dispatch:
-    inputs:
-      ref:
-        description: "Branch, tag or commit to build (default: the ref this workflow runs on)"
-        required: false
-        default: ""
-        type: string
 
 permissions:
   contents: read
@@ -59,7 +53,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.ref }}
           persist-credentials: false
 
       # No developer key here: build.sh trusts the release keys only and signs nothing itself.
