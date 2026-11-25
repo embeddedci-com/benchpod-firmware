@@ -169,7 +169,15 @@ size_t dap_id_jtag(uint32_t wait_ms, uint32_t *id, size_t cap) {
     /* DAP_JTAG_Sequence stream (jtag_ll.h): Test-Logic-Reset, Run-Test/Idle, Select-DR,
        Capture-DR + Shift-DR, 4 x 64 captured clocks with TDI = 1 (the TAPs' IDCODE register is
        what Test-Logic-Reset selects), then back to Test-Logic-Reset and Run-Test/Idle. */
-    static const uint8_t head[] = { 0x45, 0xFF, 0x01, 0x00, 0x41, 0xFF, 0x02, 0x00 };
+    /* An SWJ-DP (every Cortex-M with JTAG) that an SWD session switched over, our own SWD id
+       read included, stays in SWD until power-on reset, so lead with the SWD-to-JTAG switch:
+       56 TMS 1, then 0xE73C on TMS (LSB first, as runs of equal bits).  On a JTAG-only chain it
+       walks the TAPs through Run-Test/Idle and Select-IR back to Test-Logic-Reset, no Update. */
+    static const uint8_t head[] = {
+        0x78, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,       /* 56 x TMS 1 */
+        0x02, 0xFF, 0x44, 0xFF, 0x02, 0xFF,                   /* 0x3C: 0 0 1 1 1 1 0 0 */
+        0x43, 0xFF, 0x02, 0xFF, 0x43, 0xFF,                   /* 0xE7: 1 1 1 0 0 1 1 1 */
+        0x45, 0xFF, 0x01, 0x00, 0x41, 0xFF, 0x02, 0x00 };
     static const uint8_t tail[] = { 0x45, 0xFF, 0x01, 0x00 };
     static const uint8_t scan[9] = { 0x80, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
     uint8_t seq[sizeof(head) + 4 * sizeof(scan) + sizeof(tail)];
