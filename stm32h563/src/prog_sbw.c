@@ -57,6 +57,8 @@ typedef struct {
     uint8_t  init;                /* a multi-call operation is running */
     uint8_t  tdo[32];             /* TDO bits collected since the last shift started */
     uint32_t devptr, pos;
+    uint8_t  again;               /* re-entries for the current block */
+    uint16_t reentries;           /* re-entries in this job (the session dropped and came back) */
 } sbw_state_t;
 
 _Static_assert(sizeof(sbw_state_t) <= PROG_STATE_BYTES, "sbw state too big");
@@ -390,16 +392,34 @@ static int xfer(prog_ctx_t *c, int mode)
     if (mode != 2) {
         c->phase = "verify";
         for (uint32_t i = 0; i < n && !st->err; i++) {
-            uint16_t v = rd_raw(c, a + 2u * i);
-            if (v != ((unsigned)buf[2u * i] | ((unsigned)buf[2u * i + 1u] << 8))) {
-                c->at_addr = a + 2u * i; st->init = 0; return PROG_E_VERIFY;
+            uint32_t wa = a + 2u * i;
+            if (rd_raw(c, wa) == (uint16_t)((unsigned)buf[2u * i] | ((unsigned)buf[2u * i + 1u] << 8))) continue;
+            /* Early bench builds lost the session now and then (5 of 9 15 KB writes: every access after
+               one point failed, at a random address; cause not found, later builds ran 9 of 9 clean).
+               Enter again and write the block again instead of failing the job. */
+            if (st->again < 5u) {
+                st->again++; st->reentries++; st->err = 0;
+                int r = bring_up(c, false);
+                if (r) { st->init = 0; return r; }
+                return PROG_RUNNING;                     /* the same block again (pos not advanced) */
             }
+            c->at_addr = wa; st->init = 0; return PROG_E_VERIFY;
         }
     } else if (!st->err && c->dst(c->job, off, buf, 2u * n) != 0) { st->init = 0; return PROG_E_SRC; }
+    if (st->err && mode != 2 && st->again < 5u) {          /* a shift came back short: same recovery */
+        st->again++; st->reentries++; st->err = 0;
+        int r = bring_up(c, false);
+        if (r) { st->init = 0; return r; }
+        return PROG_RUNNING;
+    }
     if (st->err) { st->init = 0; return PROG_E_PROTOCOL; }
     st->pos = off + 2u * n;
+    st->again = 0;
     c->done++;
-    if (st->pos >= c->len) { st->init = 0; return PROG_OK; }
+    if (st->pos >= c->len) {
+        st->init = 0;
+        return PROG_OK;
+    }
     return PROG_RUNNING;
 }
 
