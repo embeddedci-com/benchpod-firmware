@@ -59,7 +59,7 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
 | Image | Section | Slot (W25Q) | Code | Size (release = dev build) | Of the 20 KB region |
 |---|---|---|---|---|---|
 | usb | `.xip` | `xip` (0x200000) | the USB flash protocols (`xip_mod_*.c`) | 17,684 B | 86.4% |
-| prog | `.xip_prog` | `xip_prog` (0x240000) | the five `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`) and the dispatch (`xip_prog_mod.c`) | 11,480 B | 56.0% |
+| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`) and the dispatch (`xip_prog_mod.c`) | 15,916 B | 77.7% |
 
 - **XIP_RAM=1 (the release default, every board shipped so far):** both images are linked at the
   same 20 KB RAM region (`0x2009B000`, taken from the FreeRTOS heap), an overlay. A session names

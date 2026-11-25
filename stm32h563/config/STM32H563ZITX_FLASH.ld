@@ -117,6 +117,7 @@ SECTIONS
     *prog_c2.o(.text .text* .rodata .rodata*)
     *prog_tpi.o(.text .text* .rodata .rodata*)
     *prog_pdi.o(.text .text* .rodata .rodata*)
+    *prog_sbw.o(.text .text* .rodata .rodata*)
     . = ALIGN(4);
     __xip_prog_end = .;
   } >XIP_PROG

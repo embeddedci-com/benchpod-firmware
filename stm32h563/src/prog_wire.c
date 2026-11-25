@@ -39,6 +39,8 @@ typedef struct {
     uart_pins_t uart_pins;
     uint32_t baud;
     uint8_t  reset_ch;           /* 0 = the pod's reset pin, else an LA pin (open drain) */
+    uint8_t  flags;              /* PROG_WIRE_* (op_mode) */
+    uint8_t  clk_lvl;            /* clock level after the last queued set() */
 } wire_t;
 _Static_assert(sizeof(wire_t) <= PROG_WIRE_MEM, "PROG_WIRE_MEM too small for wire_t");
 
@@ -66,7 +68,14 @@ static void push(wire_t *w, uint8_t b)
     /* A 'c' needs room in samples[]: flush first when the queue could overflow either buffer. These
        are the hard limits; op_set flushes earlier, with the clock high, so they are not reached in a
        normal frame (a flush inside a clock-low phase stretches it by a whole SPI transaction). */
-    if (w->nfeed >= FEED_MAX || (b == 'c' && w->nsamples + w->nsampq >= SAMPLES_MAX)) feed_now(w);
+    if (w->nfeed >= FEED_MAX || (b == 'c' && w->nsamples + w->nsampq >= SAMPLES_MAX)) {
+        /* STRICT_LOW (SBW): never flush inside a clock-low phase; fail the frame instead. */
+        if ((w->flags & PROG_WIRE_STRICT_LOW) && !w->clk_lvl) {
+            w->err = -1;
+            return;
+        }
+        feed_now(w);
+    }
     if (b == 'c') w->nsampq++;
     w->feed[w->nfeed++] = b;
 }
@@ -75,8 +84,11 @@ static void op_set(void *io, int clk, int data)
 {
     wire_t *w = io;
     push(w, (uint8_t)('d' + (clk ? 2 : 0) + (data ? 1 : 0)));
+    w->clk_lvl = clk ? 1u : 0u;
     if (clk && (w->nfeed >= FEED_SOFT || w->nsamples + w->nsampq >= SAMPLES_SOFT)) feed_now(w);
 }
+
+static void op_mode(void *io, uint32_t flags) { ((wire_t *)io)->flags = (uint8_t)flags; }
 
 static void op_drive(void *io, bool drive) { push((wire_t *)io, drive ? 'O' : 'o'); }
 static void op_sample(void *io)            { push((wire_t *)io, 'c'); }
@@ -162,6 +174,7 @@ static void ops_fill(prog_wire_ops_t *ops, wire_t *w)
     memset(ops, 0, sizeof(*ops));
     ops->io = w;
     ops->set = op_set; ops->data_drive = op_drive; ops->sample = op_sample; ops->flush = op_flush;
+    ops->mode = op_mode;
     ops->nrst = op_nrst; ops->delay_us = op_delay_us; ops->now_ms = op_now_ms;
     ops->uart_config = op_uart_config; ops->uart_write = op_uart_write;
     ops->uart_read = op_uart_read; ops->uart_rx_clear = op_uart_rx_clear;
@@ -172,6 +185,7 @@ int prog_wire_open_2w(prog_wire_ops_t *ops, void *mem, unsigned clk_ch, unsigned
 {
     wire_t *w = mem;
     memset(w, 0, sizeof(*w));
+    w->clk_lvl = 1;
     w->clk = (uint8_t)clk_ch; w->data = (uint8_t)data_ch;
     int rc = fpga_swd_arm(clk_ch, data_ch);
     if (rc != 0) return rc;
@@ -206,9 +220,11 @@ void prog_wire_close(prog_wire_ops_t *ops)
     wire_t *w = ops ? ops->io : NULL;
     if (!w) return;
     if (w->two_wire) {
-        w->nfeed = 0; w->nsampq = 0;
+        w->nfeed = 0; w->nsampq = 0; w->err = 0;
+        w->flags &= (uint8_t)~PROG_WIRE_STRICT_LOW;
         op_drive(w, false);
-        op_set(w, 1, 1);
+        /* SBW: TEST stays low (the chip's SBW is off while it is low), RST/SBWTDIO released. */
+        op_set(w, (w->flags & PROG_WIRE_CLK_LOW_AT_CLOSE) ? 0 : 1, 1);
         feed_now(w);
         fpga_swd_disarm();
         la_pull_release(&w->data_pull);

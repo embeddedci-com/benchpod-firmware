@@ -79,6 +79,7 @@ typedef struct {
     /* CPU */
     uint16_t cntrl; bool synced, cpususp; unsigned sync_reads, susp_rises;
     uint32_t mab; uint16_t mdb; bool mdb_loaded; int tclk;
+    uint32_t pc; uint16_t mova; int pcst;      /* SetPC (MOVA #imm20, PC through IR_DATA_16BIT) and quick reads */
     unsigned por_count, releases;
     bool     wdt_held; unsigned tm_writes[2];
     uint16_t syscfg0, frwp, mpuctl0;
@@ -96,6 +97,7 @@ static bool in_info(uint32_t a) { return a >= 0x1800 && a <= 0x19FF; }
 
 static uint16_t mem_read(const m430_t *m, uint32_t a)
 {
+    if (a >= 0x1A00 && a <= 0x1AFF) return 0x3FFF;   /* device descriptor: vacant to the JTAG data read (bench), quick read only */
     if (a == 0x0160) return m->syscfg0;
     if (a == 0x0140 && m->fr5) return m->frwp;
     if (a == 0x05A0) return m->mpuctl0;
@@ -142,8 +144,10 @@ static void set_tclk(m430_t *m, int v)
         m->tclk_rise++;
         if (m->cpususp) m->susp_rises++;
         if ((m->cntrl & 1u) && m->ir_cur == 0x85) m->mdb = mem_read(m, m->mab);   /* read: MDB shows MAB's data */
+
     } else {
         m->tclk_fall++;
+        if ((m->cntrl & 1u) && m->ir_cur == 0x43) { m->mdb = rd16(m, m->pc); m->pc += 2; }   /* quick read: the word at the PC */
         if (!(m->cntrl & 1u) && m->mdb_loaded && m->ir_cur == 0x85) {            /* write on the falling edge */
             mem_write(m, m->mab, m->mdb);
             m->mdb_loaded = false;
@@ -192,7 +196,7 @@ static void dr_capture(m430_t *m)
     case 0x83: case 0x84: scrambled20(m->dr_out, m->mab); m->dr_out_n = 20; break;
     case 0x85: case 0x41: case 0x42: case 0x43: bits_msb(m->dr_out, 16, m->mdb); m->dr_out_n = 16; break;
     case 0x17: bits_msb(m->dr_out, 16, 0x1234); m->dr_out_n = 16; break;             /* core ID, not zero */
-    case 0x87: scrambled20(m->dr_out, 0x1A00); m->dr_out_n = 20; break;              /* the device descriptor pointer */
+    case 0x87: bits_msb(m->dr_out, 20, 0x1A00); m->dr_out_n = 20; break;             /* the device descriptor pointer: plain, not scrambled */
     case 0x61: bits_msb(m->dr_out, 16, (m->halted && m->jmb_expect == 0) ? 1u : 0u); m->dr_out_n = 16; break;
     default:   m->dr_bypass = true; break;
     }
@@ -208,7 +212,13 @@ static void dr_update(m430_t *m)
     case 0x13: if (n == 16) cntrl_write(m, (uint16_t)v); break;
     case 0x83: if (n == 20) m->mab = v; else if (n == 16) m->mab = (m->mab & 0xF0000u) | v; break;
     case 0x85: if (n == 16) { m->mdb = (uint16_t)v; m->mdb_loaded = true; } break;
-    case 0x41: if (n == 16) m->mdb = (uint16_t)v; break;
+    case 0x41:
+        if (n != 16) break;
+        m->mdb = (uint16_t)v;
+        if ((v & 0xF0FFu) == 0x0080u) { m->mova = (uint16_t)v; m->pcst = 1; }            /* MOVA #imm20, PC */
+        else if (m->pcst == 1) { m->pc = ((uint32_t)(m->mova & 0x0F00u) << 8) | v; m->pcst = 2; }
+        else m->pcst = 0;
+        break;
     case 0x61:
         if (n != 16 || !m->halted) break;
         if (m->jmb_expect) {

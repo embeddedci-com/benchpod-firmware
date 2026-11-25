@@ -32,6 +32,8 @@
 #define IR_COREIP_ID         0x17u
 #define IR_DEVICE_ID         0x87u
 #define IR_JMB_EXCHANGE      0x61u
+#define IR_ADDR_CAPTURE      0x84u
+#define IR_DATA_QUICK        0x43u
 
 #define JID_XV1  0x89u
 #define JID_FR4  0x98u            /* FR2xx, FR4xx */
@@ -55,6 +57,8 @@ typedef struct {
     uint8_t  init;                /* a multi-call operation is running */
     uint8_t  tdo[32];             /* TDO bits collected since the last shift started */
     uint32_t devptr, pos;
+    uint8_t  again;               /* re-entries for the current block */
+    uint16_t reentries;           /* re-entries in this job (the session dropped and came back) */
 } sbw_state_t;
 
 _Static_assert(sizeof(sbw_state_t) <= PROG_STATE_BYTES, "sbw state too big");
@@ -201,6 +205,37 @@ static void wr_raw(prog_ctx_t *c, uint32_t a, unsigned d)
     tclk(c, 1); tclk(c, 0); tclk(c, 1);
 }
 
+/* TI SetPC_430Xv2 (MOVA #imm20, PC through the JTAG data bus) and ReadMemQuick_430Xv2 for one word:
+   the read goes through the CPU's fetch path at the new PC. The device descriptor (0x1A00 on the FR2433)
+   reads as vacant memory (0x3FFF) with the plain data read on the bench and TI reads the device ID this
+   way. Needs the CPU in Full-Emulation-State (after por()). */
+static void set_pc(prog_ctx_t *c, uint32_t a)
+{
+    ir(c, IR_CNTRL_SIG_CAPTURE);
+    if (!(dr16(c, 0) & 0x0301u)) { ST(c)->err = PROG_E_PROTOCOL; return; }
+    tclk(c, 0);
+    ir(c, IR_DATA_16BIT); tclk(c, 1); dr16(c, 0x0080u | ((a >> 8) & 0x0F00u));
+    ir(c, IR_CNTRL_SIG_16BIT); dr16(c, 0x1400);
+    ir(c, IR_DATA_16BIT); tclk(c, 0); tclk(c, 1); dr16(c, a & 0xFFFFu);
+    tclk(c, 0); tclk(c, 1); dr16(c, 0x4303);
+    tclk(c, 0);
+    ir(c, IR_ADDR_CAPTURE); dr20(c, 0);
+    tclk(c, 1);
+}
+
+static uint16_t rd_quick(prog_ctx_t *c, uint32_t a)
+{
+    set_pc(c, a);
+    ir(c, IR_CNTRL_SIG_16BIT); dr16(c, 0x0501);
+    ir(c, IR_ADDR_CAPTURE);
+    ir(c, IR_DATA_QUICK);
+    tclk(c, 1); tclk(c, 0);
+    uint16_t v = (uint16_t)dr16(c, 0);
+    ir(c, IR_CNTRL_SIG_CAPTURE);
+    tclk(c, 1);                                  /* TCLK high again, as the other accesses leave it */
+    return v;
+}
+
 static bool emu_ok(prog_ctx_t *c)
 {
     ir(c, IR_CNTRL_SIG_CAPTURE);
@@ -267,10 +302,15 @@ static int bring_up(prog_ctx_t *c, bool rst_low)
     if (dr16(c, 0) == 0) return PROG_E_PROTOCOL;
     ir(c, IR_DEVICE_ID);
     st->devptr = dr20(c, 0);
+    /* The chip sends this pointer as a plain 20-bit value, not in the MAB's scrambled order that dr20
+       undoes: undo that again (TI GetCoreipIdXv2: "The ID pointer is an un-scrambled 20bit value").
+       Without it 0x1A00 read as 0x001A0, and the device ID came from a peripheral register (FR2433 on
+       the bench: 0x0006 instead of 0x8240). */
+    st->devptr = ((st->devptr & 0xFFFFu) << 4) + (st->devptr >> 16);
     if (st->err) return PROG_E_PROTOCOL;
     int rc = sync_por(c);
     if (rc) return rc;
-    uint16_t dev = rd_raw(c, st->devptr + 4u);        /* docs 8: the device ID word is at pointer + 4 */
+    uint16_t dev = rd_quick(c, st->devptr + 4u);      /* docs 8: the device ID word is at pointer + 4 */
     c->id[1] = (uint8_t)dev; c->id[2] = (uint8_t)(dev >> 8); c->id_len = 3;
     st->ready = 1;
     return st->err ? PROG_E_PROTOCOL : PROG_OK;
@@ -309,6 +349,8 @@ static int sbw_enter(prog_ctx_t *c)
 {
     memset(c->state, 0, sizeof(sbw_state_t));
     c->phase = "enter";
+    /* prog_wire: close leaves TEST low; no automatic flush inside a clock-low phase (docs 17). */
+    if (c->w->mode) c->w->mode(c->w->io, PROG_WIRE_CLK_LOW_AT_CLOSE | PROG_WIRE_STRICT_LOW);
     return bring_up(c, (c->flags & SBW_FLAG_RST_LOW) != 0);
 }
 
@@ -350,16 +392,34 @@ static int xfer(prog_ctx_t *c, int mode)
     if (mode != 2) {
         c->phase = "verify";
         for (uint32_t i = 0; i < n && !st->err; i++) {
-            uint16_t v = rd_raw(c, a + 2u * i);
-            if (v != ((unsigned)buf[2u * i] | ((unsigned)buf[2u * i + 1u] << 8))) {
-                c->at_addr = a + 2u * i; st->init = 0; return PROG_E_VERIFY;
+            uint32_t wa = a + 2u * i;
+            if (rd_raw(c, wa) == (uint16_t)((unsigned)buf[2u * i] | ((unsigned)buf[2u * i + 1u] << 8))) continue;
+            /* Early bench builds lost the session now and then (5 of 9 15 KB writes: every access after
+               one point failed, at a random address; cause not found, later builds ran 9 of 9 clean).
+               Enter again and write the block again instead of failing the job. */
+            if (st->again < 5u) {
+                st->again++; st->reentries++; st->err = 0;
+                int r = bring_up(c, false);
+                if (r) { st->init = 0; return r; }
+                return PROG_RUNNING;                     /* the same block again (pos not advanced) */
             }
+            c->at_addr = wa; st->init = 0; return PROG_E_VERIFY;
         }
     } else if (!st->err && c->dst(c->job, off, buf, 2u * n) != 0) { st->init = 0; return PROG_E_SRC; }
+    if (st->err && mode != 2 && st->again < 5u) {          /* a shift came back short: same recovery */
+        st->again++; st->reentries++; st->err = 0;
+        int r = bring_up(c, false);
+        if (r) { st->init = 0; return r; }
+        return PROG_RUNNING;
+    }
     if (st->err) { st->init = 0; return PROG_E_PROTOCOL; }
     st->pos = off + 2u * n;
+    st->again = 0;
     c->done++;
-    if (st->pos >= c->len) { st->init = 0; return PROG_OK; }
+    if (st->pos >= c->len) {
+        st->init = 0;
+        return PROG_OK;
+    }
     return PROG_RUNNING;
 }
 

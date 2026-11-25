@@ -267,7 +267,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
 | `esp_flash` | T1 | Flash an ESP32-family target over its UART ROM bootloader | object | no |
-| `prog_flash` | T1 | Flash a chip over its programming pins: AVR UPDI, PIC ICSP, Silicon Labs C2, AVR TPI, XMEGA PDI | object | no |
+| `prog_flash` | T1 | Flash a chip over its programming pins: AVR UPDI, PIC ICSP, Silicon Labs C2, AVR TPI, XMEGA PDI, MSP430 Spy-Bi-Wire | object | no |
 | `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
 | `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
 | `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
@@ -3284,11 +3284,12 @@ pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 o
 | `c2` | Silicon Labs EFM8, C8051F | C2CK on `clk`, C2D on `data` |
 | `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin or an LA pin (`reset`) |
 | `pdi` | AVR XMEGA | PDI_CLK (the chip's RESET pin) on `clk`, PDI_DATA on `data` |
+| `sbw` | MSP430 FRAM parts (FR2xx, FR4xx, FR5xxx, FR6xxx) over Spy-Bi-Wire | SBWTCK (the chip's TEST pin) on `clk`, SBWTDIO (its RST/NMI pin) on `data`; the pod's reset pin is not used; gateware v52+ |
 
 `status` lists the protocols the running firmware has in `protos`. A protocol that is listed but
 not finished answers `not supported` (the result).
 
-The five protocols run from the pod's W25Q (the `xip_prog` blob, `blob-xip_prog.bin`, made by the
+The six protocols run from the pod's W25Q (the `xip_prog` blob, `blob-xip_prog.bin`, made by the
 same build as the firmware and installed with the other blobs), like the USB flash protocols: a
 job holds that W25Q code for its whole run, so a `usb_flash` cannot start meanwhile (it answers
 busy) and the other way round. Without the blob, or with another build's, `start` and `info` are
@@ -3309,9 +3310,22 @@ AVR TPI and XMEGA PDI notes:
 - `pdi`: needs no chip fields. The PDI turns itself off when its clock runs slower than about 10 kHz; the
   pod keeps the clock running while it waits and re-enters programming mode when a pause between
   two steps of a job switched it off. The chip may start its program for a moment in such a pause.
+- `sbw` (MSP430 Spy-Bi-Wire, FRAM parts with CPUXv2: FR2xx, FR4xx, FR5xxx, FR6xxx): `clk` is the
+  chip's TEST pin (SBWTCK) and `data` its RST/NMI pin (SBWTDIO); the pod's reset pin is not used.
+  The I/O voltage must equal the chip's VCC. It needs gateware v52 or newer (the fast SPI link keeps
+  the clock-low phase under the chip's 7 us limit); older gateware answers an error. `id` is 3 bytes:
+  JTAG ID (0x98 FR2xx/FR4xx, 0x99, 0x91) then the device ID low and high byte (FR2433: `984082`). A
+  JTAG-locked chip answers `info` with the JTAG ID only (1 byte); `start` then fails with `locked`
+  and `erase: "chip"` (JTAG mailbox mass erase, about 0.7 s) unlocks it. `mem` is `flash` (main FRAM)
+  or `config` (information FRAM, signatures): the same access, you pass the address; `addr` and
+  `len` must be even and `addr + len` at most 0x100000. `erase: "page"` writes 0xFFFF over the
+  range (FRAM needs no erase). `page` is not used (send any value 1..4096). `flags` bit 0 (1): enter
+  with RST held low, for a chip that does not answer while its program runs. `baud` is not used.
+  Speed: about 4 ms per 16-bit word written and verified, so 16 KB takes about 70 s; poll `status`.
+  Flash parts (MSP430F/G series, JTAG ID 0x89) answer `not supported`. At the end TEST is left low.
 
 Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
-`pic`, `c2`, `tpi` and `pdi` run on the FPGA's bus-master engine, which gateware v65 and later has
+`pic`, `c2`, `tpi`, `pdi` and `sbw` run on the FPGA's bus-master engine, which gateware v65 and later has
 only in the loop and deep images. On the emulation image `start` fails with `BP0058` (load the deep
 image, then stage the file) or `BP0059` while I2C, SPI or UART sensors run; `info` switches to the
 loop image by itself when no such sensor runs. `updi` runs in every image.
@@ -3329,8 +3343,8 @@ Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 | Field | Meaning |
 |---|---|
 | `op` | `info` (enter programming mode and read the chip's ID, nothing written), `start`, `status`, `abort` |
-| `proto` | `updi`, `pic`, `c2`, `tpi`, `pdi` |
-| `clk`, `data` | LA pins (1..14); `updi` takes `data` only |
+| `proto` | `updi`, `pic`, `c2`, `tpi`, `pdi`, `sbw` |
+| `clk`, `data` | LA pins (1..14); `updi` takes `data` only; `sbw`: TEST and RST/NMI |
 | `reset` | `pic` and `tpi`: `"nrst"` (default, the pod's reset pin) or an LA pin, driven open-drain |
 | `mem` | `flash` (default), `eeprom`, `config` (PIC configuration words, AVR fuses, C2 lock byte), `user` (AVR user row, PIC user ID) |
 | `addr` | start address in that memory, in bytes (PIC: 2 bytes per word) |
@@ -3374,7 +3388,7 @@ ignored.
 
 ```json
 {"running":false,"op":"start","proto":"c2","phase":"done","done":16,"total":16,"id":"3001",
- "ms":2140,"protos":["updi","pic","c2","tpi","pdi"],"result":"ok"}
+ "ms":2140,"protos":["updi","pic","c2","tpi","pdi","sbw"],"result":"ok"}
 ```
 
 `phase` is `enter`, `erase`, `write`, `leave` or `done` (after a failure: the step it failed in);
@@ -3566,7 +3580,7 @@ proxy, GPIO, `generate` and shallow `replay` work in every image.
 From gateware v65 the emulation image has no bus masters either: SWD (`dap_start`: flashing and
 debugging the DUT), JTAG, the [SPI master](#spi-master-flash-an-spi-device), the
 [I2C master](#i2c-master) (and the GPIO expanders it drives) and the two-wire pin programmers
-(`prog_flash` pic, c2, tpi and pdi) need the loop or deep image. While I2C, SPI or UART sensors run,
+(`prog_flash` pic, c2, tpi, pdi and sbw) need the loop or deep image. While I2C, SPI or UART sensors run,
 `dap_start`, `spi_start` and `i2c_start` fail with `BP0059` (`feature` `"SWD"`, `"the SPI master"` or
 `"the I2C master"`). Flash the DUT first, then start the sensors: that order needs one image swap.
 With the emulation image loaded and no such sensor running, those commands switch to the loop

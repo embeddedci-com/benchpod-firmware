@@ -54,6 +54,7 @@ struct prog_sim {
     uint64_t clk_low_since_ns, clk_low_max_ns;
     unsigned contention, low_at_flush;
     bool     nrst_low;
+    uint32_t wire_mode;          /* last mode() flags (PROG_WIRE_*) a protocol set */
     uint32_t baud; bool parity_even, stop2;
     uint8_t  rx[PROG_SIM_UART];  size_t rx_head, rx_tail;
 };

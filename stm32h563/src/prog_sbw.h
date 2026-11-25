@@ -3,7 +3,8 @@
 
 /* prog_sbw: TI MSP430 Spy-Bi-Wire (FRAM parts with CPUXv2: FR2xx, FR4xx, FR5xxx, FR6xxx) for
  * prog_flash (prog_flash.h). Spec: docs/design/spy-bi-wire.md; section numbers in prog_sbw.c refer to it.
- * NOT in the firmware build or the xip_prog image yet (docs section 17: it needs its own image).
+ * Part of the xip_prog image (docs section 17, option a). Needs gateware v52+ (fast SPI link):
+ * prog_flash refuses it otherwise (command_handler_prog.c).
  *
  * Pins: clk = SBWTCK (the chip's TEST), data = SBWTDIO (its RST/NMI). The pod's reset pin is unused.
  * ctx->id: [0] JTAG ID (0x98 FR2xx/FR4xx, 0x99, 0x91), [1] device ID low byte, [2] device ID high
@@ -25,15 +26,5 @@
 #include "prog_flash.h"
 
 #define SBW_FLAG_RST_LOW 0x01u
-
-/* id for the protocol table when it joins the build (PROG_PROTO_COUNT is 5 today). */
-#define PROG_PROTO_SBW_ID 5u
-#define PROG_INFO_SBW .name = "sbw", .uart = false, .uses_nrst = false, .id = PROG_PROTO_SBW_ID, \
-    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG)
-
-int prog_sbw_call(prog_ctx_t *ctx, unsigned op);
-#if !defined(PROG_XIP)
-extern const prog_proto_t prog_proto_sbw;
-#endif
 
 #endif
