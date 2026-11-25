@@ -451,3 +451,24 @@ largest. Local results on the pins (CI in brackets):
 
 A first v66 netlist (SCLK 2 halves high / 3 low, swept the same way) is superseded: the bench
 read its SCLK high at the 20 ns limit, and the final netlist has 3 halves high / 2 low.
+
+## v68
+
+The switchable DAC SCLK (16 MHz by default, 24 MHz for explicit rates above the 16 MHz maximum).
+v66 (19.2 MHz) and the v67 candidate (16 MHz only) were not released; their pins are superseded.
+Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10) and in CI's (yosys 0.65+7,
+run 45548329211). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 53/64 | 50/64 | 40 |
+| deep  | 48/64 | 41/64 | 30 |
+| emu   | 63/64 | 64/64 | 62 |
+
+Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns |
+|-------|------|-----------|---------|-----------------|-----------------|
+| loop  | 60   | 54.57 (55.31) | 28.81 (29.14) | 10.84 (10.08) | 8.71 (8.27) |
+| deep  | 9    | 57.06 (55.60) | 27.65 (27.35) | 13.99 (13.27) | 5.47 (5.03) |
+| emu   | 15   | 68.21 (68.72) | 28.40 (28.88) | 10.73 (10.62) | 6.12 (4.93) |
