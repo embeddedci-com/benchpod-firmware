@@ -19,6 +19,7 @@
 #define ASI_SYS_STAT 0x0B
 #define SYS_NVMPROG   0x08   /* ASI_SYS_STATUS bit 3, in NVM programming mode */
 #define SYS_ERASEFAIL 0x40   /* ASI_SYS_STATUS bit 6, chip erase key failed */
+#define SYS_RSTSYS    0x20   /* ASI_SYS_STATUS bit 5, the chip is held in reset */
 /* CTRLA: IBDLY, RSD (no ACK on stores), GTVAL = 2 cycles. RSD is only for streams the chip can take
    at line speed (flash words); EEPROM, fuse and user row bytes are ACKed, the ACK waits for the write. */
 #define CTRLA_ON     0x86
@@ -207,7 +208,19 @@ static int enter(prog_ctx_t *c) {
            it from a session that ended without a reset): the key is ignored then and KEY_STATUS
            reads 0, so go straight to the status poll, as pymcuprog does. */
         TRY(ldcs(c, ASI_SYS_STAT, &v));
-        if (v & SYS_NVMPROG) { s->t0 = now(c); s->stage = 2; return PROG_RUNNING; }
+        if (v & SYS_NVMPROG) {
+            /* A job that ended with run = false (the SDK's earlier regions) or failed left the
+               chip held in reset: its memory answers nothing until the reset is released, so the
+               ID read would time out (AVR128DA48 on the bench). avrdude releases it the same way. */
+            if (v & SYS_RSTSYS) {
+                TRY(stcs(c, ASI_RESET, 0));
+                /* The AVR DA leaves programming mode with that release: then take the normal
+                   key path below. */
+                pause_us(c, 2000);
+                TRY(ldcs(c, ASI_SYS_STAT, &v));
+            }
+            if (v & SYS_NVMPROG) { s->t0 = now(c); s->stage = 2; return PROG_RUNNING; }
+        }
         TRY(stcs(c, ASI_RESET, RESET_ASSERT));
         TRY(key(c, "NVMProg "));
         TRY(ldcs(c, ASI_KEY_STAT, &v));
@@ -373,6 +386,7 @@ static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uin
             else {
                 memset(s->buf + have, 0xFF, k - have);
                 if (rsd) r = xfer(c, s->buf, k, NULL, 0);
+                else if (words) for (uint32_t i = 0; !r && i + 1 < k; i += 2) r = ack1(c, s->buf + i, 2);
                 else for (uint32_t i = 0; !r && i < k; i++) r = ack1(c, s->buf + i, 1);
             }
             p += k;
@@ -432,7 +446,11 @@ static int write_chunk(prog_ctx_t *c, uint32_t a, uint32_t n) {
             TRY(nvm_cmd(c, V2_NOCMD));
         }
         TRY(nvm_cmd(c, V2_FLWR));
-        TRY(store(c, a, off, n, np, fl, fl));       /* flash words stream, user row bytes are ACKed */
+        /* ACKed: NVM v2 writes each flash word straight into the flash (no page buffer), and a
+           word sent while the last one is still being written is lost, so a streamed (no-ACK)
+           page desyncs the UPDI (AVR128DA48 on the bench: no answer after the first page). The
+           chip ACKs each word once it is written. */
+        TRY(store(c, a, off, n, np, fl, false));
     } else {
         TRY(nvm_cmd(c, V2_EEERWR));      /* eeprom and fuses: ACKed bytes (10 ms each) */
         TRY(store(c, a, off, n, np, false, false));
