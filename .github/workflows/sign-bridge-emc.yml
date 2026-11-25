@@ -11,20 +11,20 @@
 # branch picked in "Run workflow" (normally main): the reviewer approves running that branch's code
 # with the release key.
 #
-# The result is the artifact `bridge-emc-<version>` (kept 7 days): blob-bridge.bin,
-# blob-bridge.bin.sig and blobs-manifest.json. Install it with the CLI, on a paired pod that runs
-# release firmware (4.0.x or later), after `emi stop` if the pod's EMI loop runs:
+# The result is the artifact `bridge-emc-<version>` (kept 7 days): one file, bridge-emc.tar.gz.age,
+# the blobs folder (blob-bridge.bin, blob-bridge.bin.sig, blobs-manifest.json) encrypted with age to
+# the keys in wifi-bridge/emc-artifact-recipients.txt. The repo is public, so any signed-in GitHub
+# user can download an artifact: only the encrypted file is uploaded, and the plain image never
+# leaves the runner. Decrypt and install it on a paired pod (after `emi stop` if the pod's EMI loop
+# runs):
 #
-#   benchpod install-blobs --dir <downloaded folder> --only bridge --force
-#   # pod JSON: {"cmd":"wifi_bridge","action":"update"}
+#   age -d -i ~/.config/benchpod/bridge-emc-artifact.agekey bridge-emc.tar.gz.age | tar -xz -C <dir>
+#   benchpod install-blobs --dir <dir> --only bridge --force
+#   # CLI before the bridge-push change: then pod JSON {"cmd":"wifi_bridge","action":"update"}
 #
-# Afterwards `benchpod install-blobs --only bridge --force` and the same pod command put the
-# release image back.
-#
-# The repo is public, so any signed-in GitHub user can download the artifact. That is acceptable:
-# the image has asset version 0, so a pod installs it only when forced (`--force`, then
-# `wifi_bridge update`) and only on a bridge paired with that pod, and a forced release update
-# (or flash-self) replaces it.
+# Afterwards `benchpod install-blobs --only bridge --force` (and the same pod command on an older
+# CLI) puts the release image back. The image has asset version 0: a pod installs it only when
+# forced, and only on a bridge paired with that pod.
 name: Sign bridge EMC image
 
 on:
@@ -98,13 +98,24 @@ jobs:
             echo "### Bridge EMC test image $emc"
             echo "Signed with the release key, asset version 0 (installed only when forced)."
             echo
-            echo "Install: \`benchpod install-blobs --dir <downloaded folder> --only bridge --force\`, then pod JSON \`{\"cmd\":\"wifi_bridge\",\"action\":\"update\"}\`"
+            echo "Encrypted to wifi-bridge/emc-artifact-recipients.txt. Decrypt and install: see the header of sign-bridge-emc.yml."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload the signed image
+      # Only the encrypted tarball is uploaded (public repo: artifacts are downloadable).
+      - name: Encrypt
+        working-directory: wifi-bridge
+        run: |
+          sudo apt-get install -y -qq age >/dev/null
+          grep -q '^age1' emc-artifact-recipients.txt || { echo "::error::no age recipient in emc-artifact-recipients.txt"; exit 1; }
+          mkdir -p emc-out
+          tar -C emc-blobs -czf - . | age -R emc-artifact-recipients.txt -o emc-out/bridge-emc.tar.gz.age
+          rm -rf emc-blobs
+          ls -l emc-out
+
+      - name: Upload the encrypted image
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bridge-emc-${{ steps.sign.outputs.version }}
-          path: wifi-bridge/emc-blobs/
+          path: wifi-bridge/emc-out/bridge-emc.tar.gz.age
           retention-days: 7
           if-no-files-found: error

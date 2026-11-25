@@ -289,8 +289,10 @@ Without a programmer, through the pod: the pod must run a dev build too if you u
 image (release pod firmware refuses it with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`,
 is one), and the bridge must be paired with that pod. A bridge that runs a **release** image trusts
 only the release keys, so it needs the release-signed EMC image: run **Actions > Sign bridge EMC
-image > Run workflow** (`.github/workflows/sign-bridge-emc.yml`, a reviewer approves it), download
-the artifact `bridge-emc-<version>` and use that folder instead of `build-emc/blobs` below. A
+image > Run workflow** (`.github/workflows/sign-bridge-emc.yml`, a reviewer approves it) and
+download the artifact `bridge-emc-<version>`. The repo is public, so the artifact is encrypted with
+age to the keys in `emc-artifact-recipients.txt`; decrypt it on a machine that holds one (below)
+and use that folder instead of `build-emc/blobs`. A
 dev-signed image from `./build.sh emc` works only on a bridge that runs a dev image (it trusts the
 dev key) and is paired with a pod that trusts the dev key too. The pod's EMI loop keeps it busy, so
 `emi stop` on the pod console first and `emi start` after. Put the image into the pod's blob slot
@@ -299,7 +301,9 @@ bridge blob back. The pod confirms the new image by talking to it, and an EMC im
 itself, so either stays after reboots.
 
 ```sh
-benchpod install-blobs --dir build-emc/blobs --only bridge --force   # (or the artifact's folder) slot "bridge" := EMC build
+# release-signed image: decrypt the artifact first
+age -d -i ~/.config/benchpod/bridge-emc-artifact.agekey bridge-emc.tar.gz.age | tar -xz -C bridge-emc
+benchpod install-blobs --dir build-emc/blobs --only bridge --force   # (or bridge-emc) slot "bridge" := EMC build
 # pod JSON: {"cmd":"wifi_bridge","action":"update"}, then wifi_status until bridge.fw is 0.1.1-emc
 benchpod install-blobs --only bridge --force                        # afterwards: the release blob
 # pod JSON: {"cmd":"wifi_bridge","action":"update"} again
