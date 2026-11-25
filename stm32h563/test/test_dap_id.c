@@ -37,6 +37,8 @@ static struct {
     uint32_t csw_written, ctrlstat_final;
     int      writes_to_mem;    /* DRW writes: must stay 0 */
     int      aborts;
+    int      ap_read_waits;    /* the next N AP reads answer WAIT, like a sleeping bus */
+    bool     desynced;         /* a read got WAIT: swd_ll's stray data clocks, see swd_ll.c */
 } m;
 static void model_reset(void) {
     memset(&m, 0, sizeof(m));
@@ -47,7 +49,10 @@ static void model_reset(void) {
     m.nmem = 2;
 }
 void swd_ll_reset(void) {}
-void swd_ll_seq_out(const uint8_t *d, uint32_t nbits) { (void)d; (void)nbits; }
+void swd_ll_seq_out(const uint8_t *d, uint32_t nbits) {
+    (void)d;
+    if (nbits >= 50) m.desynced = false;   /* a line reset */
+}
 static bool mem_find(uint32_t a, uint32_t *v) {
     for (int i = 0; i < m.nmem; i++) if (m.mem_ok[i] == a) { *v = m.mem_val[i]; return true; }
     return false;
@@ -55,8 +60,10 @@ static bool mem_find(uint32_t a, uint32_t *v) {
 uint8_t swd_ll_transfer(uint8_t req, uint32_t *data) {
     g_now_us += 10;   /* a transfer takes time: the WAIT retry is bounded by the clock */
     if (!m.present || (uint64_t)m.up_after_ms * 1000u > g_now_us) return SWD_ACK_NO_ACK;
+    if (m.desynced) return SWD_ACK_NO_ACK;
     if (m.waits > 0) { m.waits--; return SWD_ACK_WAIT; }
     bool ap = req & SWD_REQ_APnDP, rd = req & SWD_REQ_RnW;
+    if (ap && rd && m.ap_read_waits > 0) { m.ap_read_waits--; m.desynced = true; return SWD_ACK_WAIT; }
     unsigned a = req & (SWD_REQ_A2 | SWD_REQ_A3);
     if (!ap) {
         if (rd) {
@@ -195,6 +202,15 @@ static void test_swd_absent_and_wait(void) {
     m.waits = 5;   /* WAIT is retried, not an error */
     dap_id_swd(200, NULL, 0, &r);
     CHECK(r.found && r.has_cpuid, "WAIT acks are retried");
+
+    model_reset();
+    m.ap_read_waits = 3;   /* a read that got WAIT knocks the DP out of step until a line reset */
+    {
+        uint32_t want = 0xE0042000;
+        dap_id_swd(200, &want, 1, &r);
+    }
+    CHECK(r.found && r.has_cpuid && r.cpuid == 0x410fc241 && r.value_ok[0] && r.value[0] == 0x10006421,
+          "a WAIT on an AP read is retried after a line reset");
 
     model_reset();
     m.waits = 1000000;   /* a target stuck on WAIT: bounded, no hang */

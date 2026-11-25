@@ -41,14 +41,31 @@
    heartbeat through the callers' sleeps). */
 #define ID_WAIT_MS 20
 
+/* swd_ll_transfer clocks a read's whole data window in one feed (see swd_ll.c), so a read that
+   gets WAIT leaves 33 stray clocks on the line and the DP out of step: the next transfer gets no
+   ACK.  A line reset and a DPIDR read put it back in step (SELECT survives a line reset), and the
+   read is then sent again.  The DAP session avoids this through the gateware's SWD queue; this
+   path talks to swd_ll directly. */
+static void resync(void) {
+    static const uint8_t line_reset[7] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };  /* 56 ones */
+    static const uint8_t idle[1] = { 0x00 };
+    uint32_t dpidr;
+    swd_ll_seq_out(line_reset, 56);
+    swd_ll_seq_out(idle, 8);
+    (void)swd_ll_transfer(SWD_REQ_RnW /* DPIDR */, &dpidr);
+}
+
 static uint8_t xfer(uint8_t req, uint32_t *data) {
     absolute_time_t deadline = make_timeout_time_ms(ID_WAIT_MS);
     uint8_t ack;
     for (;;) {
         ack = swd_ll_transfer(req, data);
-        if (ack != SWD_ACK_WAIT || time_reached(deadline)) return ack;
+        if (ack != SWD_ACK_WAIT) return ack;
+        if (req & SWD_REQ_RnW) resync();
+        if (time_reached(deadline)) return ack;
     }
 }
+
 /* ACK OK only counts when the read's parity was good too (OK|PERR is not SWD_ACK_OK). */
 static bool dp_wr(uint8_t a, uint32_t v) { return xfer(a, &v) == SWD_ACK_OK; }
 static bool dp_rd(uint8_t a, uint32_t *v) { return xfer(SWD_REQ_RnW | a, v) == SWD_ACK_OK; }
