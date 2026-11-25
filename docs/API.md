@@ -1075,20 +1075,24 @@ with the path routed, and replies `{"parked_mv":3600}`.
 
 ### `dac_set` — hold a raw DAC level
 
-Holds the DAC at a fixed 8-bit level (scaled to the 16-bit DAC), with no routing and no
-calibration. For a calibrated voltage use [`dac_out`](#analog-paths--analog_path--dac_out--adc_read).
+Holds the DAC at a fixed 16-bit code, with no routing and no calibration. For a calibrated
+voltage use [`dac_out`](#analog-paths--analog_path--dac_out--adc_read).
 
 ```json
-{"cmd":"dac_set","value":128,"divider":240}
+{"cmd":"dac_set","code16":32768,"value":128,"divider":240}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `value` | integer 0..255 | yes | — | The level. |
+| `code16` | integer 0..65535 | one of the two | — | The 16-bit DAC code. |
+| `value` | integer 0..255 | one of the two | — | The older 8-bit level, held as `value × 256`. |
 | `divider` | integer | no | `2` | DAC engine clock = 48 MHz ÷ divider. |
 
-Reply `null`. Errors: `"missing value"`, `"value out of range"`, `"dac set failed"`, and the
-`dac_limits` refusal when limits are set.
+With both, `code16` wins. Send `value` too (`code16 >> 8`) to stay compatible: firmware up to
+4.0.4 has no `code16` and holds `value`.
+
+Reply `null`. Errors: `"missing code16 (or value)"`, `"code16 out of range (0..65535)"`,
+`"value out of range"`, `"dac set failed"`, and the `dac_limits` refusal when limits are set.
 
 ---
 

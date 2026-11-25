@@ -77,8 +77,8 @@ int dac_limits_path_index(const char *name);
 /* The DAC voltage Stop and boot hold (low-output end of the window), in volts. */
 float dac_limits_park_volts(void);
 
-/* The 8-bit dac_set_constant code for the park voltage, rounded INTO the window. */
-uint8_t dac_limits_park_code(void);
+/* The 16-bit DAC code for the park voltage, rounded INTO the window. */
+uint16_t dac_limits_park_code16(void);
 
 /* Check one JSON command (cmd = its "cmd" field). NULL = allowed, else the refusal. Pure. */
 const char *dac_limits_check_command(const char *cmd, const char *json);

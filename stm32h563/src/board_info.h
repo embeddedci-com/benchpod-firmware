@@ -27,13 +27,12 @@
 /* DAC capability reported to the cloud (server persists cap.dac_*; the webapp
  * gates the signal-generator UI on it). v2 has the FPGA AC waveform DAC sequencer
  * wired, so AC generate + arbitrary replay work, and it can hold a DC level.
- * The DAC hardware is 16-bit (shared 4.096 V reference with the ADC), but the
- * current JSON generate/load/replay interface drives it with 8-bit codes; this
- * advertises that effective interface depth (Phase 6 raises it to 16). */
+ * The DAC is 16-bit (shared 4.096 V reference with the ADC), and every interface
+ * drives it at 16 bits: generate in volts, dac_out, load/replay, dac_set code16. */
 #define DAC_AC           1      /* 1 = FPGA AC waveform DAC (generate/replay) */
 #define DAC_REPLAY       1      /* 1 = arbitrary replay via the FPGA DAC8551 sequencer */
 #define DAC_DC           1      /* 1 = settable DC level (dac_set) */
-#define DAC_BITS         8      /* resolution of the parametric generate interface */
+#define DAC_BITS         16     /* resolution of the DAC and its commands */
 /* Arbitrary load/replay is 16-bit on v2: handle_load/handle_replay/load_bin stream
  * 16-bit samples into adc_buf16 and the FPGA DAC8551 sequencer clocks 16-bit words. */
 #define DAC_REPLAY_BITS  16     /* resolution of arbitrary load/replay samples */
