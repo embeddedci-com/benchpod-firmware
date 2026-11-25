@@ -174,7 +174,7 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
        The full object made the LAN status 2115 bytes, more than a connection's TX ring takes
        whole, so the pod closed the connection instead of answering. Full form only. */
     if (!brief) {
-        char emi[160];
+        char emi[192];
         if (!emi_test_json_short(emi, sizeof(emi))) snprintf(emi, sizeof(emi), "null");
         bp_emit(e, "\"emi_test\":%s,", emi);
     }

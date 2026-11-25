@@ -434,15 +434,25 @@ ifneq ($(HEAP_KB),259)
 DEFS      += -DBENCHPOD_HEAP_KB=$(HEAP_KB)U
 endif
 
-# EMI test build: EMI_TEST=1 adds src/emi_test.c, which runs the EMC lab's worst-case activity
-# from boot (target power, DAC, back-to-back captures) for spectrum-analyser measurements, and the
-# `emi` console command. Development only: never released, so refused together with RELEASE=1.
+# EMI test build: EMI_TEST=1 adds src/emi_test.c, which runs the EMC lab's operating mode from
+# boot (target power, DAC, captures, NMEA, the Ethernet stream; src/emi_sched.h) for
+# spectrum-analyser measurements, and the `emi` console command. Development only: never released,
+# so refused together with RELEASE=1.
 ifeq ($(EMI_TEST),1)
 ifeq ($(RELEASE),1)
 $(error EMI_TEST=1 is a development build and cannot be combined with RELEASE=1)
 endif
 DEFS      += -DBENCHPOD_EMI_TEST=1
-C_SOURCES += src/emi_test.c src/emi_log.c src/emi_http.c $(BUILD_DIR)/gen/emi_page.c
+C_SOURCES += src/emi_test.c src/emi_sched.c src/emi_log.c src/emi_http.c $(BUILD_DIR)/gen/emi_page.c
+# EMI_MODE=ci|interactive|sensor|stress: the mode the build starts in (src/emi_sched.h); ci, the
+# lab's, by default. `emi mode` switches it at run time.
+ifneq ($(EMI_MODE),)
+EMI_MODE_ID := $(if $(filter ci,$(EMI_MODE)),EMI_MODE_CI,$(if $(filter interactive,$(EMI_MODE)),EMI_MODE_INTERACTIVE,$(if $(filter sensor,$(EMI_MODE)),EMI_MODE_SENSOR,$(if $(filter stress,$(EMI_MODE)),EMI_MODE_STRESS,))))
+ifeq ($(EMI_MODE_ID),)
+$(error EMI_MODE must be ci, interactive, sensor or stress)
+endif
+DEFS      += -DEMI_MODE_DEFAULT=$(EMI_MODE_ID)
+endif
 # EMI_LOG_SECTORS=<n>: shrink the run log (emi_log.h) to n sectors (>= 2) to watch it wrap on a bench.
 ifneq ($(EMI_LOG_SECTORS),)
 DEFS      += -DEMI_LOG_TEST_SECTORS=$(EMI_LOG_SECTORS)

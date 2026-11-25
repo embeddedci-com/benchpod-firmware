@@ -61,6 +61,8 @@ int dac_generate_sawtooth(float freq, uint8_t amplitude, uint8_t offset,
    the waveform BRAM (a W25Q session's quiesce). Microseconds instead of the table's rebuild.
    -1 = nothing to restart (another load replaced it, or a timed generate). */
 int dac_restart_generated(void);
+/* EMI test build: the sample rate (S/s) of that table as it plays, 0 = none. */
+uint32_t dac_generated_rate_hz(void);
 /* EMI test build: the run log's quiesce. Stops the DAC only when a deep replay (the one DAC source
    that masters the PSRAM bus) is resident; else waits only for no capture busy and the writer
    drained. true = it stopped the DAC (the caller starts it again). */

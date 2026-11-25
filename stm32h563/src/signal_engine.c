@@ -2077,6 +2077,10 @@ int dac_restart_generated(void) {
     return fpga_start_dac(s_gen_period, s_gen_divider);
 }
 
+uint32_t dac_generated_rate_hz(void) {
+    return s_gen_period ? (uint32_t)lroundf(dac_effective_rate_hz(s_gen_divider)) : 0u;
+}
+
 /* EMI test build: quiesce for the run log's W25Q sessions. Of the DAC's sources only the deep
    replay (dac_psram_reader.v) masters the shared PSRAM bus; a waveform played from the BRAM table
    (dac8551_engine.v, psram_mode=0) and the quad DAC's held channels drive their own pins and keep
