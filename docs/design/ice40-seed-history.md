@@ -507,3 +507,52 @@ Local results on the pins (CI in brackets):
 | loop  | 60   | 54.57 (55.31) | 28.81 (29.14) | 10.84 (10.08) | 8.71 (8.27) |
 | deep  | 9    | 57.06 (55.60) | 27.65 (27.35) | 13.99 (13.27) | 5.47 (5.03) |
 | emu   | 15   | 68.21 (68.72) | 28.40 (28.88) | 10.73 (10.62) | 6.12 (4.93) |
+
+## nextpnr `--opt-timing` trial (2026-11-25, on gateware v68, not adopted)
+
+Question: does `--opt-timing` raise the seed pass rate enough to adopt it? Seeds 1..32 per image,
+default build otherwise (no `PIN_CLKDIV`), same gates (`MIN_CLK48_MHZ` 50, `MIN_CLK_MHZ` 25.5,
+`MAX_X48_NS` 15, `MAX_X24_NS` 15).  CI: OSS CAD Suite 2026-05-13 (Yosys 0.65), runs 45631709812
+(baseline) and 45631716166 (`--opt-timing`).  Local: Homebrew yosys/nextpnr, 4 jobs.  Tooling:
+`NEXTPNR_EXTRA` in `seed_sweep.sh` and the allowlisted `nextpnr_extra` input of the sweep workflow.
+
+| image | toolchain | flag | ok of 32 | median clk48 MHz | min clk48 | median clk MHz | min clk |
+|-------|-----------|------|----------|------------------|-----------|----------------|---------|
+| loop  | CI    | none | 29 | 53.0 | 45.8 | 28.5 | 26.2 |
+| loop  | CI    | opt  | 28 | 53.6 | 43.1 | 27.4 | 25.3 |
+| loop  | local | none | 26 | 54.5 | 48.3 | 28.0 | 26.3 |
+| loop  | local | opt  | 27 | 53.6 | 47.6 | 27.9 | 25.7 |
+| deep  | CI    | none | 17 | 53.1 | 43.4 | 27.4 | 25.7 |
+| deep  | CI    | opt  | 20 | 53.0 | 46.6 | 27.1 | 25.1 |
+| deep  | local | none | 23 | 57.1 | 49.7 | 27.3 | 25.1 |
+| deep  | local | opt  | 25 | 57.7 | 50.1 | 27.3 | 25.8 |
+| emu   | CI    | none | 32 | 63.6 | 54.7 | 28.3 | 26.4 |
+| emu   | CI    | opt  | 32 | 64.5 | 55.2 | 27.9 | 25.9 |
+| emu   | local | none | 32 | 64.5 | 55.2 | 27.5 | 26.4 |
+| emu   | local | opt  | 26 | 64.9 | 56.4 | 26.6 | 24.8 |
+
+The median clk -> clk48 delay (x48) and clk48 -> clk delay (x24) do not move (loop 13.0 / 7.5 ns,
+deep 14.5 / 5.6 ns, emu 11.3 / 5.6 ns on CI): `--opt-timing` does not touch the unconstrained
+gearbox paths that the x48 and x24 gates exist for.  The deep image's 9 to 10 `xdomain` failures
+stay.
+
+Seeds ok in both toolchains (what a pin needs):
+
+| image | none | `--opt-timing` |
+|-------|------|----------------|
+| loop  | 24 | 23 |
+| deep  | 12 | 14 |
+| emu   | 32 | 26 |
+| total | 68 | 63 |
+
+Runtime: CI sweep jobs (8 or 16 seeds each, includes toolchain setup and synthesis) took 161 to
+204 s for loop, 173 to 216 s for deep and 145 to 169 s for emu without the flag, and 261 to 292 s,
+175 to 184 s and 160 to 183 s with it.  Locally (32 seeds, 4 jobs) loop went from 291 s to 439 s,
+deep from 125 s to 151 s, emu from 210 s to 323 s: 1.2x to 1.5x, not the 2x to 4x of the earlier
+small study.
+
+Recommendation: do not adopt.  The median Fmax gain is at most 1 MHz, the pass counts differ by
+at most 3 seeds in either direction (CI loop 29 to 28, deep 17 to 20, local emu 32 to 26), and the
+seeds ok in both toolchains drop from 68 to 63 in total.  The flag does not fix the x48 gate that
+limits the deep image, and it adds 20 to 50 percent to every PnR.  `--opt-timing` placements are
+also different seeds, so adopting it re-rolls every pin for no net gain.  The Makefile is unchanged.
