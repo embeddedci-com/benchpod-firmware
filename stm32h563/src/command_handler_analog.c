@@ -142,7 +142,9 @@ void handle_analog_path(int conn_id, const char *json) {
 
 /* dac_out — route a DAC output path AND set a CALIBRATED voltage (one step, no
    manual mux flipping).  {"cmd":"dac_out","path":"5v","v":2.5} → achieved
-   mv and uv and the 16-bit code16.  path off just parks the output; omit v to only route. */
+   mv and uv and the 16-bit code16.  path off just parks the output; omit v to only route.
+   path cal1 sets the 5 V stage's level routed into the ADC loopback (K1 energised: the 5 V SMA is
+   disconnected meanwhile), so adc_read source=cal1 needs no relay switching in between. */
 void handle_dac_out(int conn_id, const char *json) {
     char name[16] = {0}, volts_s[16] = {0};
     if (!json_get_value(json, "path", name, sizeof(name))) { send_error(conn_id, "missing path"); return; }
@@ -150,8 +152,9 @@ void handle_dac_out(int conn_id, const char *json) {
     if (analog_path_from_name(name, &p) != 0) { send_error(conn_id, "unknown path"); return; }
     if      (p == ANALOG_PATH_DAC_3V3) idx = 0;
     else if (p == ANALOG_PATH_DAC_5V)  idx = 1;
+    else if (p == ANALOG_PATH_CAL1)    idx = 1;   /* the 5 V stage into the ADC loopback: 5 V calibration */
     else if (p == ANALOG_PATH_DAC_12V) idx = 2;
-    else if (p != ANALOG_PATH_OFF) { send_error(conn_id, "path must be 3v3|5v|12v|off"); return; }
+    else if (p != ANALOG_PATH_OFF) { send_error(conn_id, "path must be 3v3|5v|12v|cal1|off"); return; }
     if (analog_path_set(p) != 0) { send_error(conn_id, "route failed"); return; }
     long code16 = -1; int got_mv = 0; long got_uv = 0;
     if (idx >= 0 && json_get_value(json, "v", volts_s, sizeof(volts_s))) {

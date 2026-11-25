@@ -92,6 +92,7 @@ int analog_path_from_name(const char *n, analog_path_t *out) {
     if (strcmp(n, "3v3") == 0) *out = ANALOG_PATH_DAC_3V3;
     else if (strcmp(n, "5v") == 0) *out = ANALOG_PATH_DAC_5V;
     else if (strcmp(n, "12v") == 0) *out = ANALOG_PATH_DAC_12V;
+    else if (strcmp(n, "cal1") == 0) *out = ANALOG_PATH_CAL1;
     else if (strcmp(n, "ext") == 0) *out = ANALOG_PATH_ADC_EXT;
     else return -1;
     return 0;
@@ -307,11 +308,17 @@ static void test_generate16(void) {
     CHECK(strncmp(g_reply, "err:the peaks", 13) == 0 && g_gen16_calls == 0 && g_route == -1,
           "out of range refused before routing: %s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"ext\",\"amplitude_v\":1.0,\"offset_v\":1.0}");
-    CHECK(strcmp(g_reply, "err:path must be 3v3|5v|12v with amplitude_v") == 0, "%s", g_reply);
+    CHECK(strcmp(g_reply, "err:path must be 3v3|5v|12v|cal1 with amplitude_v") == 0, "%s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"3v3\",\"amplitude_v\":1.0}");
     CHECK(strcmp(g_reply, "err:offset_v is required with amplitude_v") == 0, "%s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"triangle\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":1.5}");
     CHECK(strcmp(g_reply, "err:unknown waveform") == 0, "%s", g_reply);
+
+    /* path cal1: the 5 V stage into the ADC loopback, volts with the 5 V calibration. */
+    g_gen16_calls = 0; g_route = -1;
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,\"path\":\"cal1\",\"amplitude_v\":0.5,\"offset_v\":2.5}");
+    CHECK(strcmp(g_reply, "ok:null") == 0 && g_gen16_calls == 1 && g_route == ANALOG_PATH_CAL1, "cal1 %s route %d", g_reply, g_route);
+    CHECK(fabs(g_gen_mid - (double)dac_code16_for_volts(1, 2.5f)) <= 1.0, "cal1 mid %.1f", g_gen_mid);
 
     /* route:false leaves the analog switching alone (a cal1 loopback). */
     g_route = -1;

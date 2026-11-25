@@ -290,11 +290,13 @@ void handle_generate(int conn_id, const char *json) {
     } else {
         if (!json_get_value(json, "path", path_s, sizeof(path_s)) ||
             analog_path_from_name(path_s, &route) != 0 ||
-            (route != ANALOG_PATH_DAC_3V3 && route != ANALOG_PATH_DAC_5V && route != ANALOG_PATH_DAC_12V)) {
-            send_error(conn_id, "path must be 3v3|5v|12v with amplitude_v");
+            (route != ANALOG_PATH_DAC_3V3 && route != ANALOG_PATH_DAC_5V && route != ANALOG_PATH_DAC_12V &&
+             route != ANALOG_PATH_CAL1)) {
+            send_error(conn_id, "path must be 3v3|5v|12v|cal1 with amplitude_v");
             return;
         }
-        int idx = route == ANALOG_PATH_DAC_3V3 ? 0 : route == ANALOG_PATH_DAC_5V ? 1 : 2;
+        /* cal1 is the 5 V stage into the ADC loopback: the 5 V calibration. */
+        int idx = route == ANALOG_PATH_DAC_3V3 ? 0 : (route == ANALOG_PATH_DAC_5V || route == ANALOG_PATH_CAL1) ? 1 : 2;
         why = wave16_codes_for_volts(idx, amp_in, off_in, &amp, &mid);
     }
     if (why) { send_error(conn_id, why); return; }
