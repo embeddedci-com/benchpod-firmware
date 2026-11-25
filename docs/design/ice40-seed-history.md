@@ -428,6 +428,41 @@ largest. Local results on the pins (CI in brackets):
 
 The emulation image went from 98.5% LC (v63) and the fewest good seeds to the most.
 
+## Pinning the clk divider (`PIN_CLKDIV`, opt-in)
+
+`clk` (24 MHz) is the clk48/2 divider flop (net `clkdiv`) through an `SB_GB`. Unpinned, the placer
+puts that flop anywhere in the fabric, because the net also feeds the clock enables of the
+`la48_sampler` flops. The only part of clk's lag behind clk48 that depends on placement is the
+routed `clkdiv` net from the flop to the `SB_GB`, and it moves by about 4 ns per seed (loop 1.1 to
+5.1 ns, emu 5.2 to 9.2 ns, seeds 1 to 16).
+
+`make PIN_CLKDIV=1` adds a second nextpnr `--pre-pack` script, `ice40/pin_clkdiv.py`, that locks the
+divider flop to `X13/Y30/lc0` and the `SB_GB` to `X13/Y31/gb`. The script raises (and the build
+fails) if the net, the flop or the single `SB_GB` is not found. The default is `PIN_CLKDIV=0`: the
+nextpnr command line, the `.asc` and the `.bin` are byte-identical to a build without the option.
+`synth/seed_sweep.sh` takes `PIN_CLKDIV=1` from its environment (the table header shows it), and the
+`ice40-seed-sweep` workflow has a `pin_clkdiv` input (default false).
+`synth/clkdiv_lag.py` is a post-route hook that prints the routed divider-to-`SB_GB` delay (usage
+in its header); it is not part of any build.
+
+Study (v63 netlist, local toolchain, seeds 1 to 16):
+
+| image | pin  | ok gates | lag ns | clk48 MHz median | clk -> clk48 ns median |
+|-------|------|----------|--------|------------------|------------------------|
+| loop  | off  | 14/16    | 1.10 to 5.07 | 54.73 | 11.78 |
+| loop  | on   | 16/16    | 1.10 (14 seeds), 1.75 (2) | 54.32 | 13.11 |
+| emu   | off  | 12/16    | 5.17 to 9.21 | 58.68 | 13.60 |
+| emu   | on   | 14/16    | 1.10 (16 seeds) | 56.52 | 13.27 |
+
+The pin costs about 0.4 MHz (loop) and 2.2 MHz (emu) of clk48 Fmax and makes the lag a known
+constant. The lag did not separate the hardware-bad seeds (loop 38, emu 52 and 6) from the good
+ones, so the pin is not shown to fix that fault by itself.
+
+To use it: turn it on (default to `?= 1`, or build with `PIN_CLKDIV=1`) together with the next
+`GATEWARE_VERSION` bump, run the seed sweep with `pin_clkdiv=true` locally and in CI, re-pin
+`SEED_LOOP`, `SEED_DEEP` and `SEED_EMU`, and test both pods on hardware before promoting. Seeds
+pinned without the option do not carry over: the pin changes every placement.
+
 ## v66
 
 The 19.2 MHz DAC SCLK: `dac8551_engine` puts out half pairs and the new `dac_pads` drives SCLK and

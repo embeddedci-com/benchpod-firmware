@@ -20,7 +20,8 @@
 #
 # Run it on the FINAL netlist (after the GATEWARE_VERSION bump, which re-rolls placement), in each
 # toolchain that builds the image (make -C ice40 seed-sweep; CI: the ice40-seed-sweep workflow).
-# Same nextpnr flags as the Makefile's pnr macro, so a seed's result here is its result there.
+# PIN_CLKDIV=1 in the environment adds the Makefile's opt-in divider pin (pin_clkdiv.py); it is
+# also in the header line of the table.  Same nextpnr flags as the Makefile's pnr macro, so a seed's result here is its result there.
 set -eu
 self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 
@@ -40,8 +41,10 @@ if [ "${1:-}" = --one ]; then
   json=$SWEEP_JSON out=$SWEEP_OUT min48=$MIN_CLK48_MHZ minclk=$MIN_CLK_MHZ max48=$MAX_X48_NS max24=$MAX_X24_NS
   s=$2
   log=$out/$s.log
+  pin=
+  [ "${PIN_CLKDIV:-0}" = 1 ] && pin="--pre-pack pin_clkdiv.py"
   if nextpnr-ice40 --up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained \
-       --pre-pack clocks.py --threads 1 --seed "$s" --json "$json" --asc "$out/$s.asc" \
+       --pre-pack clocks.py $pin --threads 1 --seed "$s" --json "$json" --asc "$out/$s.asc" \
        >"$log" 2>&1; then r=ok; else r=fail; fi
   f48=$(grep "Max frequency for clock 'clk48" "$log" | tail -n 1 | sed -E 's/.*: *([0-9.]+) MHz.*/\1/')
   fclk=$(grep -E "Max frequency for clock +'clk'" "$log" | tail -n 1 | sed -E 's/.*: *([0-9.]+) MHz.*/\1/')
@@ -77,7 +80,7 @@ export SWEEP_JSON=$json SWEEP_OUT=$out
 # rolling pool: at most $jobs nextpnr runs at a time, a new seed starts as soon as one finishes
 seq "$first" "$last" | xargs -P "$jobs" -I{} sh "$self" --one {}
 
-echo "# $json: seeds $first..$last, MIN_CLK48_MHZ=$MIN_CLK48_MHZ MIN_CLK_MHZ=$MIN_CLK_MHZ MAX_X48_NS=$MAX_X48_NS MAX_X24_NS=$MAX_X24_NS ($(yosys -V 2>/dev/null | cut -d' ' -f1-2))"
+echo "# $json: seeds $first..$last, MIN_CLK48_MHZ=$MIN_CLK48_MHZ MIN_CLK_MHZ=$MIN_CLK_MHZ MAX_X48_NS=$MAX_X48_NS MAX_X24_NS=$MAX_X24_NS PIN_CLKDIV=${PIN_CLKDIV:-0} ($(yosys -V 2>/dev/null | cut -d' ' -f1-2))"
 if [ -n "${RAW:-}" ]; then
   cat "$out"/*.res
   exit 0
