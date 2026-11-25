@@ -4,7 +4,9 @@
  *   {"cmd":"prog_flash","op":"info","proto":"c2","clk":3,"data":4}
  *       enters programming mode and reads the chip's ID (flash untouched); poll status
  *   {"cmd":"prog_flash","op":"start","proto":"c2","clk":3,"data":4,"mem":"flash","addr":0,
- *    "len":8192,"page":512,"erase":"chip","expect_id":"0x30","baud":0,"flags":0,"run":true}
+ *    "len":8192,"page":512,"erase":"chip","expect_id":"0x30","baud":0,"run":true}
+ *       the chip's options are named fields (prog_desc.h: updi flash_base, pic cmd_set/pc/cp_bit/...,
+ *       tpi write_words/page_erase, c2 fpdat/no_setup); `flags` (one packed integer) still works
  *       writes the first len bytes a `load_bin` with "psram" staged and verifies them; poll status
  * PIC and TPI take "reset": "nrst" (the pod's reset pin, the default) or an LA pin (open drain).
  *   {"cmd":"prog_flash","op":"status"}
@@ -16,6 +18,7 @@
 #include "command_handler_internal.h"
 #include "bp_errors.h"
 #include "prog_flash.h"
+#include "prog_desc.h"
 #include "gw_caps.h"
 #include "sensor_mgr.h"   /* sensor_mgr_digital_names: the bus-master gate */
 #include "la_pins.h"
@@ -129,7 +132,13 @@ void handle_prog_flash(int conn_id, const char *json) {
         if (has_key(json, "baud")) { send_error(conn_id, "pic takes cp_addr, not baud"); return; }
         if (!get_u32(json, "cp_addr", &p.baud)) { send_error(conn_id, "invalid cp_addr"); return; }
     }
-    if (has_key(json, "flags") && !get_u32(json, "flags", &p.flags)) { send_error(conn_id, "invalid flags"); return; }
+    /* the chip's options: the named fields of prog_desc.h, or `flags` from a host that predates them */
+    {
+        prog_desc_t desc;
+        char derr[64];
+        if (prog_desc_parse(json, p.proto->name, &desc, derr, sizeof(derr)) != 0) { send_error(conn_id, derr); return; }
+        p.flags = desc.flags;
+    }
     char idv[24] = {0};
     if (bp_json_get(json, "expect_id", idv, sizeof(idv)) && idv[0] &&
         !parse_id(idv, p.expect_id, &p.expect_len)) {

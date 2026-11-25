@@ -248,6 +248,7 @@ C_SOURCES := \
   src/prog_job.c \
   src/prog_wire.c \
   src/command_handler_prog.c \
+  src/prog_desc.c \
   src/prog_updi.c \
   src/prog_pic.c \
   src/prog_c2.c \
@@ -655,7 +656,7 @@ $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
 $(BUILD_DIR)/error.o: CFLAGS += -Os -fno-tree-switch-conversion
 # The pin programmers (prog_flash) run at the chip's pace, not the CPU's: -Os keeps the five
 # protocols and their job within the flash budget (docs/design/memory-budget.md).
-$(BUILD_DIR)/prog_flash.o $(BUILD_DIR)/prog_job.o $(BUILD_DIR)/prog_wire.o $(BUILD_DIR)/command_handler_prog.o \
+$(BUILD_DIR)/prog_desc.o $(BUILD_DIR)/prog_flash.o $(BUILD_DIR)/prog_job.o $(BUILD_DIR)/prog_wire.o $(BUILD_DIR)/command_handler_prog.o \
 $(BUILD_DIR)/prog_updi.o $(BUILD_DIR)/prog_pic.o $(BUILD_DIR)/prog_c2.o $(BUILD_DIR)/prog_tpi.o \
 $(BUILD_DIR)/prog_pdi.o: CFLAGS += -Os
 
