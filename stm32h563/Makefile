@@ -179,6 +179,7 @@ C_SOURCES := \
   src/watchdog.c \
   src/boot_guard.c \
   src/boot_policy.c \
+  src/ice40_switch.c \
   src/sys_health.c \
   src/device_identity.c \
   src/config_store.c \

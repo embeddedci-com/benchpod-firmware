@@ -1833,6 +1833,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
 | `uart_rx_parity_error` | boolean | A frame of the current (or last) UART proxy session arrived with a wrong parity bit (gateware v56+). Full form only. |
+| `fpga_switch` | object | Gateware image switches since the pod started (firmware 4.0.6+), full form only; [`fpga_image`](#fpga_image--switch-the-running-gateware-image) replies carry it too. `switches`: images loaded, `skipped`: requests for the image already running (nothing done), `failed`: loads that did not end on the requested image, `reflashes`: writes of the image the iCE40 boots from, `erases`: 4 KB sector erases of the config flash those writes cost. |
 | `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
@@ -4088,13 +4089,21 @@ slot and reconfigures it, which takes 2 to 3 seconds. The pod then announces its
 to the cloud, and puts an external output stage back on its park level when DAC limits are set.
 `sensor_start` loads the emulation image by itself; nothing switches back by itself.
 
+Asking for the image that already runs does nothing (firmware 4.0.6+): no reflash, no reload, the
+DAC and anything else the gateware runs keep going, and the reply says `"switched":false`. The pod
+still loads it when the iCE40 does not answer, `status.psram_ok` is `false`, or the running
+gateware version is not the one the firmware carries (so `benchpod install-blobs` can reload a
+stale image). `"force":true` reloads it anyway.
+
 ```json
 {"cmd":"fpga_image","image":"emulation"}
+{"cmd":"fpga_image","image":"loop","force":true}
 {"cmd":"fpga_image"}
 ```
 
-Reply: `{"image":2,"name":"emulation","version":54,"features":4}`; without `image` it reports the
-running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation,
+Reply: `{"image":2,"name":"emulation","version":54,"features":4,"switched":true,"fpga_switch":{"switches":3,"skipped":5,"reflashes":3,"erases":81,"failed":0}}`;
+without `image` it reports the running one (no `switched`). `fpga_switch` is the counter block from
+[`status`](#status) (firmware 4.0.6+). `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation,
 8 the JTAG master (v61+), 16 the SWIM master (v62 to v64, deep image only), 32 the bus masters
 (v65+: SWD, the SPI master and the I2C master; loop and deep images). From gateware v65 the loop
 image reports 41 (0x29), the deep image 42 (0x2A) and the emulation image 4.

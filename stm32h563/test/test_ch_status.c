@@ -260,7 +260,7 @@ static void test_lan_is_complete(void) {
     if (getenv("DUMP")) printf("%s\n", g_tx);
     CHECK(g_sends == 1, "full form not sent at once (%d sends)", g_sends);
     const char *keep[] = { "lan_tls", "adc_cal_a_uv", "module", "features_rev", "hw", "usb", "lease",
-                           "local_lease", "heap_min", "stack_min" };
+                           "local_lease", "heap_min", "stack_min", "fpga_switch" };
     for (size_t i = 0; i < sizeof(keep) / sizeof(keep[0]); i++)
         CHECK(has(keep[i]), "LAN status lacks %s", keep[i]);
     /* The diagnostics are in `diag` (3.10.9), in neither form. */
