@@ -647,6 +647,21 @@ lock. Order:
 | M7 | `DATA_QUICK` write to FRAM, and the mailbox funclet write | the faster write paths (items 11 and 12) | informational |
 | M8 | Wiring: RST pin loading (10 kohm pod pullup, LaunchPad's RST capacitor) and the pod's drive into it; TEST pulldown against the clock edges | section 2 | clean edges on the LA |
 
+### 18.1 Bench results (2026-11-25)
+
+MSP-EXP430FR2433 LaunchPad, J101 jumpers removed, TEST/SBWTCK on LA4, RST/SBWTDIO on LA3, target 3.3 V from the pod,
+gateware v68, network link. Functional runs only (M3 style); the timing captures M1, M2, M4 and M5 are not done yet.
+
+| Build | Run | Result |
+|---|---|---|
+| 81e0116 (before the rebases) | ID read | JTAG ID 0x98, device ID 0x8240 (MSP430FR2433) after the device-pointer and quick-read fixes |
+| 81e0116 | full program memory (15 232 bytes at 0xC400), write + verify | 9 of 9 passed on the final build; earlier builds of the same day failed 5 of 9 with no cause found, which led to the re-entry recovery |
+| 480223a (rebased on main with named fields, #271) | ID read | ok, 0.3 s |
+| 480223a | full program memory, write + verify, 3 runs | 3 of 3 passed: 70.2 s, 70.0 s, 70.5 s (about 217 bytes/s) |
+| 480223a | blink (32 bytes + reset vector), run after | ok, 1.4 s, LED1 blinks |
+
+Open: M3's 1000-run count, M1/M2/M4/M5 timing, and whether the re-entry recovery ever fired (status does not report it).
+
 ## 19. What waits
 
 - Gateware (`ice40/`): not touched. A slot engine (section 15) waits for the SWIM session's change to `swd_engine.v` and for M1/M4.
