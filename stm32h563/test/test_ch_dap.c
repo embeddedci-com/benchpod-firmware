@@ -83,7 +83,12 @@ static int g_trst_level = -1;
 int  fpga_la_set(unsigned ch, int mode) { (void)ch; g_trst_level = mode; return 0; }
 static unsigned g_trst_ch;
 void jtag_ll_set_trst_channel(unsigned ch) { g_trst_ch = ch; }
-int  jtag_ll_run(const uint8_t *seq, size_t len, uint8_t *tdo, size_t cap) { (void)seq; (void)len; memset(tdo, 0, cap); return 0; }
+static uint8_t g_jtdo[32];   /* what a JTAG scan captures: zeros unless a test sets a chain */
+int  jtag_ll_run(const uint8_t *seq, size_t len, uint8_t *tdo, size_t cap) {
+    (void)seq; (void)len; memset(tdo, 0, cap);
+    memcpy(tdo, g_jtdo, cap < sizeof(g_jtdo) ? cap : sizeof(g_jtdo));
+    return 0;
+}
 static gw_caps_t g_caps;
 const gw_caps_t *gw_caps(void) { return &g_caps; }
 static int g_image = 0;
@@ -99,6 +104,7 @@ bool require_bus_masters(int c, const char *feature) {
     if (g_bm_mode == 2) { g_image = 0; g_caps.jtag = g_caps.jtag_gw; }
     return true;
 }
+void swd_ll_reset(void) {}
 uint8_t swd_ll_transfer(uint8_t req, uint32_t *data) { (void)req; *data = 0; return SWD_ACK_OK; }
 void swd_ll_seq_out(const uint8_t *d, uint32_t nbits) { (void)d; (void)nbits; }
 uint16_t la_pins_mask_fn(la_fn_t fn) { (void)fn; return 0; }
@@ -112,6 +118,8 @@ bool la_claim_or_error(int c, la_fn_t fn, const uint8_t *las, size_t n, uint32_t
 bool require_la_voltage(int c) { (void)c; return true; }
 static char g_reply[256];
 void send_ok_str(int c, const char *p) { (void)c; snprintf(g_reply, sizeof(g_reply), "ok:%s", p); }
+static char g_large[640];
+void send_ok_large(int c, const char *p) { (void)c; snprintf(g_large, sizeof(g_large), "%s", p); snprintf(g_reply, sizeof(g_reply), "ok:large"); }
 static int g_ecode;   /* the code of the last coded refusal, 0 = a plain one */
 void send_error(int c, const char *m) { (void)c; g_ecode = 0; snprintf(g_reply, sizeof(g_reply), "err:%s", m); }
 void bp_error_send(int c, bp_errcode_t code, const bp_err_arg_t *args, size_t n) {
@@ -288,6 +296,44 @@ static void test_bus_masters(void) {
     g_bm_mode = 0; g_caps.jtag = true; g_image = 0;
 }
 
+/* "op":"id": one JSON object back, the pins released, the connection left in JSON. */
+static void test_id(void) {
+    dap_conn_closed(0);
+    g_proto[0] = PROTO_JSON; g_caps.jtag_gw = true; g_caps.jtag = true; g_image = 0;
+    g_disarms = 0; g_large[0] = 0;
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"id\",\"swclk\":11,\"swdio\":12,\"wait_ms\":50}");
+    CHECK(strcmp(g_reply, "ok:large") == 0, "reply %s", g_reply);
+    CHECK(strcmp(g_large, "{\"port\":\"swd\",\"found\":false}") == 0, "swd reply %s", g_large);
+    CHECK(g_proto[0] == PROTO_JSON && !g_armed && g_disarms == 1, "id left the engine armed or switched protocol");
+
+    /* both port sets: swd by default, "port":"jtag" picks the chain */
+    memset(g_jtdo, 0xFF, sizeof(g_jtdo));
+    g_jtdo[0] = 0x77; g_jtdo[1] = 0x04; g_jtdo[2] = 0xA0; g_jtdo[3] = 0x4B;   /* 0x4ba00477 */
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"id\",\"port\":\"jtag\",\"swclk\":11,\"swdio\":12,"
+                        "\"tck\":11,\"tms\":12,\"tdi\":9,\"tdo\":10}");
+    CHECK(strcmp(g_large, "{\"port\":\"jtag\",\"found\":true,\"idcodes\":[\"0x4ba00477\"]}") == 0, "jtag reply %s", g_large);
+    CHECK(!g_jarmed && !g_armed, "id left JTAG armed");
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"id\",\"swclk\":11,\"swdio\":12,\"tck\":11,\"tms\":12,\"tdi\":9,\"tdo\":10,\"wait_ms\":1}");
+    CHECK(strstr(g_large, "\"port\":\"swd\"") != NULL, "default port is swd: %s", g_large);
+    memset(g_jtdo, 0, sizeof(g_jtdo));
+
+    /* refusals use dap_start's own gates; bad requests arm nothing */
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"id\",\"swclk\":11}");
+    CHECK(strcmp(g_reply, "err:missing swdio") == 0, "reply %s", g_reply);
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"id\",\"swclk\":11,\"swdio\":12,\"read\":[1,2,3,4,5,6,7,8,9]}");
+    CHECK(strncmp(g_reply, "err:read takes", 14) == 0 && !g_armed, "nine reads: %s", g_reply);
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"bogus\",\"swclk\":11,\"swdio\":12}");
+    CHECK(strncmp(g_reply, "err:dap_start op", 16) == 0 && !g_armed, "bad op: %s", g_reply);
+    g_bm_mode = 1;
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"id\",\"swclk\":11,\"swdio\":12}");
+    CHECK(strncmp(g_reply, "err:", 4) == 0 && !g_armed, "bus-master gate: %s", g_reply);
+    g_bm_mode = 0;
+    /* op:"start" is the plain command */
+    handle_dap_start(0, "{\"cmd\":\"dap_start\",\"op\":\"start\",\"swclk\":11,\"swdio\":12}");
+    CHECK(strcmp(g_reply, "ok:\"dap ready\"") == 0 && g_proto[0] == PROTO_DAP, "op start: %s", g_reply);
+    dap_conn_closed(0);
+}
+
 int main(void) {
     test_start();
     test_bus_masters();
@@ -296,6 +342,7 @@ int main(void) {
     test_leave();
     test_stall();
     test_teardown_resets_reassembly();
+    test_id();
     if (fails) { printf("test_ch_dap: %d FAILED\n", fails); return 1; }
     printf("test_ch_dap: all passed\n");
     return 0;
