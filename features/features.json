@@ -4,7 +4,7 @@
   "revision": 21,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "8e3f8f0d0a449799c61e167c52b309c7aaf7b2818cbcb0ab87e15f2caa35a322",
+  "table_sha256": "89c0fa2f99831e707019a0c084c1b295e56270cdaec990c5e99b0db4c0b1877c",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -162,6 +162,11 @@
     },
     {
       "firmware": "4.0.5",
+      "gateware": 68,
+      "date": "2026-11-25"
+    },
+    {
+      "firmware": "4.0.6",
       "gateware": 68,
       "date": "2026-11-25"
     }
@@ -878,13 +883,13 @@
     },
     "dac_out_cal1": {
       "rev": 20,
-      "firmware": "next",
+      "firmware": "4.0.6",
       "board": "analog",
       "docs": "API.md#dac_out--route-an-output-path-and-set-a-calibrated-voltage"
     },
     "prog_named": {
       "rev": 21,
-      "firmware": "next",
+      "firmware": "4.0.6",
       "board": "any",
       "docs": "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
     }
