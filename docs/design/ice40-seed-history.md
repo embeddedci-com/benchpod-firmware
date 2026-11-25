@@ -427,3 +427,27 @@ largest. Local results on the pins (CI in brackets):
 | emu   | 26   | 68.40 (68.16) | 28.90 (29.17) | 11.92 (9.98)  | 4.39 (5.03) | 4418/5280 (84%) |
 
 The emulation image went from 98.5% LC (v63) and the fewest good seeds to the most.
+
+## v66
+
+The 19.2 MHz DAC SCLK: `dac8551_engine` puts out half pairs and the new `dac_pads` drives SCLK and
+DIN through DDR SB_IOs. Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10)
+and in CI's (yosys 0.65+7, run 45512812320). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 58/64 | 48/64 | 42 |
+| deep  | 49/64 | 39/64 | 28 |
+| emu   | 59/64 | 63/64 | 57 |
+
+Each pin is the seed whose worst relative margin over the four gates, in both toolchains, is the
+largest. Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns |
+|-------|------|-----------|---------|-----------------|-----------------|
+| loop  | 36   | 53.80 (55.87) | 28.82 (28.24) | 11.27 (12.57) | 9.31 (8.27) |
+| deep  | 17   | 57.20 (54.27) | 28.00 (28.96) | 13.16 (13.27) | 6.12 (5.58) |
+| emu   | 49   | 64.21 (62.05) | 29.30 (28.63) | 10.19 (10.62) | 5.68 (6.33) |
+
+A first v66 netlist (SCLK 2 halves high / 3 low, swept the same way) is superseded: the bench
+read its SCLK high at the 20 ns limit, and the final netlist has 3 halves high / 2 low.
