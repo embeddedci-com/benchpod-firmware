@@ -30,7 +30,7 @@ release firmware leaves them out.
 | Property | Value |
 |---|---|
 | Class | USB CDC-ACM (virtual serial port), interfaces 0-1 of a composite device |
-| USB VID/PID | `0x1209:0xEC10`, the pod's own ID from [pid.codes](https://pid.codes/1209/EC10/), from the next firmware release after 4.0.4 (`bcdDevice` `0x0405`). Firmware up to and including 4.0.x uses `0x0483:0x5740` (ST's stock CDC ID, `bcdDevice` `0x0390` from 3.9.0); pre-release 3.9.0 builds used `0x1209:0x0001`. The CLI, Python SDK and web app find the pod under both IDs from their next releases. The host's stock CDC-ACM driver binds |
+| USB VID/PID | `0x1209:0xEC10`, the pod's own ID from [pid.codes](https://pid.codes/1209/EC10/), from firmware 4.0.5 (`bcdDevice` `0x0405`). Firmware up to and including 4.0.x uses `0x0483:0x5740` (ST's stock CDC ID, `bcdDevice` `0x0390` from 3.9.0); pre-release 3.9.0 builds used `0x1209:0x0001`. The CLI (0.10.6 and later), Python SDK (4.0.5 and later) and web app find the pod under both IDs. The host's stock CDC-ACM driver binds |
 | USB strings | manufacturer `EmbeddedCI`, product `BenchPod`, serial = 12 hex digits from the MCU's unique ID (unchanged from older firmware) |
 | Line settings | `115200 8N1` |
 | Framing | Line-oriented; commands terminated with `\n` (or `\r`, or `\r\n`) |
@@ -82,7 +82,7 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 ### Windows with ST's VCP driver
 
 This section applies to firmware up to and including 4.0.x, which keeps ST's stock USB ID
-`0483:5740`. From the next firmware release after 4.0.4 the pod enumerates as `1209:EC10`, which
+`0483:5740`. From firmware 4.0.5 the pod enumerates as `1209:EC10`, which
 ST's driver does not claim, so Windows binds its in-box drivers without the steps below. On a
 Windows computer where ST's Virtual COM Port
 driver (`STMicroelectronics Virtual COM Port`, from ST's STSW-STM32102 package) was installed, that
@@ -435,7 +435,7 @@ port, err := serial.Open("/dev/cu.usbmodem1101", &serial.Mode{BaudRate: 115200})
 ```
 
 Discover the port by enumerating serial ports and matching USB VID `0x1209` and
-PID `0xEC10` (the next firmware release after 4.0.4 and later) or VID `0x0483` and PID `0x5740`
+PID `0xEC10` (firmware 4.0.5 and later) or VID `0x0483` and PID `0x5740`
 (firmware up to and including 4.0.x; pre-release 3.9.0 builds used `0x1209:0x0001`); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
 the platform path patterns in the table above. The UART bridge and the
 CMSIS-DAP probe are not on the console; use the USB network adapter, the LAN or the cloud for those

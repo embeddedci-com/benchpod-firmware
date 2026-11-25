@@ -4,7 +4,7 @@
   "revision": 19,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "93e64294cfb1dc22e86f3b6cd3eb8d8349539932f8a5c9d2861a9fa20dcbf1d3",
+  "table_sha256": "88508558dc76bfce00ebd54bfae2167c37796f40890cbfa56d567183812c3a08",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -159,6 +159,11 @@
       "firmware": "4.0.4",
       "gateware": 62,
       "date": "2026-11-23"
+    },
+    {
+      "firmware": "4.0.5",
+      "gateware": 68,
+      "date": "2026-11-25"
     }
   ],
   "features": {
@@ -860,14 +865,14 @@
     },
     "bus_masters_image": {
       "rev": 18,
-      "firmware": "next",
+      "firmware": "4.0.5",
       "gateware": 65,
       "board": "any",
       "docs": "API.md#fpga_image--switch-the-running-gateware-image"
     },
     "dap_id": {
       "rev": 19,
-      "firmware": "next",
+      "firmware": "4.0.5",
       "board": "any",
       "docs": "dap-over-tunnel.md#target-id-read"
     }

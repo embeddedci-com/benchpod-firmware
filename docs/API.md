@@ -4287,7 +4287,7 @@ them, so the clock sits next to a ground pin:
 
 A digital board and a module from different sides of that change do not work together: the DAC
 would get scrambled data. Nothing is damaged (both lines come from the digital board), and from
-the next firmware release on the pod refuses every command that drives the DAC with `BP0080` and
+firmware 4.0.0 on the pod refuses every command that drives the DAC with `BP0080` and
 sends the DAC nothing at all. Everything else (ADC, LA, relays, I2C) keeps working.
 `status.module.dac_pinout_ok` is `false` on such a pair. The module's revision comes from its
 EEPROM header: a module that was never programmed (`eeprom` `"blank"`), or whose header does not
@@ -4315,7 +4315,7 @@ because the firmware blocks the DAC frames themselves.
 | `present` | boolean | A module is plugged in now (`MOD_PRESENT#`, read live). |
 | `analog` | boolean | The module was found at boot and is the pod's analog front end. |
 | `power`, `bridge_power` | boolean | The module's 5 V rail and the USB-A bridge port rail are on. See [`module_power`](#module_power--module-and-bridge-port-power). |
-| `dac_pinout_ok` | boolean | `false` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0080`). Next firmware release. |
+| `dac_pinout_ok` | boolean | `false` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0080`). Firmware 4.0.0 and later. |
 | `eeprom` | string | The EEPROM header: `"ok"`, `"blank"` (never written), `"bad magic"`, `"bad crc"`, `"bad length"`, or `"none"` (no EEPROM answered, or no module at boot). |
 | `type`, `rev`, `serial` | string | With `eeprom` `"ok"`: the module type (`"analog"`), its hardware revision and serial number. |
 | `layout` | integer | The header's layout version (1). |
