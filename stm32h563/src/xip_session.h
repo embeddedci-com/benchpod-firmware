@@ -12,8 +12,10 @@
  *    XIP_BODGE_PB6=1 on a board with a wire to PB6). The controller maps the W25Q at 0x90000000 and
  *    the CPU runs the image in place. Indirect commands meanwhile go through xspi_guard, which
  *    unmaps and maps again around them.
- *  - ram: a dev build with XIP_RAM=1 links the image at a reserved RAM address instead; begin copies
- *    the slot there. Runs on any board: everything but the memory-mapped execution is the same.
+ *  - ram: a build with XIP_RAM=1 (the release default) links the images over the adc_pool (the
+ *    shared sample buffer, adc_pool.h) instead; begin takes the pool (XIP_ERR_POOL_BUSY while a
+ *    capture or upload uses it, and any kept trace is gone) and copies the slot there. Runs on any
+ *    board: everything but the memory-mapped execution is the same.
  *
  * begin(img) checks the image's slot length and SHA-256 against the image this firmware was linked
  * with (xip_image_expected_of()) over the bytes it is about to run, and the table's magic, ABI and
@@ -44,7 +46,7 @@ const char *xip_mode_name(xip_mode_t m);
 const char *xip_err_text(xip_err_t e);
 
 /* Start a session for image `img` (xip_image.h): XIP_ERR_ACTIVE while another session, of either
-   image, runs (they share the RAM region and the bus). Release with xip_session_end on every path. */
+   image, runs (they share the RAM region (the adc_pool) and the bus). Release with xip_session_end on every path. */
 xip_err_t xip_session_begin(xip_img_t img);
 xip_img_t xip_session_image(void);   /* the image of the running session (meaningful while active) */
 /* xip_err_text with the image's own slot named. */

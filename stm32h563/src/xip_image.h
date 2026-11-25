@@ -13,9 +13,12 @@
  * Memory-mapped (XIP_RAM=0, digital v3r4): OCTOSPI1 maps the W25Q at 0x90000000. The usb image runs
  * at 0x90201000 (slot "xip", W25Q 0x200000 + the 4 KB header) and the prog image at 0x90241000
  * (slot "xip_prog", W25Q 0x240000), each at its own address, no copy.
- * RAM (XIP_RAM=1, the release default): both images are linked at the SAME 20 KB RAM region (an
- * overlay); a session names the image it needs and begin copies that image's slot into the region.
- * Only one session runs at a time, so one region is enough, and each image must fit the region.
+ * RAM (XIP_RAM=1, the release default): both images are linked at the SAME RAM region (an
+ * overlay), the adc_pool (adc_pool.h: the 64 KB shared sample buffer, idle during a session; the
+ * Makefile's XIP_RAM_KB and the linker script's POOL/XIP/XIP_PROG regions). A session names the
+ * image it needs and begin copies that image's slot into the region (after
+ * adc_pool_overlay_begin() took the pool). Only one session runs at a time, so one region is
+ * enough, and each image must fit the region (up to 64 KB; the link asserts it).
  *
  * The post-link step (tools/xip_finish.py) extracts each image as build/blobs/blob-<slot>.bin,
  * installed like any blob, and patches its length and SHA-256 into the image's expected-hash
@@ -30,7 +33,7 @@
  *    another task or an ISR, outside the session); only the table holds XIP function addresses.
  *  - XIP objects (src/xip_mod_*.c, and the prog_<proto>.c files of the prog image) have no .data or
  *    .bss: their state lives in the session's context.
- *  - An image never refers to the other one (they share one RAM region in XIP_RAM=1 builds).
+ *  - An image never refers to the other one (they share one RAM region, the adc_pool, in XIP_RAM=1 builds).
  * XIP code may call internal functions freely: the linker adds long-branch veneers.
  * Internal code may hold the address of an XIP table and of the image's start; that is all.
  */
