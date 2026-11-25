@@ -194,6 +194,7 @@ C_SOURCES := \
   src/status_led_hw.c \
   src/current_out.c \
   src/wave16.c \
+  src/uart_clk.c \
   src/flash_compat.c \
   src/flash_layout.c \
   src/fw_info.c \
@@ -504,7 +505,8 @@ endif
 # RAM-resident flash copy code), so the RAM LOAD segment must be executable.
 LDFLAGS := $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) \
            -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref \
-           -Wl,--gc-sections -Wl,--print-memory-usage -Wl,--no-warn-rwx-segments -lc -lm
+           -Wl,--gc-sections -Wl,--print-memory-usage -Wl,--no-warn-rwx-segments \
+           -Wl,--wrap=HAL_RCCEx_GetPeriphCLKFreq -lc -lm
 
 #######################################
 # Build rules
