@@ -194,6 +194,7 @@ C_SOURCES := \
   src/status_led_hw.c \
   src/current_out.c \
   src/wave16.c \
+  src/uart_clk.c \
   src/flash_compat.c \
   src/flash_layout.c \
   src/fw_info.c \
@@ -464,6 +465,20 @@ DEFS      += -DBENCHPOD_SYSCLK_MHZ=$(EMI_SYSCLK)
 endif
 endif
 
+# Cold code at -Os (measured per file on 2026-11-25, release build, bytes saved): none of it runs on
+# a capture, DAC, LA, DAP, PSRAM or USB data path, and none is crypto (that stays -O2 for AES/SHA).
+# Setup, parsing and reporting code, run once per command, connection, upload or boot:
+#   console.c -1.0 KB, adc_cal.c -0.7, dac_limits.c -0.9 (calibration/limit records, per command)
+#   ota.c -1.4, wifi_bridge*.c -1.5, esp_wifi_ctrl.c -1.2, usb_check*.c -1.3 (update, bridge, test flows)
+#   lan_tls.c, lan_tls_pem.c -1.0 (certificate and session setup; the TLS records are mbedTLS)
+#   sensor_def_compile/expr/json.c -8.0 (compile at upload only; sensor_def_vm.c runs live: stays -O2)
+#   lwIP dhcp.c -2.1, mdns*.c, mdns_nsec*.c, net_dhcp.c, usb_dhcpd.c -2.0 (lease and name announcements)
+# Not here on purpose: scpi_server.c (paced reply send) and cloud_client.c (tunnel/WebSocket data).
+COLD_OS_OBJS := console adc_cal dac_limits ota wifi_bridge wifi_bridge_net wifi_bridge_ota \
+                esp_wifi_ctrl lan_tls lan_tls_pem usb_check usb_check_core \
+                sensor_def_compile sensor_def_expr sensor_def_json \
+                dhcp mdns mdns_out mdns_domain mdns_nsec mdns_nsec_lwip net_dhcp usb_dhcpd
+$(addprefix $(BUILD_DIR)/,$(addsuffix .o,$(COLD_OS_OBJS))): CFLAGS += -Os
 # -O2: measured on a v3r2 pod (2026-11-05, with the ICACHE on) AES-GCM 1.75x and SHA-256 1.2x
 # faster than -Og, a 1M-sample LAN ADC read-back 3.8 s -> 2.3 s, for 8 KB more flash.
 # ota_commit.c's RAM-resident code is guarded against -O2 turning loops into libcalls.
@@ -504,7 +519,8 @@ endif
 # RAM-resident flash copy code), so the RAM LOAD segment must be executable.
 LDFLAGS := $(MCU) -specs=nano.specs -specs=nosys.specs -T$(LDSCRIPT) \
            -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref \
-           -Wl,--gc-sections -Wl,--print-memory-usage -Wl,--no-warn-rwx-segments -lc -lm
+           -Wl,--gc-sections -Wl,--print-memory-usage -Wl,--no-warn-rwx-segments \
+           -Wl,--wrap=HAL_RCCEx_GetPeriphCLKFreq -lc -lm
 
 #######################################
 # Build rules

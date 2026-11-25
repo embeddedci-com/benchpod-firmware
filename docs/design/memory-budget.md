@@ -25,11 +25,22 @@ The `_min` / `_max` values are since boot. Read them after the workload you care
 
 | Region | Size | Use |
 |---|---|---|
-| Code (`.text` + `.rodata` + vectors) | 859,680 B of 896 KB (93.7%, 57,824 B left) in a release build; 871,800 B (95.0%) in a dev build | Firmware only. `0x08000000`-`0x080DFFFF`, cached by the ICACHE. |
+| Code (`.text` + `.rodata` + vectors) | 865,572 B of 896 KB (94.3%, 51,932 B left) in a release build (2026-11-25); 871,800 B (95.0%) in a dev build | Firmware only. `0x08000000`-`0x080DFFFF`, cached by the ICACHE. |
 | Persistence records | top 128 KB of the chip | Config, cloud config, identity, ADC calibration, DAC limits, pod policy, LAN TLS certificate, OTA self-test scratch. Not cached (MPU); `flash_compat` refuses writes anywhere else. |
 
 Measured 2026-11-19 on main `a594c0e` (firmware 3.10.13): the release build is
 `make -C ice40 release-images && make -C stm32h563 RELEASE=1`, the dev build `make -C stm32h563`.
+Measured 2026-11-25 on main `4b3d6cd` (firmware 4.0.6), "flash left" as the build prints it:
+895,820 of 917,504 B used (21,684 left, below the 24 KB floor) before, 865,572 B used (51,932 left)
+after three no-behavior-change steps:
+
+| Step | Flash left | Change |
+|---|---|---|
+| main `4b3d6cd` | 21,684 B | |
+| `wave16.c` uses `sd_sin` (the sensor engine's own sine) instead of libm `sin`: no double-precision libm in the image; 0 of 6e8 samples differ in the 16-bit codes | 26,644 B | +4,960 |
+| `-Wl,--wrap=HAL_RCCEx_GetPeriphCLKFreq` (`src/uart_clk.c`): the two HAL-initialized UARTs (USART2 console, USART1 C3 flasher) are on their PCLK kernel clock; drops the HAL clock-tree walker and `HAL_RCCEx_GetPLLxClockFreq` | 33,740 B | +7,096 |
+| Cold files at `-Os` (`COLD_OS_OBJS` in the Makefile: console, calibration/limits, OTA, Wi-Fi bridge, usb_check, LAN TLS setup, sensor compile/expr/json, lwIP dhcp and mDNS); `scpi_server.c`, `cloud_client.c` and everything on a data path stay `-O2` | 51,932 B | +18,192 |
+
 The 3.10.10 release build was 839,216 B: 20 KB more in three patch releases.
 The gateware images and the ESP32-C3 image are not in this region: they are blobs in the W25Q
 slots, which the firmware build stages in `build/blobs/` and an installer writes to the pod
