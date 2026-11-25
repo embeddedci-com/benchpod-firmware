@@ -30,7 +30,7 @@ release firmware leaves them out.
 | Property | Value |
 |---|---|
 | Class | USB CDC-ACM (virtual serial port), interfaces 0-1 of a composite device |
-| USB VID/PID | `0x0483:0x5740` (ST's stock CDC ID), before and from firmware 3.9.0; 3.9.0 reports `bcdDevice` `0x0390`. Pre-release 3.9.0 builds used `0x1209:0x0001`. The host's stock CDC-ACM driver binds |
+| USB VID/PID | `0x1209:0xEC10`, the pod's own ID from [pid.codes](https://pid.codes/1209/EC10/), from the next firmware release after 4.0.4 (`bcdDevice` `0x0405`). Firmware up to and including 4.0.x uses `0x0483:0x5740` (ST's stock CDC ID, `bcdDevice` `0x0390` from 3.9.0); pre-release 3.9.0 builds used `0x1209:0x0001`. The CLI, Python SDK and web app find the pod under both IDs from their next releases. The host's stock CDC-ACM driver binds |
 | USB strings | manufacturer `EmbeddedCI`, product `BenchPod`, serial = 12 hex digits from the MCU's unique ID (unchanged from older firmware) |
 | Line settings | `115200 8N1` |
 | Framing | Line-oriented; commands terminated with `\n` (or `\r`, or `\r\n`) |
@@ -81,14 +81,17 @@ update its driver in Device Manager and pick "UsbNcm Host Device".
 
 ### Windows with ST's VCP driver
 
-The pod keeps ST's stock USB ID `0483:5740`. On a Windows computer where ST's Virtual COM Port
+This section applies to firmware up to and including 4.0.x, which keeps ST's stock USB ID
+`0483:5740`. From the next firmware release after 4.0.4 the pod enumerates as `1209:EC10`, which
+ST's driver does not claim, so Windows binds its in-box drivers without the steps below. On a
+Windows computer where ST's Virtual COM Port
 driver (`STMicroelectronics Virtual COM Port`, from ST's STSW-STM32102 package) was installed, that
-driver can claim the whole device: the pod then shows up as one COM port and the USB network
+driver can claim the whole device of the older firmware: the pod then shows up as one COM port and the USB network
 adapter does not load (`benchpod status` over `usb` uses the console, the network commands say the
 USB network is not up). Windows 11 and 10 without that driver bind their in-box drivers: a "USB
 Serial Device (COMn)" and the "EmbeddedCI BenchPod network" adapter.
 
-To let Windows use its own drivers for the pod (this test has not been run on hardware yet):
+To let Windows use its own drivers for a pod on firmware up to 4.0.x (this test has not been run on hardware yet):
 
 1. Plug in the pod and open Device Manager.
 2. Under **Ports (COM & LPT)**, right-click **STMicroelectronics Virtual COM Port (COMn)** and
@@ -431,8 +434,9 @@ port, err := serial.Open("/dev/cu.usbmodem1101", &serial.Mode{BaudRate: 115200})
 // read lines until the "> " prompt, then look for "device : benchpod".
 ```
 
-Discover the port by enumerating serial ports and matching USB VID `0x0483` and
-PID `0x5740` (every STM32 firmware; pre-release 3.9.0 builds used `0x1209:0x0001`); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
+Discover the port by enumerating serial ports and matching USB VID `0x1209` and
+PID `0xEC10` (the next firmware release after 4.0.4 and later) or VID `0x0483` and PID `0x5740`
+(firmware up to and including 4.0.x; pre-release 3.9.0 builds used `0x1209:0x0001`); `enumerator.GetDetailedPortsList()` exposes the VID/PID. Or match
 the platform path patterns in the table above. The UART bridge and the
 CMSIS-DAP probe are not on the console; use the USB network adapter, the LAN or the cloud for those
 (`uart_proxy_start`, `dap_start` in [API.md](API.md)).
