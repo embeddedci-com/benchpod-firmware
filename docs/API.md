@@ -3408,7 +3408,11 @@ first`, `len is more than the staged upload`, `BP0047` (`pod_busy`, also while a
 ## ESP32 targets (flash over the UART ROM bootloader)
 
 `esp_flash` writes an image into an ESP32-family target's flash through the chip's own ROM
-bootloader, the way `esptool` does, with no USB cable to the target. ESP32, ESP32-S2, S3, C2, C3,
+bootloader, the way `esptool` does, with no USB cable to the target. The ROM-loader protocol runs
+from the pod's W25Q (the `xip` blob of the running firmware, see [`xip`](#xip--code-that-runs-from-the-w25q)),
+so `start` and `sync` need it: with the `xip` slot empty or from another build they are refused with
+BP0083 (install the blobs, `benchpod install-blobs`) and no pin is touched. The job holds that image
+until it ends, so while it runs `usb_flash` and `prog_flash` answer busy too. ESP32, ESP32-S2, S3, C2, C3,
 C6 and H2; the ESP8266 is refused. Firmware 3.10.7 and later. Wiring, at 3.3 V:
 
 | Target | Pod |
@@ -3466,7 +3470,9 @@ failure: `no answer from the ROM loader` (wiring, straps, or the target is not p
 (ESP8266)`, `aborted`.
 
 Errors at `start`: `nothing staged: load_bin with "psram":true first`, `len is more than the
-staged upload`, `BP0047` (`pod_busy`, also while an ESP32 flash runs), `BP0049` (a UART
+staged upload`, `BP0047` (`pod_busy`, also while an ESP32 flash runs), `BP0083` (the `xip` blob is
+missing or from another build, or a USB flash, a pin programmer or a capture holds the W25Q code
+right now: `why` says which), `BP0049` (a UART
 session is open), `BP0031` (a pin conflict), `this pod has no reset pin: wire EN to an LA pin and pass en`.
 
 ## I2C master
@@ -4785,6 +4791,7 @@ Refusals:
 | `ota_commit` before a successful `ota_end` | `"no verified image staged"` |
 | Any `ota_*` that would change the session while an `esp` image is written into the C3 | `BP0048` (`storage_bus_busy`) |
 | `esp` on a board without the ESP32-C3 | `"this BenchPod has no ESP32-C3: it takes no esp image"` |
+| `ota_commit` of `esp` while the `xip` slot is empty or from another build (the ROM-loader code that writes the C3 runs from it) | `"install the xip blob first (benchpod install-blobs)"`; the C3 is not touched. Install `xip` before `esp` (`install-blobs` does) |
 | `ota_selftest` while the hardware is busy | `BP0047` (`pod_busy`); a failed test is `"ota selftest failed (see console log)"` |
 
 ### `blob_status` — what the W25Q slots hold
@@ -4942,7 +4949,7 @@ state.
 | `done`, `total` | Sectors (`uf2`, `file`), blocks (`dfu`, `teensy`, `esp`), steps (`picoboot`: sectors erased, then pages written, then pages read back) or bytes (`avr`, `samd`: written, then verified) of all. |
 | `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12, FAT16, FAT32 or exFAT file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error (for `picoboot` with its status code), the board is not a Teensy in its loader, the board is not an RP2040 or RP2350 in BOOTSEL, a page read back different from what was written, no bootloader answered on the serial port, what the board holds is not the image, the image would overwrite the bootloader, ...). |
 
-The pod keeps `usb_host` on while a flash runs. The flash logic of every mode but `esp` runs from
+The pod keeps `usb_host` on while a flash runs. The flash logic of every mode, `esp` included, runs from
 the pod's W25Q (`xip`), so it needs the `xip` blob of the running firmware; `esp` uses the same
 flasher as `esp_flash`, and is refused while another ESP32 flash runs. Refusals: BP0084 (`usb_flash_refused`, arg
 `why`: host mode off, no drive mounted, device or serial port attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
@@ -4976,7 +4983,9 @@ Firmware 4.0.3 and later (feature `usb_check`). The pod hosts the board on its U
 ([`usb_host`](#usb_host--usb-host-mode)) and, with the board's USB power (VBUS) wired to target-power
 eFuse 1 (the internal 5 V rail, `target_power` eFuse 1, switched on), it can measure what a computer
 cannot. A check runs in the background; poll `usb_check` for its state and result. Only one check
-runs at a time, and `usb_flash` is refused while one runs (and the other way round).
+runs at a time, and `usb_flash` is refused while one runs (and the other way round). The check's
+steps run from the pod's W25Q (the `xip` blob of the running firmware) and the check holds that
+image for as long as it runs: captures, DAC playback, uploads and updates answer BP0048 meanwhile.
 
 ```json
 {"cmd": "usb_check", "test": "enumerate", "count": 10, "off_ms": 500}
@@ -5049,17 +5058,20 @@ the bus is resumed at the end of every check. eFuse 1 is put back on if the chec
 
 Refusals: BP0087 (`usb_check_refused`, arg `why`: bad argument, host mode off, no board enumerated,
 a USB flash, another check or a power profile running), BP0088 (`usb_check_no_efuse_power`: eFuse 1
-is off, for every test but `reset`).
+is off, for every test but `reset`), BP0083 (`xip_unavailable`: the `xip` blob is missing or from
+another build; install the blobs).
 
 ### `xip` — code that runs from the W25Q
 
 Some rarely used code runs straight from the pod's W25Q flash instead of the MCU's own flash. There
 are two images, each a blob made by the same build as the firmware and installed with the other
 blobs (the pod runs only the ones built with its firmware): `xip` (`blob-xip.bin`), the USB flash
-protocols, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash` pin programmers and the compiler of
-`sensor_define` (a session of a few tens of milliseconds per definition). Only one runs at
-a time (a `usb_flash` or a `prog_flash` job holds its image until it ends; the other waits; a
-`sensor_define` meanwhile answers busy).
+protocols, the ESP32 ROM-loader protocol (`esp_flash`, `usb_flash` mode `esp`, and the pod's own
+ESP32-C3 flash) and the `usb_check` steps, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash`
+pin programmers and the compiler of `sensor_define` (a session of a few tens of milliseconds per
+definition). Only one runs at a time (a `usb_flash`, `usb_check`, `esp_flash`, C3 flash or
+`prog_flash` job holds its image until it ends; the other waits; a `sensor_define` meanwhile
+answers busy).
 While one runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
 are refused with BP0048 until it ends. Release builds copy the running image into one shared RAM
 region of the pod, so the two images together cost no more RAM than one.
