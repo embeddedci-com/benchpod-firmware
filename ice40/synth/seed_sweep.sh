@@ -13,24 +13,32 @@
 #
 #   synth/seed_sweep.sh <image.json> [first last [jobs]]
 #
+# The seeds run in a rolling pool (a new seed starts as soon as one finishes).  CI splits a sweep
+# into chunks on parallel runners: RAW=1 prints only the header comment and the unsorted result
+# lines of a chunk, and `synth/seed_sweep.sh --merge first last <raw file>...` turns the raw files
+# of all chunks into the one table above (header, sorted rows, ok count).
+#
 # Run it on the FINAL netlist (after the GATEWARE_VERSION bump, which re-rolls placement), in each
 # toolchain that builds the image (make -C ice40 seed-sweep; CI: the ice40-seed-sweep workflow).
 # Same nextpnr flags as the Makefile's pnr macro, so a seed's result here is its result there.
 set -eu
-json=$1
-first=${2:-1}
-last=${3:-24}
-jobs=${4:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
-min48=${MIN_CLK48_MHZ:-50}
-minclk=${MIN_CLK_MHZ:-25.5}
-max48=${MAX_X48_NS:-15}
-max24=${MAX_X24_NS:-15}
-cd "$(dirname "$0")/.."
-out=$(mktemp -d "${TMPDIR:-/tmp}/seed_sweep.XXXXXX")
-trap 'rm -rf "$out"' EXIT
+self=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
 
-one() {
-  s=$1
+if [ "${1:-}" = --merge ]; then
+  first=$2
+  last=$3
+  shift 3
+  grep -h '^#' "$@" | head -n 1 | sed -E "s/seeds [0-9]+\.\.[0-9]+/seeds $first..$last/"
+  echo "seed result clk48_MHz clk_MHz x48_ns x24_ns"
+  grep -hv '^#' "$@" | sort -k3,3 -g -r
+  echo "# ok (pass every gate): $(grep -hv '^#' "$@" | awk '$2=="ok"' | wc -l | tr -d ' ') of $((last - first + 1))"
+  exit 0
+fi
+
+if [ "${1:-}" = --one ]; then
+  # one seed, run by the pool below: json, limits and the output dir come from its environment
+  json=$SWEEP_JSON out=$SWEEP_OUT min48=$MIN_CLK48_MHZ minclk=$MIN_CLK_MHZ max48=$MAX_X48_NS max24=$MAX_X24_NS
+  s=$2
   log=$out/$s.log
   if nextpnr-ice40 --up5k --package sg48 --pcf vbench_pod.pcf --pcf-allow-unconstrained \
        --pre-pack clocks.py --threads 1 --seed "$s" --json "$json" --asc "$out/$s.asc" \
@@ -50,20 +58,30 @@ one() {
   fi
   printf '%s %s %s %s %s %s\n' "$s" "$r" "${f48:--}" "${fclk:--}" "${x48:--}" "${x24:--}" >"$out/$s.res"
   rm -f "$out/$s.asc"
-}
+  exit 0
+fi
 
-# plain sh job pool: at most $jobs nextpnr runs at a time
-running=0
-s=$first
-while [ "$s" -le "$last" ]; do
-  one "$s" &
-  running=$((running + 1))
-  if [ "$running" -ge "$jobs" ]; then wait; running=0; fi
-  s=$((s + 1))
-done
-wait
+json=$1
+first=${2:-1}
+last=${3:-24}
+jobs=${4:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}
+export MIN_CLK48_MHZ=${MIN_CLK48_MHZ:-50}
+export MIN_CLK_MHZ=${MIN_CLK_MHZ:-25.5}
+export MAX_X48_NS=${MAX_X48_NS:-15}
+export MAX_X24_NS=${MAX_X24_NS:-15}
+cd "$(dirname "$0")/.."
+out=$(mktemp -d "${TMPDIR:-/tmp}/seed_sweep.XXXXXX")
+trap 'rm -rf "$out"' EXIT
+export SWEEP_JSON=$json SWEEP_OUT=$out
 
-echo "# $json: seeds $first..$last, MIN_CLK48_MHZ=$min48 MIN_CLK_MHZ=$minclk MAX_X48_NS=$max48 MAX_X24_NS=$max24 ($(yosys -V 2>/dev/null | cut -d' ' -f1-2))"
+# rolling pool: at most $jobs nextpnr runs at a time, a new seed starts as soon as one finishes
+seq "$first" "$last" | xargs -P "$jobs" -I{} sh "$self" --one {}
+
+echo "# $json: seeds $first..$last, MIN_CLK48_MHZ=$MIN_CLK48_MHZ MIN_CLK_MHZ=$MIN_CLK_MHZ MAX_X48_NS=$MAX_X48_NS MAX_X24_NS=$MAX_X24_NS ($(yosys -V 2>/dev/null | cut -d' ' -f1-2))"
+if [ -n "${RAW:-}" ]; then
+  cat "$out"/*.res
+  exit 0
+fi
 echo "seed result clk48_MHz clk_MHz x48_ns x24_ns"
 cat "$out"/*.res | sort -k3,3 -g -r
 echo "# ok (pass every gate): $(cat "$out"/*.res | awk '$2=="ok"' | wc -l | tr -d ' ') of $((last - first + 1))"

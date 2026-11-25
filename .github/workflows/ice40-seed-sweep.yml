@@ -4,6 +4,12 @@
 # branch and pin seeds that are good in both toolchains (ice40/Makefile, SEED_LOOP / SEED_DEEP / SEED_EMU):
 #
 #   gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=32
+#
+# The seeds are split into chunks that run in parallel on separate runners (loop 4, deep 2, emu 4:
+# since the v65 emu split, loop seeds take the longest), each chunk with a rolling pool of jobs
+# (seed_sweep.sh).  The summary job merges the chunks into one table per image (step summary and the sweep-<image> artifact, the
+# same format as `make -C ice40 seed-sweep`).  The synthesized netlist of each image is the
+# json-<image> artifact, to reproduce a seed locally.
 name: iCE40 seed sweep
 
 on:
@@ -20,13 +26,56 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      first: ${{ steps.plan.outputs.first }}
+      last: ${{ steps.plan.outputs.last }}
+    steps:
+      # The inputs reach the shell through env, never pasted into the script, and must be numbers.
+      - name: Plan chunks
+        id: plan
+        env:
+          FIRST: ${{ inputs.first }}
+          LAST: ${{ inputs.last }}
+        run: |
+          case "$FIRST$LAST" in *[!0-9]*) echo "::error::first and last must be numbers"; exit 1 ;; esac
+          [ -n "$FIRST" ] && [ -n "$LAST" ] || { echo "::error::first and last must be numbers"; exit 1; }
+          [ "${#FIRST}" -le 9 ] && [ "${#LAST}" -le 9 ] || { echo "::error::first and last are too large"; exit 1; }
+          first=$((10#$FIRST))
+          last=$((10#$LAST))
+          [ "$first" -le "$last" ] || { echo "::error::first must not exceed last"; exit 1; }
+          # Even chunks per image (the first chunks get the extra seeds); empty chunks are skipped.
+          # json=true marks the one chunk per image that uploads the synthesized netlist.
+          matrix=$(awk -v f="$first" -v l="$last" 'BEGIN {
+            n = l - f + 1
+            split("loop:4 deep:2 emu:4", spec, " ")
+            printf "{\"include\":["
+            sep = ""
+            for (i = 1; i <= 3; i++) {
+              split(spec[i], a, ":")
+              c = a[2]; b = int(n / c); r = n % c; s = f; up = "true"
+              for (k = 0; k < c; k++) {
+                sz = b + (k < r ? 1 : 0)
+                if (sz == 0) continue
+                printf "%s{\"image\":\"%s\",\"chunk\":%d,\"first\":%d,\"last\":%d,\"json\":%s}", sep, a[1], k + 1, s, s + sz - 1, up
+                sep = ","; up = "false"; s += sz
+              }
+            }
+            printf "]}"
+          }')
+          echo "$matrix"
+          { echo "matrix=$matrix"; echo "first=$first"; echo "last=$last"; } >> "$GITHUB_OUTPUT"
+
   sweep:
+    needs: plan
     # Pinned to ubuntu-24.04: ubuntu-latest moves to Ubuntu 26 from 2026-10-19. Unpin once 26.04 is verified.
     runs-on: ubuntu-24.04
+    name: sweep ${{ matrix.image }} ${{ matrix.first }}..${{ matrix.last }}
     strategy:
       fail-fast: false
-      matrix:
-        image: [loop, deep, emu]
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: YosysHQ/setup-oss-cad-suite@c7845bc0d335c8076aa22047e85972caa8a916df # v4.1.0
@@ -37,20 +86,62 @@ jobs:
           version: '2026-05-13'   # keep in step with test.yml
       - name: Synthesize
         run: make -C ice40 bench_pod_fpga_vbench_pod_${{ matrix.image }}.json
-      # The inputs reach the shell through env, never pasted into the script, and must be numbers.
       - name: Sweep
         env:
-          FIRST: ${{ inputs.first }}
-          LAST: ${{ inputs.last }}
+          FIRST: ${{ matrix.first }}
+          LAST: ${{ matrix.last }}
         run: |
-          case "$FIRST$LAST" in *[!0-9]*) echo "::error::first and last must be numbers"; exit 1 ;; esac
-          [ -n "$FIRST" ] && [ -n "$LAST" ] || { echo "::error::first and last must be numbers"; exit 1; }
-          sh ice40/synth/seed_sweep.sh bench_pod_fpga_vbench_pod_${{ matrix.image }}.json \
-            "$FIRST" "$LAST" | tee sweep.txt
-          { echo '### ${{ matrix.image }}'; echo '```'; cat sweep.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          RAW=1 sh ice40/synth/seed_sweep.sh bench_pod_fpga_vbench_pod_${{ matrix.image }}.json \
+            "$FIRST" "$LAST" | tee raw.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: sweep-${{ matrix.image }}
-          path: |
-            sweep.txt
-            ice40/bench_pod_fpga_vbench_pod_${{ matrix.image }}.json
+          name: chunk-${{ matrix.image }}-${{ matrix.chunk }}
+          path: raw.txt
+      - if: matrix.json
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: json-${{ matrix.image }}
+          path: ice40/bench_pod_fpga_vbench_pod_${{ matrix.image }}.json
+
+  summary:
+    needs: [plan, sweep]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: chunk-*
+      - name: Merge chunks
+        env:
+          FIRST: ${{ needs.plan.outputs.first }}
+          LAST: ${{ needs.plan.outputs.last }}
+        run: |
+          status=0
+          for image in loop deep emu; do
+            set -- chunk-$image-*/raw.txt
+            [ -f "$1" ] || { echo "::error::no results for $image"; status=1; continue; }
+            sh ice40/synth/seed_sweep.sh --merge "$FIRST" "$LAST" "$@" > "sweep-$image.txt"
+            { echo "### $image"; echo '```'; cat "sweep-$image.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            rows=$(grep -vc '^#\|^seed ' "sweep-$image.txt" || true)
+            [ "$rows" -eq $((LAST - FIRST + 1)) ] || { echo "::error::$image has $rows of $((LAST - FIRST + 1)) seeds"; status=1; }
+          done
+          exit $status
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sweep-loop
+          path: sweep-loop.txt
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sweep-deep
+          path: sweep-deep.txt
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: sweep-emu
+          path: sweep-emu.txt
+          if-no-files-found: ignore
