@@ -51,7 +51,7 @@ static void feed_now(wire_t *w_)
         size_t got = 0;
         bool   exit_json = false, quit = false;
         size_t room = SAMPLES_MAX - w->nsamples;
-        size_t used = fpga_swd_feed(w->feed + off, w->nfeed - off, rep, room, &got, &exit_json, &quit);
+        size_t used = fpga_swd_feed_exact(w->feed + off, w->nfeed - off, rep, room, &got, &exit_json, &quit);
         for (size_t i = 0; i < got && w->nsamples < SAMPLES_MAX; i++)
             w->samples[w->nsamples++] = (rep[i] == '1') ? 1u : 0u;
         off += used;

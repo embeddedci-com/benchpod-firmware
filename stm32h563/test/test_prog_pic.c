@@ -293,8 +293,8 @@ static void fall(chip_t *c, int bit) {
         if (c->set8) c->sh = (c->sh << 1) | (uint32_t)bit; else c->sh |= (uint32_t)bit << c->k;
         if (++c->k == c->plen) { exec(c, c->sh >> 1); c->st = S_CMD; c->k = 0; c->sh = 0; }
     } else {
-        c->out = -1;
-        if (++c->k == c->plen) { c->st = S_CMD; c->k = 0; c->sh = 0; }
+        /* the chip holds its bit until the next rising edge; it lets go after the last one */
+        if (++c->k == c->plen) { c->out = -1; c->st = S_CMD; c->k = 0; c->sh = 0; }
     }
 }
 
