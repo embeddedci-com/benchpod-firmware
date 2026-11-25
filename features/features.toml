@@ -223,6 +223,11 @@ firmware = "4.0.5"
 gateware = 68
 date = "2026-11-25"
 
+[[releases]]
+firmware = "4.0.6"
+gateware = 68
+date = "2026-11-25"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -1016,7 +1021,7 @@ note = "dap_start with \"op\":\"id\" reads the IDs of the chip on the wire and a
 
 [features.dac_out_cal1]
 rev = 20
-firmware = "next"
+firmware = "4.0.6"
 board = "analog"
 dated = "code"
 docs = "API.md#dac_out--route-an-output-path-and-set-a-calibrated-voltage"
@@ -1024,7 +1029,7 @@ note = "dac_out and generate take path cal1: the level is set on the 5 V stage r
 
 [features.prog_named]
 rev = 21
-firmware = "next"
+firmware = "4.0.6"
 dated = "code"
 docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
 note = "prog_flash takes the chip's protocol options as named fields (updi flash_base; pic cmd_set, pc, ee_erase, cp_high, q10, id_split, key_flip, cp_bit; tpi write_words, page_erase; c2 fpdat, no_setup) instead of the packed flags integer, which is still accepted but not together with a named field."
