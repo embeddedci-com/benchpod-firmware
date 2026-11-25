@@ -160,6 +160,7 @@ static inline bool busy_read(void)
 #include "blob_store.h"
 #include "dac_link.h"      /* the flat cable's DAC pinout: no DAC frames on a mismatched pair */
 #include "module_link.h"
+#include "cloud_client.h"   /* caps resend after restoring an image */
 #include "ice40_switch.h"   /* skip a switch to the running image; switch counters */
 
 /* spi_cmd_write refused a DAC command: the boards disagree on the DAC pinout (dac_link.h). */
@@ -1012,59 +1013,66 @@ void signal_engine_gateware_update(void) {
     uint8_t embedded = ice40_embedded_gw_version();
     int kind = signal_engine_image_kind();
     if (kind < 0) kind = 0;
-    /* The identity of the running kind's slot against the recorded image (cached, no bus access):
-       a new image of the same version is written too, not only a new version. */
-    blob_id_t kslot = (blob_id_t)ice40_image_slot((kind == 1 || kind == 2) ? kind : 0);
-    const blob_info_t *kin = blob_store_info(kslot);
-    gw_ident_match_t ident = gw_ident_match(ice40_ident(), blob_state(kslot) == BLOB_STATE_OK,
-                                            (uint16_t)kslot, kin->len, kin->sha256);
-    int img = -1;
-    gw_action_t act = boot_policy_gateware_action(running, embedded, kind, configured, ident, &img);
-    if (act == GW_ACT_NONE) return;
-    if (act == GW_ACT_COMPARE) {
-        /* No record yet (the first boot with this check): read-compare once, record when equal.
-           Only a differing image is written, so the flash is not rewritten on every pod. */
-        const int same = ice40_image_matches_slot(img);
-        sleep_ms(5);
-        signal_engine_refresh_version();   /* the compare reconfigured the iCE40 from its flash */
-        if (same == 1) {
-            LOG_I("[fpga] gateware v%u is image %d from slot %s: recorded\n", (unsigned)running, img,
-                  blob_name(kslot));
-            return;
-        }
-        if (same < 0) {
-            LOG_W("[fpga] could not compare the iCE40's image with slot %s: left as it is\n", blob_name(kslot));
-            return;
-        }
-        /* differs: write it below */
-    }
-    blob_id_t slot = (blob_id_t)ice40_image_slot(img);
-    if (blob_state(slot) != BLOB_STATE_OK) {
-        if (!configured)
-            LOG_W("[fpga] the iCE40 is not configured (blank config flash?) and slot %s does not "
-                  "hold its gateware (%s): install the gateware blobs\n",
-                  blob_name(slot), blob_state_str(blob_state(slot)));
-        else
-            LOG_W("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
-                  "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
-                  blob_name(slot), blob_state_str(blob_state(slot)));
-        return;
-    }
-    if (!configured)
-        LOG_W("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
-    else if (running == embedded)
-        LOG_I("[fpga] gateware v%u, but slot %s holds another image of it (a new build): "
-              "reprogramming image %d...\n", (unsigned)running, blob_name(slot), img);
-    else
-        LOG_I("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
-              (unsigned)running, (unsigned)embedded, img);
-    if (ice40_reflash_image(img) == 0) {
+    /* Offset 0 (what the iCE40 powers up with) always holds the loop image from 4.0.6 on: compare
+       its record with slot gw0, whatever kind runs (boot_policy_gateware_plan). */
+    const blob_info_t *g0 = blob_store_info(BLOB_GW0);
+    gw_ident_match_t ident = gw_ident_match(ice40_ident(), blob_state(BLOB_GW0) == BLOB_STATE_OK,
+                                            (uint16_t)BLOB_GW0, g0->len, g0->sha256);
+    gw_plan_t plan = boot_policy_gateware_plan(running, embedded, kind, configured, ident);
+    if (plan.boot == GW_ACT_COMPARE) {
+        /* No record yet: read-compare once, record when equal. The compare reconfigures the iCE40
+           from offset 0, so plan.load brings back a deep or emulation image. */
+        const int same = ice40_image_matches_slot(0);
         sleep_ms(5);
         signal_engine_refresh_version();
-        psram_boot_selftest();
-        LOG_I("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
-    } else {
-        LOG_E("[fpga] gateware update failed, run flash-ice40 on the console\n");
+        if (same == 1) {
+            LOG_I("[fpga] the iCE40 boots gateware v%u, image 0 from slot gw0: recorded\n",
+                  (unsigned)signal_engine_fpga_version());
+            plan.boot = GW_ACT_NONE;
+        } else if (same < 0) {
+            LOG_W("[fpga] could not compare the iCE40's boot image with slot gw0: left as it is\n");
+            plan.boot = GW_ACT_NONE;
+        } else {
+            plan.boot = GW_ACT_WRITE;
+        }
+    }
+    if (plan.boot == GW_ACT_WRITE) {
+        if (blob_state(BLOB_GW0) != BLOB_STATE_OK) {
+            if (!configured)
+                LOG_W("[fpga] the iCE40 is not configured (blank config flash?) and slot gw0 does not "
+                      "hold its gateware (%s): install the gateware blobs\n", blob_state_str(blob_state(BLOB_GW0)));
+            else
+                LOG_W("[fpga] slot gw0 does not hold this firmware's gateware v%u (%s): install the "
+                      "gateware blobs\n", (unsigned)embedded, blob_state_str(blob_state(BLOB_GW0)));
+            return;
+        }
+        if (!configured)
+            LOG_W("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
+        else
+            LOG_I("[fpga] the iCE40's boot image is not slot gw0 (gateware v%u, this firmware is built "
+                  "for v%u): writing image 0...\n", (unsigned)running, (unsigned)embedded);
+        if (ice40_reflash_image(0) == 0) {
+            sleep_ms(5);
+            signal_engine_refresh_version();
+            psram_boot_selftest();
+            LOG_I("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
+        } else {
+            LOG_E("[fpga] gateware update failed, run flash-ice40 on the console\n");
+            return;
+        }
+    }
+    if (plan.load >= 0) {
+        blob_id_t slot = (blob_id_t)ice40_image_slot(plan.load);
+        if (blob_state(slot) != BLOB_STATE_OK) {
+            LOG_W("[fpga] image %d: slot %s does not hold this firmware's gateware v%u (%s): install "
+                  "the gateware blobs\n", plan.load, blob_name(slot), (unsigned)embedded,
+                  blob_state_str(blob_state(slot)));
+            return;
+        }
+        LOG_I("[fpga] loading image %d from slot %s (no flash write)\n", plan.load, blob_name(slot));
+        const int rc = fpga_warmboot_ex((uint8_t)plan.load, true, NULL);
+        LOG_I("[fpga] image %d: %s, gateware v%u\n", plan.load, rc == 0 ? "loaded" : "load failed",
+              (unsigned)signal_engine_fpga_version());
     }
 }
 
@@ -1822,13 +1830,11 @@ void signal_engine_caps(signal_engine_caps_t *out) {
     out->uart_frame      = g.uart_frame;
 }
 
-/* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
-   SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI pins are the
-   shared PSRAM bus, so the reconfig can't read the flash — confirmed: even a warmboot to
-   the running image fails while it cold-boots fine).  So we reprogram the config flash with
-   the selected image over the PROVEN ice40_flash_program + CRESET-reconfig path (~2 s), then
-   re-read version + features.  The gateware SB_WARMBOOT infra stays in the tree for a future
-   board where the config flash isn't on the runtime bus. */
+/* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay, 2 = emulation).
+   SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI pins are the shared
+   PSRAM bus). Up to 4.0.5 a switch rewrote offset 0 of the config flash and CRESET the iCE40
+   (27 sector erases, ~2.4 s); from 4.0.6 it loads the image from its slot in SPI slave mode
+   (ice40_load_image, ~80 ms, no write) and keeps the flash write as the fallback. */
 /* Bring the gateware's PSRAM masters to a safe, IDLE boundary BEFORE an image swap grabs the
    shared bus.  ice40_reflash_image() acquires the bus (psram_reset_to_spi -> psram_bus_acquire,
    PG0/bus_own high) and RESETS the PSRAM to re-enter QPI.  The gw v26/v28 reset-gating keeps the
@@ -1869,6 +1875,8 @@ void signal_engine_quiesce_psram_masters(void) {
 /* The running image from a LIVE FPGA_FEATURES read: -1 when the iCE40 does not answer it (the
    cached value could predate a reconfigure, so it never proves anything here). */
 static int fpga_warmboot_load(uint8_t image);
+/* The image the last switch loaded (RAM: a restart starts on loop, offset 0). */
+static int s_wanted_image = 0;
 static int running_image_live(void) {
     if (s_fpga_version == 0 || !gw_caps()->capture_bases) return -1;
     uint8_t f = 0;
@@ -1888,34 +1896,68 @@ int fpga_warmboot_ex(uint8_t image, bool force, bool *skipped) {
                                     signal_engine_psram_operable(),
                                     embedded == 0 || s_fpga_version == embedded, false) == ICE40_SW_SKIP) {
         ice40_switch_note_skip();
+        s_wanted_image = image;
         if (skipped) *skipped = true;
         LOG_D("[sig] image %u already runs: not reloaded\n", image);
         return 0;
     }
     if (!blob_store_present((blob_id_t)ice40_image_slot(image))) return -2;
     ice40_switch_note_switch();
+    const uint64_t t0 = time_us_64();
     int rc = fpga_warmboot_load(image);
+    ice40_switch_note_time_ms((uint32_t)((time_us_64() - t0) / 1000u));
     if (rc != 0) ice40_switch_note_failed();
     return rc;
+}
+
+int signal_engine_wanted_image(void) { return s_wanted_image; }
+
+/* After a reload from the config flash (recovery: hw_worker), the iCE40 runs the loop image that
+   offset 0 holds. Load the image the pod was switched to again (from its slot, no write). */
+void signal_engine_restore_wanted_image(void) {
+    if (s_wanted_image <= 0) return;
+    int kind = running_image_live();
+    if (kind == s_wanted_image) return;
+    LOG_W("[sig] the iCE40 was reloaded: loading image %d again\n", s_wanted_image);
+    if (fpga_warmboot((uint8_t)s_wanted_image) == 0) cloud_client_request_caps_resend();
+}
+
+/* Put the loop image back after a failed switch, so the pod keeps working: from its slot
+   (no write) or, failing that, written to the config flash. */
+static void recover_to_loop(void) {
+    if (ice40_load_image(0) == 0) ice40_switch_note_slave(true);
+    else { ice40_switch_note_slave(false); (void)ice40_reflash_image(0); }
+    s_wanted_image = 0;
+    sleep_ms(5);
+    if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) s_fpga_version = 0;
+    s_fpga_features = signal_engine_fpga_features();
 }
 
 static int fpga_warmboot_load(uint8_t image) {
     /* Quiesce the running gateware so the swap takes the bus at a safe (masters-idle) boundary —
        this is what makes the swap robust under load instead of wedging the PSRAM (see the helper). */
     signal_engine_quiesce_psram_masters();
-    if (ice40_reflash_image((int)image) != 0) {
-        /* A failed reflash leaves the iCE40 held in reset with no whole image in its config
-           flash.  Retry once; failing that, put the loop image back so the pod keeps working. */
-        LOG_E("[sig] image switch: reflash failed, retrying\n");
+    /* SPI slave load straight from the slot: no erase, no write (ice40_flash.h). Retried once.
+       Failing that, the old way: write the image to offset 0 of the config flash and let the iCE40
+       boot it (27 sector erases), also retried once. The next restart puts the loop image back at
+       offset 0 (signal_engine_gateware_update). */
+    int rc = -1;
+    for (int i = 0; i < 2 && rc != 0; i++) {
+        rc = ice40_load_image((int)image);
+        ice40_switch_note_slave(rc == 0);
+        if (rc != 0) LOG_W("[sig] image %u: slave load failed (%d)%s\n", image, rc, i ? "" : ", retrying");
+    }
+    if (rc != 0) {
+        LOG_W("[sig] image %u: writing it to the config flash instead\n", image);
         if (ice40_reflash_image((int)image) != 0) {
-            if (image != 0u) {
+            /* A failed reflash leaves the iCE40 held in reset with no whole image in its config
+               flash.  Retry once; failing that, put the loop image back so the pod keeps working. */
+            LOG_E("[sig] image switch: reflash failed, retrying\n");
+            if (ice40_reflash_image((int)image) != 0) {
                 LOG_E("[sig] image switch: retry failed, restoring image 0\n");
-                (void)ice40_reflash_image(0);
+                recover_to_loop();
+                return -3;
             }
-            sleep_ms(5);
-            if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) s_fpga_version = 0;
-            s_fpga_features = signal_engine_fpga_features();
-            return -3;
         }
     }
     sleep_ms(5);
@@ -1937,16 +1979,13 @@ static int fpga_warmboot_load(uint8_t image) {
     if (signal_engine_capture_selftest_at(BP_LOG_DEBUG, 16, &bad) == 0) {
         LOG_I("[sig] image %u: gateware v%u, features 0x%02x (PSRAM write OK)\n",
               image, s_fpga_version, s_fpga_features);
+        s_wanted_image = image;
         return 0;
     }
     LOG_W("[sig] image %u: iCE40->PSRAM write wedged after swap\n", image);
     if (image != 0) {
         LOG_W("[sig] recovering the bench to the loop image (image 0)\n");
-        if (ice40_reflash_image(0) == 0) {
-            sleep_ms(5);
-            fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version);
-            s_fpga_features = signal_engine_fpga_features();
-        }
+        recover_to_loop();
     }
     return -5;
 }

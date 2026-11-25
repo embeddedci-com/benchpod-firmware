@@ -21,14 +21,17 @@ void ice40_switch_note_switch(void)        { s_stats.switches++; }
 void ice40_switch_note_failed(void)        { s_stats.failed++; }
 void ice40_switch_note_reflash(void)       { s_stats.reflashes++; }
 void ice40_switch_note_erases(uint32_t n)  { s_stats.erases += n; }
+void ice40_switch_note_slave(bool ok)      { if (ok) s_stats.slave_loads++; else s_stats.slave_fails++; }
+void ice40_switch_note_time_ms(uint32_t ms) { s_stats.last_ms = ms; }
 const ice40_switch_stats_t *ice40_switch_stats(void) { return &s_stats; }
 void ice40_switch_reset_stats(void)        { memset(&s_stats, 0, sizeof(s_stats)); }
 
 void ice40_switch_emit(bp_emit_t *e)
 {
-    bp_emit(e, "\"fpga_switch\":{\"switches\":%lu,\"skipped\":%lu,\"reflashes\":%lu,\"erases\":%lu,"
-               "\"failed\":%lu}",
-            (unsigned long)s_stats.switches, (unsigned long)s_stats.skipped,
-            (unsigned long)s_stats.reflashes, (unsigned long)s_stats.erases,
-            (unsigned long)s_stats.failed);
+    const ice40_switch_stats_t *t = &s_stats;
+    bp_emit(e, "\"fpga_switch\":{\"switches\":%lu,\"skipped\":%lu,\"failed\":%lu,\"slave_loads\":%lu,"
+               "\"slave_fails\":%lu,\"reflashes\":%lu,\"erases\":%lu,\"last_ms\":%lu}",
+            (unsigned long)t->switches, (unsigned long)t->skipped, (unsigned long)t->failed,
+            (unsigned long)t->slave_loads, (unsigned long)t->slave_fails,
+            (unsigned long)t->reflashes, (unsigned long)t->erases, (unsigned long)t->last_ms);
 }

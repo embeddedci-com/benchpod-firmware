@@ -399,7 +399,11 @@ static void ice40_idle_check(uint32_t now) {
         if (dac_limits_get()->enabled) (void)dac_limits_park_now();
         LOG_W("[hw] recovery: iCE40 reload %s, gateware v%u\n", alive ? "ok" : "FAILED",
               (unsigned)signal_engine_fpga_version());
-        if (alive) s_ping_fail_since = 0;
+        if (alive) {
+            s_ping_fail_since = 0;
+            /* The reload booted offset 0, the loop image: load the image the pod was on again. */
+            signal_engine_restore_wanted_image();
+        }
     } else if (recovery_exhausted(&s_rcv, now, fail_ms, no_resets)) {
         LOG_W("[hw] recovery: the iCE40 still does not answer and the reload limit is reached\n");
     }

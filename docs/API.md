@@ -1833,7 +1833,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
 | `uart_rx_parity_error` | boolean | A frame of the current (or last) UART proxy session arrived with a wrong parity bit (gateware v56+). Full form only. |
-| `fpga_switch` | object | Gateware image switches since the pod started (firmware 4.0.6+), full form only; [`fpga_image`](#fpga_image--switch-the-running-gateware-image) replies carry it too. `switches`: images loaded, `skipped`: requests for the image already running (nothing done), `failed`: loads that did not end on the requested image, `reflashes`: writes of the image the iCE40 boots from, `erases`: 4 KB sector erases of the config flash those writes cost. |
+| `fpga_switch` | object | Gateware image switches since the pod started (firmware 4.0.6+), full form only; [`fpga_image`](#fpga_image--switch-the-running-gateware-image) replies carry it too. `switches`: images loaded, `skipped`: requests for the image already running (nothing done), `failed`: loads that did not end on the requested image, `slave_loads` / `slave_fails`: loads straight from a slot that worked / did not (each failure retries, then falls back to a flash write), `reflashes`: writes of the image the iCE40 boots from (gateware updates and fallbacks), `erases`: 4 KB sector erases of the config flash those writes cost, `last_ms`: how long the last load took in the pod. |
 | `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
@@ -3548,7 +3548,7 @@ debugging the DUT), JTAG, the [SPI master](#spi-master-flash-an-spi-device), the
 `dap_start`, `spi_start` and `i2c_start` fail with `BP0059` (`feature` `"SWD"`, `"the SPI master"` or
 `"the I2C master"`). Flash the DUT first, then start the sensors: that order needs one image swap.
 With the emulation image loaded and no such sensor running, those commands switch to the loop
-image themselves before they answer (2 to 3 seconds), so older clients keep working. Up to
+image themselves before they answer (about 0.1 s; 2 to 3 seconds before firmware 4.0.6), so older clients keep working. Up to
 gateware v64 every image had the bus masters. The pod does
 not swap back by itself: after `sensor_stop` the emulation image stays loaded until
 [`fpga_image`](#fpga_image--switch-the-running-gateware-image) switches it, and `fpga_image` to
@@ -4084,8 +4084,16 @@ deep-replay image it answers `BP0058` (`fpga_image_required`, image `loop`).
 The iCE40 has three images: `0` or `"loop"` (the closed-loop DAC), `1` or `"deep"` (deep DAC
 replay from PSRAM) and, from gateware v54, `2` or `"emulation"` (the
 [emulated sensors](#emulated-sensors): I2C and SPI targets, the sensor FIFO, UART2). Each lives in
-its own W25Q slot (`gw0`, `gw1`, `gw2`). The switch reflashes the iCE40's configuration from the
-slot and reconfigures it, which takes 2 to 3 seconds. The pod then announces its new capabilities
+its own W25Q slot (`gw0`, `gw1`, `gw2`). From firmware 4.0.6 the switch loads the image straight
+from its slot into the iCE40 (SPI slave configuration: the STM32 starts a read of the slot and
+clocks the flash's output into the iCE40) and writes nothing to the configuration flash; it takes
+about 80 ms in the pod, about 0.1 s for a client. When that load fails twice (the iCE40 does not
+report CDONE, or the bits read back do not match the slot's SHA-256) the switch falls back to the
+older way: it writes the image to the iCE40's configuration flash and reconfigures it from there
+(2 to 3 seconds, as every switch did up to firmware 4.0.5). The configuration flash then holds the
+loop image for good: it is written only on a gateware update (and once, on the first start of
+4.0.6, when an older firmware left another image there), so **after a restart or a power cycle the
+pod runs the loop image**. Older firmware kept the last image switched to. The pod then announces its new capabilities
 to the cloud, and puts an external output stage back on its park level when DAC limits are set.
 `sensor_start` loads the emulation image by itself; nothing switches back by itself.
 
@@ -4101,7 +4109,7 @@ stale image). `"force":true` reloads it anyway.
 {"cmd":"fpga_image"}
 ```
 
-Reply: `{"image":2,"name":"emulation","version":54,"features":4,"switched":true,"fpga_switch":{"switches":3,"skipped":5,"reflashes":3,"erases":81,"failed":0}}`;
+Reply: `{"image":2,"name":"emulation","version":54,"features":4,"switched":true,"fpga_switch":{"switches":3,"skipped":5,"failed":0,"slave_loads":3,"slave_fails":0,"reflashes":0,"erases":0,"last_ms":81}}`;
 without `image` it reports the running one (no `switched`). `fpga_switch` is the counter block from
 [`status`](#status) (firmware 4.0.6+). `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation,
 8 the JTAG master (v61+), 16 the SWIM master (v62 to v64, deep image only), 32 the bus masters
@@ -4150,7 +4158,8 @@ longer matches a gateware slot, so reboots do not wear it.
 **The iCE40 recovers by itself.** When the pod is idle the firmware pings the iCE40 every 30 s.
 One that answered since boot and stops answering (an ESD hit can hang or unconfigure it) is reloaded
 from its config flash (no write) after 10 s, at most 6 times an hour; the DAC outputs are parked as
-at boot. It never resets the STM32 for this, since that would also power-cycle the DUT. The device
+at boot. That reload starts the loop image; from firmware 4.0.6 the pod then loads the image it was
+switched to again from its slot. It never resets the STM32 for this, since that would also power-cycle the DUT. The device
 log says what it did. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
 reconnects" as success and check `status.psram_ok` again.
 

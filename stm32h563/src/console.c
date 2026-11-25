@@ -92,11 +92,10 @@ bool clock_on_hsi(void);   /* main.c */
 #endif
 
 
-/* Reprogram the config flash with a specific gateware image and reconfigure — the runtime
- * IMAGE SWITCH.  SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI
- * pins are the shared PSRAM bus), so switching copies the selected image from its W25Q blob
- * slot (blob_store.h) to offset 0 of the same flash via the proven ice40_flash_program +
- * CRESET-reconfig path (~2 s).  n: 0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation.
+/* Reprogram the config flash with a specific gateware image and reconfigure: copies the image
+ * from its W25Q blob slot (blob_store.h) to offset 0 of the same flash via ice40_flash_program +
+ * a CRESET reconfig (~2.4 s, 27 sector erases). For a gateware update of offset 0 (always the
+ * loop image from 4.0.6) and as the image switch's fallback when the slave load fails.  n: 0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation.
  * Returns 0 ok, -1 fail. */
 uint8_t ice40_embedded_gw_version(void) { return (uint8_t)blob_manifest_gw_version(); }
 
@@ -136,6 +135,22 @@ int ice40_reflash_image(int n)
        not.  Re-sync them here — this is the one point every reconfiguration passes through (image
        swap, this console command, the boot/OTA reflash).  Unconditional: even a FAILED program
        leaves the part reconfigured or held in reset, so the mirrors are stale either way. */
+    signal_engine_on_gateware_reconfigured();
+    command_handler_on_gateware_reconfigured();
+    return rc;
+}
+
+/* Load gateware image n in SPI slave mode straight from its slot (ice40_flash.h): no erase, no
+   write. The same PSRAM and mirror handling as the reflash above. */
+int ice40_load_image(int n)
+{
+    blob_id_t id = (blob_id_t)ice40_image_slot(n);
+    if (!blob_store_present(id)) return -4;
+    const blob_info_t *in = blob_store_info(id);
+    psram_reset_to_spi();
+    int rc = ice40_slave_load(blob_slot_base(id) + BLOB_HDR_SIZE, in->len, in->sha256);
+    psram_init();
+    psram_bus_handover();
     signal_engine_on_gateware_reconfigured();
     command_handler_on_gateware_reconfigured();
     return rc;
@@ -238,6 +253,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
         "  spi-clk <64|128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
         "  flash-ice40 | ice40-erase [gw0] yes   rewrite / blank the iCE40 config flash\r\n"
+        "  ice40-slave-fail <n>  make the next n image-switch slave loads fail (tests the fallback)\r\n"
         "  wifi-static <ip> <mask> <gw> | esp-reset-pulse | esp-mon [ms] | flash-esp32-sync   Wi-Fi module\r\n");
 #endif
 #if defined(BENCHPOD_EMI_TEST)
@@ -1083,6 +1099,15 @@ static void con_flash_id(int argc, char **argv, console_out_t out, void *ctx)
 #endif
 
 #if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
+/* `ice40-slave-fail <n>`: the next n slave loads of an image switch start 64 bytes early, so
+   CDONE stays low and the switch falls back (retry, then the flash write path). */
+static void con_ice40_slave_fail(int argc, char **argv, console_out_t out, void *ctx)
+{
+    unsigned n = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 0) : 1u;
+    ice40_slave_test_fail(n);
+    op(out, ctx, "  the next %u slave load(s) will fail\r\n", n);
+}
+
 static void con_flash_ice40(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (!blob_store_present(BLOB_GW0)) {
@@ -1435,6 +1460,7 @@ static const console_cmd_t k_console_cmds[] = {
     { "lastress", con_lastress },
     { "flash-id", con_flash_id },
     { "flash-ice40", con_flash_ice40 },
+    { "ice40-slave-fail", con_ice40_slave_fail },
     { "ice40-erase", con_ice40_erase },
     { "test-bootloop", con_test_bootloop },
     { "test-crash", con_test_crash },

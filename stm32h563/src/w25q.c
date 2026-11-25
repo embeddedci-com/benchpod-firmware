@@ -9,6 +9,7 @@
 #include "xspi_guard.h"   /* indirect commands while the W25Q is memory-mapped */
 #include "signal_engine.h"   /* quiesce the gateware PSRAM masters for a session */
 #include "board_pins.h"
+#include "bp_log.h"
 #include "pico_compat.h"
 #include "stm32h5xx_hal.h"
 
@@ -18,13 +19,26 @@
 #define FCS_LOW()   HAL_GPIO_WritePin(ICE_FLASH_CS_PORT, ICE_FLASH_CS_PIN, GPIO_PIN_RESET)
 #define FCS_HIGH()  HAL_GPIO_WritePin(ICE_FLASH_CS_PORT, ICE_FLASH_CS_PIN, GPIO_PIN_SET)
 
+/* keep_cs: leave the chip-select as it is (w25q_stream_*: a read kept open across calls), and
+   instr < 0 sends no instruction (a data-only read that just clocks the flash on). */
+static int fxfer_cs(int instr, int has_addr, uint32_t addr, uint8_t *buf, uint32_t len,
+                    int is_read, int keep_cs);
 static int fxfer(uint8_t instr, int has_addr, uint32_t addr,
                  uint8_t *buf, uint32_t len, int is_read)
+{
+    return fxfer_cs(instr, has_addr, addr, buf, len, is_read, 0);
+}
+
+static int fxfer_cs(int instr, int has_addr, uint32_t addr, uint8_t *buf, uint32_t len,
+                    int is_read, int keep_cs)
 {
     XSPI_HandleTypeDef *h = (XSPI_HandleTypeDef *)psram_xspi();
     XSPI_RegularCmdTypeDef c = {0};
     c.OperationType = HAL_XSPI_OPTYPE_COMMON_CFG;
-    c.Instruction = instr;
+    c.Instruction = instr < 0 ? 0u : (uint32_t)instr;
+    /* The HAL refuses a command with no instruction and no address (XSPI_ConfigCmd), though the
+       peripheral runs one: a data-only read starts on the IR write HAL_XSPI_Receive does. So
+       it is configured with an instruction, which is cleared from CCR below. */
     c.InstructionMode = HAL_XSPI_INSTRUCTION_1_LINE;
     c.InstructionWidth = HAL_XSPI_INSTRUCTION_8_BITS;
     c.AddressMode = has_addr ? HAL_XSPI_ADDRESS_1_LINE : HAL_XSPI_ADDRESS_NONE;
@@ -36,16 +50,37 @@ static int fxfer(uint8_t instr, int has_addr, uint32_t addr,
 
     const xspi_guard_tok_t g = xspi_guard_enter();   /* out of memory-mapped mode (xspi_guard.h) */
     if (!g.ok) { xspi_guard_exit(g); return -1; }
-    FCS_LOW();
+    if (!keep_cs) FCS_LOW();
     HAL_StatusTypeDef s = HAL_XSPI_Command(h, &c, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
+    if (s == HAL_OK && instr < 0) CLEAR_BIT(h->Instance->CCR, XSPI_CCR_IMODE);   /* data only */
     if (s == HAL_OK && len) {
         s = is_read ? HAL_XSPI_Receive(h, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE)
                     : HAL_XSPI_Transmit(h, buf, HAL_XSPI_TIMEOUT_DEFAULT_VALUE);
     }
-    FCS_HIGH();
+    if (!keep_cs) FCS_HIGH();
     xspi_guard_exit(g);
+    if (s != HAL_OK && keep_cs)
+        LOG_W("[w25q] stream xfer (instr %d, len %lu) failed: status %d, error 0x%lx\n", instr,
+              (unsigned long)len, (int)s, (unsigned long)h->ErrorCode);
     return (s == HAL_OK) ? 0 : -1;
 }
+
+int w25q_stream_begin(uint32_t addr)
+{
+    FCS_LOW();
+    if (fxfer_cs(0x03, 1, addr, NULL, 0, 1, 1) != 0) { FCS_HIGH(); return -1; }
+    return 0;
+}
+
+int w25q_stream_read(uint8_t *buf, uint32_t len)
+{
+    if (len == 0) return 0;
+    return fxfer_cs(-1, 0, 0, buf, len, 1, 1);
+}
+
+void w25q_stream_end(void) { FCS_HIGH(); }
+
+void w25q_cs_set(int high) { if (high) FCS_HIGH(); else FCS_LOW(); }
 
 static int wait_wip(uint32_t timeout_ms)
 {

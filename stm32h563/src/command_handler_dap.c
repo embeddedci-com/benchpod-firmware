@@ -286,7 +286,7 @@ void handle_dap_start(int conn_id, const char *json) {
         return;
     }
     /* Gateware v65: no SWD/JTAG engine in the emulation image; swap to the loop image when no
-       emulated digital sensor runs (the reply waits for it, ~2-3 s), else BP0059. */
+       emulated digital sensor runs (the reply waits for it, about 80 ms), else BP0059. */
     if (!require_bus_masters(conn_id, have_swd ? "SWD" : "JTAG")) return;
     /* JTAG needs the gateware's JTAG master: gateware v61, loop or deep image. */
     if (have_jtag && !gw_caps()->jtag) {
