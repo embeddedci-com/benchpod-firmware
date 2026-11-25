@@ -160,6 +160,7 @@ static inline bool busy_read(void)
 #include "blob_store.h"
 #include "dac_link.h"      /* the flat cable's DAC pinout: no DAC frames on a mismatched pair */
 #include "module_link.h"
+#include "command_handler.h"   /* mirrors after a warm boot */
 #include "ice40_switch.h"   /* skip a switch to the running image; switch counters */
 
 /* spi_cmd_write refused a DAC command: the boards disagree on the DAC pinout (dac_link.h). */
@@ -964,7 +965,7 @@ void psram_boot_selftest_with_recovery(void) {
                  psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL ? "still failing" : "passed");
     }
     if (configured && psram_selftest_result() == PSRAM_ST_ICE40_WRITE_FAIL) {
-        const int intact = ice40_boot_image_intact();
+        const int intact = ice40_multiboot_present() ? 1 : ice40_boot_image_intact();
         snprintf(s_ice40_boot_note + strlen(s_ice40_boot_note), sizeof(s_ice40_boot_note) - strlen(s_ice40_boot_note),
                  "; image %s at 0x%lx", intact == 1 ? "intact" : intact == 0 ? "differs: rewritten" : "unknown",
                  (unsigned long)ice40_flash_last_mismatch());
@@ -996,6 +997,8 @@ void psram_boot_selftest_with_recovery(void) {
    (flash-self installs them once the firmware boots), so the gw0 install brings it up without a
    reboot. */
 void signal_engine_gateware_update(void) {
+    /* Experiment: offset 0 is the multi-boot header, written by hand (ice40-multiboot). */
+    if (ice40_multiboot_present()) return;
     /* Not configured at boot: first just reload it from its flash (no write). After an ESD hit or
        a recovery reset its image is usually fine; only a flash that does not configure it (a new
        board's blank flash, a damaged image) is written below. */
@@ -1869,6 +1872,7 @@ void signal_engine_quiesce_psram_masters(void) {
 /* The running image from a LIVE FPGA_FEATURES read: -1 when the iCE40 does not answer it (the
    cached value could predate a reconfigure, so it never proves anything here). */
 static int fpga_warmboot_load(uint8_t image);
+static int fpga_warmboot_load_reflash(uint8_t image);
 static int running_image_live(void) {
     if (s_fpga_version == 0 || !gw_caps()->capture_bases) return -1;
     uint8_t f = 0;
@@ -1894,12 +1898,58 @@ int fpga_warmboot_ex(uint8_t image, bool force, bool *skipped) {
     }
     if (!blob_store_present((blob_id_t)ice40_image_slot(image))) return -2;
     ice40_switch_note_switch();
+    const uint64_t t0 = time_us_64();
     int rc = fpga_warmboot_load(image);
+    ice40_switch_note_time_ms((uint32_t)((time_us_64() - t0) / 1000u));
     if (rc != 0) ice40_switch_note_failed();
     return rc;
 }
 
+#define FPGA_FEATURE_WARMBOOT 0x40u   /* experiment gateware v69: image_boot.v */
+/* Warm boot into image n (SB_WARMBOOT, the header at offset 0 picks the slot). 0 ok. */
+static int warmboot_to(uint8_t image, uint32_t *us) {
+    psram_reset_to_spi();
+    ice40_warmboot_prepare();
+    const uint8_t a[3] = { 0x57, 0x42, image };
+    (void)spi_cmd_write(0x1E, a, sizeof(a));
+    int rc = ice40_warmboot_wait(us);
+    if (rc != 0) {
+        LOG_W("[sig] warm boot to image %u: CDONE %s; reloading from the power-on entry\n", image,
+              rc == -1 ? "never fell" : "never rose");
+        (void)ice40_reload();
+        return rc;
+    }
+    psram_init();
+    psram_bus_handover();
+    signal_engine_on_gateware_reconfigured();
+    command_handler_on_gateware_reconfigured();
+    return 0;
+}
+
 static int fpga_warmboot_load(uint8_t image) {
+    if (ice40_multiboot_present() && (s_fpga_features & FPGA_FEATURE_WARMBOOT)) {
+        signal_engine_quiesce_psram_masters();
+        uint32_t us = 0;
+        int rc = warmboot_to(image, &us);
+        if (rc != 0) { ice40_switch_note_slave(false); rc = warmboot_to(image, &us); }
+        ice40_switch_note_slave(rc == 0);
+        LOG_D("[sig] warm boot to image %u: CDONE high after %lu us\n", image, (unsigned long)us);
+        sleep_ms(5);
+        if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) s_fpga_version = 0;
+        s_fpga_features = signal_engine_fpga_features();
+        if (rc != 0) return -3;
+        int bad = -1;
+        if (signal_engine_capture_selftest_at(BP_LOG_DEBUG, 16, &bad) == 0) {
+            LOG_I("[sig] image %u (warm boot): gateware v%u, features 0x%02x (PSRAM write OK)\n",
+                  image, s_fpga_version, s_fpga_features);
+            return 0;
+        }
+        return -5;
+    }
+    return fpga_warmboot_load_reflash(image);
+}
+
+static int fpga_warmboot_load_reflash(uint8_t image) {
     /* Quiesce the running gateware so the swap takes the bus at a safe (masters-idle) boundary —
        this is what makes the swap robust under load instead of wedging the PSRAM (see the helper). */
     signal_engine_quiesce_psram_masters();

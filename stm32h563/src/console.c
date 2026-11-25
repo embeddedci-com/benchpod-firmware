@@ -238,6 +238,7 @@ static void cmd_help(console_out_t out, void *ctx)
         "  cap-selftest [n] | capture-psram [n] | dualcap [an] [ln] | lastress [n]   capture-path diagnostics\r\n"
         "  spi-clk <64|128|256> | spi-diag [n] | adc-spi [n] | adcraw | flash-id | ca-damage   low-level debug\r\n"
         "  flash-ice40 | ice40-erase [gw0] yes   rewrite / blank the iCE40 config flash\r\n"
+        "  ice40-multiboot [yes]  multi-boot header at offset 0 (SB_WARMBOOT experiment)\r\n"
         "  wifi-static <ip> <mask> <gw> | esp-reset-pulse | esp-mon [ms] | flash-esp32-sync   Wi-Fi module\r\n");
 #endif
 #if defined(BENCHPOD_EMI_TEST)
@@ -1083,6 +1084,37 @@ static void con_flash_id(int argc, char **argv, console_out_t out, void *ctx)
 #endif
 
 #if !defined(BENCHPOD_RELEASE)   /* development builds only (firmware 4.0.0) */
+/* `ice40-multiboot yes`: write the multi-boot header at offset 0 (experiment, SB_WARMBOOT);
+   `ice40-multiboot off`: write image 0 back there (flash-ice40). */
+static void con_ice40_multiboot(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (argc > 1 && !strcmp(argv[1], "yes")) {
+        const uint32_t a[3] = { blob_slot_base(BLOB_GW0) + BLOB_HDR_SIZE, blob_slot_base(BLOB_GW1) + BLOB_HDR_SIZE,
+                                blob_slot_base(BLOB_GW2) + BLOB_HDR_SIZE };
+        signal_engine_quiesce_psram_masters();
+        psram_reset_to_spi();
+        int rc = ice40_multiboot_write(a);
+        psram_init();
+        psram_bus_handover();
+        signal_engine_on_gateware_reconfigured();
+        command_handler_on_gateware_reconfigured();
+        bool ok = signal_engine_refresh_version();
+        cloud_client_request_caps_resend();
+        op(out, ctx, "  multi-boot header %s, gateware v%u%s\r\n", rc == 0 ? "written" : "FAILED",
+           signal_engine_fpga_version(), ok ? "" : " (FPGA unreachable)");
+    } else {
+        op(out, ctx, "  offset 0 holds %s; 'ice40-multiboot yes' writes the header, flash-ice40 an image\r\n",
+           ice40_multiboot_present() ? "the multi-boot header" : "an image");
+    }
+}
+
+static void con_ice40_wb_ablate(int argc, char **argv, console_out_t out, void *ctx)
+{
+    if (argc > 1) ice40_warmboot_ablate((uint32_t)strtoul(argv[1], NULL, 0));
+    op(out, ctx, "  warm-boot ablation mask %lu (1 no flash reset, 2 PG0 low, 4 PSRAM /CS Hi-Z)\r\n",
+       (unsigned long)ice40_warmboot_ablate_get());
+}
+
 static void con_flash_ice40(int argc, char **argv, console_out_t out, void *ctx)
 {
     if (!blob_store_present(BLOB_GW0)) {
@@ -1435,6 +1467,8 @@ static const console_cmd_t k_console_cmds[] = {
     { "lastress", con_lastress },
     { "flash-id", con_flash_id },
     { "flash-ice40", con_flash_ice40 },
+    { "ice40-multiboot", con_ice40_multiboot },
+    { "ice40-wb-ablate", con_ice40_wb_ablate },
     { "ice40-erase", con_ice40_erase },
     { "test-bootloop", con_test_bootloop },
     { "test-crash", con_test_crash },

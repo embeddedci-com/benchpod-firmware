@@ -164,6 +164,16 @@ void psram_bus_handover(void)
 
 void psram_bus_park(void) { pins_to_stm32(); }
 
+/* Warm boot (ice40_flash.c): PG0 stays high (the gateware tristates its pads), the STM32's
+   OCTOSPI pins go Hi-Z and the PSRAM /CS is driven high, so the iCE40's config controller is the
+   only thing on SCLK/IO0/IO1 while it reads the flash. */
+void psram_bus_hold_hi_z(void)
+{
+    HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_SET);
+    octospi_pins(0);
+    psram_cs_park_high();
+}
+
 uint32_t psram_bus_violations(void) { return s_bus.violations; }
 unsigned psram_bus_depth(void)      { return s_bus.depth; }
 

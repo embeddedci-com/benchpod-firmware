@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 #include "boot_policy.h"   /* gw_ident_t */
 
 /* Reprogram the iCE40 config flash (Winbond W25Q64) over the shared OCTOSPI bus.
@@ -79,5 +80,15 @@ int  ice40_image_slot(int n);
 #define ICE40_IMAGE_COUNT 3
 /* The GATEWARE_VERSION of the images this firmware embeds (0 = unknown at build time). */
 uint8_t ice40_embedded_gw_version(void);
+
+/* Experiment (branch ice40-warmboot): a multi-boot header at offset 0 and SB_WARMBOOT. */
+void ice40_multiboot_build(uint8_t hdr[160], const uint32_t addr[3]);
+void ice40_multiboot_check(const uint32_t addr[3]);   /* reads offset 0 (boot, bus free) */
+bool ice40_multiboot_present(void);
+int  ice40_multiboot_write(const uint32_t addr[3]);   /* dev: writes it, boots the loop entry */
+void ice40_warmboot_prepare(void);
+void ice40_warmboot_ablate(uint32_t mask);   /* dev: 1 no flash reset, 2 PG0 low, 4 PSRAM /CS Hi-Z, 8 CDONE pin analog */
+uint32_t ice40_warmboot_ablate_get(void);
+int  ice40_warmboot_wait(uint32_t *us);
 
 #endif /* ICE40_FLASH_H */

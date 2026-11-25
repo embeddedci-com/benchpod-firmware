@@ -137,6 +137,11 @@ module engine_block #(
         .rx_byte(rx_byte), .rx_valid(rx_valid), .tx_byte(tx_byte), .cs_active(cs_active)
     );
 
+    // ---- runtime image switch by SB_WARMBOOT (image_boot.v; FPGA_FEATURES bit 6) ----
+    image_boot image_boot_i (
+        .clk(clk), .rst(rst), .rx_byte(rx_byte), .rx_valid(rx_valid), .cs_active(cs_active)
+    );
+
     // ---- Waveform BRAM (cmd_dispatch writes, version DAC engine reads) ----
     wire        wave_we;
     wire [11:0] wave_waddr;

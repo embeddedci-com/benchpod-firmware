@@ -29,6 +29,7 @@ BOARD  ?= vbench_pod
 # The old correlated capture_merge/cdc/la_drain_ctrl modules were removed.
 SRC = src/top_v2.v            \
       src/engine_block.v      \
+      src/image_boot.v        \
       src/spi_slave.v         \
       src/cmd_dispatch.v      \
       src/sample_buf.v        \

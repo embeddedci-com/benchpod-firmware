@@ -115,6 +115,12 @@ static int release_and_wait_cdone(void)
     return 0;
 }
 
+static uint32_t s_wb_ablate;   /* dev: steps to leave out (ice40-wb-ablate), to find the one that matters */
+void ice40_warmboot_ablate(uint32_t mask) { s_wb_ablate = mask; }
+uint32_t ice40_warmboot_ablate_get(void) { return s_wb_ablate; }
+
+static bool s_mb_present;   /* offset 0 holds the multi-boot header (experiment, below) */
+
 /* The identity record of the image at offset 0 (boot_policy.h), cached. */
 static gw_ident_t s_ident;
 static bool s_ident_ok;
@@ -189,6 +195,7 @@ int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
     /* The record names the image about to be replaced: drop it first, so a write that fails or is
        cut leaves no record (the next boot compares) rather than a wrong one. */
     s_ident_ok = false;
+    s_mb_present = false;   /* an image replaces a multi-boot header */
     ice40_switch_note_erases(1);
     if (w25q_erase_sector(GW_IDENT_OFF) != 0) goto fail;
     /* Erase enough 4 KB sectors to hold the bitstream. */
@@ -304,3 +311,107 @@ int ice40_is_configured(void) {
     return HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_SET;
 }
 
+
+/* ---- multi-boot header + SB_WARMBOOT (experiment, branch ice40-warmboot) -------------------
+   Offset 0 holds an icemulti-format header instead of an image: 5 entries of 32 bytes, entry 0 =
+   the power-on image, entries 1..4 = the warm-boot targets S1:S0 = 0..3. Each entry:
+   7E AA 99 7E  92 00 00  44 03 <addr24>  82 00 00  01 08, zero-padded. The images stay in their
+   slots (gw0/gw1/gw2): nothing is copied. */
+#define MB_HDR_LEN 160u
+static uint8_t s_mbbuf[MB_HDR_LEN];
+
+static void mb_entry(uint8_t *e, uint32_t addr)
+{
+    static const uint8_t k[] = { 0x7E, 0xAA, 0x99, 0x7E, 0x92, 0x00, 0x00, 0x44, 0x03 };
+    memset(e, 0, 32);
+    memcpy(e, k, sizeof(k));
+    e[9] = (uint8_t)(addr >> 16); e[10] = (uint8_t)(addr >> 8); e[11] = (uint8_t)addr;
+    e[12] = 0x82; e[13] = 0x00; e[14] = 0x00; e[15] = 0x01; e[16] = 0x08;
+}
+
+void ice40_multiboot_build(uint8_t hdr[MB_HDR_LEN], const uint32_t addr[3])
+{
+    mb_entry(hdr, addr[0]);                         /* power-on: loop */
+    for (int i = 0; i < 3; i++) mb_entry(hdr + 32 * (i + 1), addr[i]);
+    mb_entry(hdr + 128, addr[0]);                   /* S1:S0 = 3: loop */
+}
+
+bool ice40_multiboot_present(void) { return s_mb_present; }
+
+void ice40_multiboot_check(const uint32_t addr[3])
+{
+    uint8_t want[MB_HDR_LEN];
+    ice40_multiboot_build(want, addr);
+    s_mb_present = false;
+    if (w25q_open() != 0) return;
+    if (w25q_read(0, s_mbbuf, MB_HDR_LEN) == 0)
+        s_mb_present = memcmp(s_mbbuf, want, MB_HDR_LEN) == 0;
+    w25q_close();
+    LOG_I("[ice40] config flash offset 0: %s\n", s_mb_present ? "multi-boot header" : "an image");
+}
+
+int ice40_multiboot_write(const uint32_t addr[3])
+{
+    uint8_t hdr[MB_HDR_LEN];
+    ice40_multiboot_build(hdr, addr);
+    psram_bus_acquire();
+    flash_pins();
+    HAL_GPIO_WritePin(ICE_CRESET_PORT, ICE_CRESET_PIN, GPIO_PIN_RESET);
+    sleep_ms(2);
+    w25q_wake();
+    s_ident_ok = false;
+    int rc = 0;
+    ice40_switch_note_erases(2);
+    if (w25q_erase_sector(GW_IDENT_OFF) != 0 || w25q_erase_sector(0) != 0 ||
+        w25q_program(0, hdr, MB_HDR_LEN) != 0 || w25q_read(0, s_mbbuf, MB_HDR_LEN) != 0 ||
+        memcmp(s_mbbuf, hdr, MB_HDR_LEN) != 0) rc = -1;
+    if (rc != 0) { ice40_hold_off_bus(); psram_bus_release(); return -1; }
+    s_mb_present = true;
+    LOG_I("[ice40] multi-boot header written at offset 0\n");
+    return release_and_wait_cdone();                /* boots the power-on entry: loop */
+}
+
+/* Hand the config pins to the iCE40 for a warm boot: the flash reset out of any continuous read
+   or power-down, its /CS Hi-Z (pulled up; the iCE40 drives it), PG0 high so the gateware keeps
+   its pads tristated, the STM32's OCTOSPI pins Hi-Z, the PSRAM /CS driven high. */
+
+void ice40_warmboot_prepare(void)
+{
+    psram_bus_acquire();
+    w25q_cs_output();
+    if (!(s_wb_ablate & 1u)) { w25q_wake(); w25q_reset(); }
+    GPIO_InitTypeDef gz = {0};
+    gz.Mode = GPIO_MODE_ANALOG; gz.Pin = ICE_FLASH_CS_PIN;
+    HAL_GPIO_Init(ICE_FLASH_CS_PORT, &gz);
+    psram_bus_hold_hi_z();
+    if (s_wb_ablate & 2u)    /* July: the bus handed to the iCE40 (PG0 low), so its pads drive */
+        HAL_GPIO_WritePin(ICE_FLASH_OWN_PORT, ICE_FLASH_OWN_PIN, GPIO_PIN_RESET);
+    if (s_wb_ablate & 4u) {  /* PSRAM /CS left Hi-Z */
+        GPIO_InitTypeDef g = {0};
+        g.Mode = GPIO_MODE_ANALOG; g.Pin = PSRAM_CS_PIN;
+        HAL_GPIO_Init(PSRAM_CS_PORT, &g);
+    }
+}
+
+/* After the warm-boot command: CDONE falls as the reconfiguration starts, then rises. 0 ok,
+   -1 CDONE never fell, -2 it never rose (the iCE40 is then CRESET back to its power-on image by
+   the caller). *us: from the call to CDONE high. */
+int ice40_warmboot_wait(uint32_t *us)
+{
+    if (s_wb_ablate & 8u) {   /* July: CDONE (PF14) left in its reset state, analog, reads 0 */
+        GPIO_InitTypeDef ga = {0};
+        ga.Mode = GPIO_MODE_ANALOG; ga.Pin = ICE_CDONE_PIN;
+        HAL_GPIO_Init(ICE_CDONE_PORT, &ga);
+    }
+    const uint64_t t0 = time_us_64();
+    int rc = 0;
+    while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_SET)
+        if (time_us_64() - t0 > 10000u) { rc = -1; break; }
+    if (rc == 0)
+        while (HAL_GPIO_ReadPin(ICE_CDONE_PORT, ICE_CDONE_PIN) == GPIO_PIN_RESET)
+            if (time_us_64() - t0 > 500000u) { rc = -2; break; }
+    if (us) *us = (uint32_t)(time_us_64() - t0);
+    psram_bus_release();
+    psram_bus_handover();
+    return rc;
+}

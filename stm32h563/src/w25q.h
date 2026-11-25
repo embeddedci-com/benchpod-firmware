@@ -39,6 +39,8 @@ void w25q_session_close(void);
 void w25q_cs_output(void);
 /* Release deep power-down (0xAB). */
 void w25q_wake(void);
+/* Software reset (0x66 0x99, 40 us). */
+void w25q_reset(void);
 
 /* JEDEC ID (Winbond: EF 40 17 = 8 MB, EF 40 18 = 16 MB). 0 = read ok. */
 int  w25q_read_id(uint8_t id[3]);

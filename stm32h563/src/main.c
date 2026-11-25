@@ -273,6 +273,11 @@ void boot_deferred_hw_init(void)
     (void)blob_store_init();
     w25q_open(); c3_image_load(); w25q_close();   /* which image the ESP32-C3 runs (c3_image.h) */
     ice40_ident_load();     /* which image the iCE40's config flash holds (boot_policy.h) */
+    {   /* experiment: is offset 0 the multi-boot header (ice40_flash.h)? */
+        const uint32_t a[3] = { blob_slot_base(BLOB_GW0) + BLOB_HDR_SIZE, blob_slot_base(BLOB_GW1) + BLOB_HDR_SIZE,
+                                blob_slot_base(BLOB_GW2) + BLOB_HDR_SIZE };
+        ice40_multiboot_check(a);
+    }
     cloud_extras_load();    /* company CA + proxy for the cloud link (cloud_extras.h) */
     wiring_store_load();    /* the wiring profiles stored on the pod (wiring_store.h) */
     /* Layered PSRAM datapath self-test; loads the embedded gateware when the iCE40 never

@@ -75,6 +75,13 @@ void w25q_wake(void)
     sleep_us(30);                    /* tRES1 = 3 us */
 }
 
+void w25q_reset(void)
+{
+    fxfer(0x66, 0, 0, NULL, 0, 0);   /* enable reset */
+    fxfer(0x99, 0, 0, NULL, 0, 0);   /* reset: ends a continuous read, clears volatile state */
+    sleep_us(40);                    /* tRST 30 us */
+}
+
 int w25q_open(void)
 {
     psram_bus_acquire();             /* PG0 high: the gateware tristates the bus; PSRAM CS high */

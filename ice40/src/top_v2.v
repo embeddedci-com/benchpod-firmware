@@ -1321,13 +1321,13 @@ module top (
     // exclusive across the two images, which the firmware swaps by reflashing).  The firmware reads it to advertise capabilities
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
-    localparam [7:0] IMG_FEATURES = 8'h2A;   // deep-DAC-PSRAM-replay + JTAG master (v61) + bus masters (v65); SWIM out (v65)
+    localparam [7:0] IMG_FEATURES = 8'h6A;   // deep-DAC-PSRAM-replay + JTAG master (v61) + bus masters (v65); SWIM out (v65)
 `elsif USE_EMULATION
-    localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54); no bus masters (v65)
+    localparam [7:0] IMG_FEATURES = 8'h44;   // sensor emulation (v54); no bus masters (v65)
 `else
-    localparam [7:0] IMG_FEATURES = 8'h29;   // closed-loop DAC control + JTAG master (v61) + bus masters (v65)
+    localparam [7:0] IMG_FEATURES = 8'h69;   // closed-loop DAC control + JTAG master (v61) + bus masters (v65)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd68), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd69), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

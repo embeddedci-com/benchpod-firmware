@@ -63,6 +63,7 @@ void psram_bus_handover(void);
 /* Drive the bus from the STM32 without recording a hold: the init/reset paths that leave the
    bus with the STM32 until the next handover (psram_init does this internally). */
 void psram_bus_park(void);
+void psram_bus_hold_hi_z(void);   /* warm boot: PG0 high, OCTOSPI Hi-Z, PSRAM /CS high */
 /* Ownership rule breaks so far (a take or give by another task, a hold dropped by a handover). */
 uint32_t psram_bus_violations(void);
 unsigned psram_bus_depth(void);

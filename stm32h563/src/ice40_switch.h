@@ -35,6 +35,9 @@ typedef struct {
     uint32_t reflashes;    /* writes of the config flash's boot image (offset 0) */
     uint32_t erases;       /* 4 KB sector erases of the config flash by those writes */
     uint32_t failed;       /* image loads that did not end on the requested image */
+    uint32_t slave_loads;  /* SPI slave loads from a slot that configured the iCE40 (no write) */
+    uint32_t slave_fails;  /* slave loads that did not (each one falls back, see fpga_warmboot) */
+    uint32_t last_ms;      /* how long the last image load took, quiesce to self-test */
 } ice40_switch_stats_t;
 
 void ice40_switch_note_skip(void);
@@ -42,10 +45,13 @@ void ice40_switch_note_switch(void);
 void ice40_switch_note_failed(void);
 void ice40_switch_note_reflash(void);
 void ice40_switch_note_erases(uint32_t n);
+void ice40_switch_note_slave(bool ok);
+void ice40_switch_note_time_ms(uint32_t ms);
 const ice40_switch_stats_t *ice40_switch_stats(void);
 void ice40_switch_reset_stats(void);   /* tests */
 
-/* "fpga_switch":{"switches":N,"skipped":N,"reflashes":N,"erases":N,"failed":N} (no comma). */
+/* "fpga_switch":{"switches":N,"skipped":N,"failed":N,"slave_loads":N,"slave_fails":N,
+   "reflashes":N,"erases":N,"last_ms":N} (no comma). */
 void ice40_switch_emit(bp_emit_t *e);
 
 #endif /* ICE40_SWITCH_H */
