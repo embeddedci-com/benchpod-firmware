@@ -584,7 +584,7 @@ void handle_replay(int conn_id, const char *json) {
 }
 
 /* `dac_stop` — halt any running DAC output (a looped `replay`, a continuous
-   `generate`, or a held `dac_set_constant`). */
+   `generate`, or a held `dac_set_constant16`). */
 void handle_dac_stop(int conn_id, const char *json) {
     (void)json;
     dac_stop();
@@ -648,23 +648,33 @@ void handle_dac_limits(int conn_id, const char *json) {
     dac_limits_reply(conn_id);
 }
 
-/* `dac_set` — hold the DAC at a fixed DC level (multimeter-probe / fault
-   injection).  Single-reply, so it rides the cloud command channel.  On v2 the
-   FPGA DAC sequencer clocks a single byte continuously; `value` is the 0..255
-   level and `divider` (optional) sets DAC_CLK = HFOSC / divider.
-     {"cmd":"dac_set","value":0..255,"divider":N} */
+/* `dac_set` — hold the DAC at a fixed raw code (multimeter probe, bring-up), uncalibrated.
+   Single-reply, so it rides the cloud command channel.  `code16` is the 16-bit code; `value`
+   (0..255) is the older 8-bit form, held as value << 8.  With both, code16 wins: clients send both
+   so firmware before code16 still holds the nearest 8-bit level.  `divider` (optional) sets
+   DAC_CLK = HFOSC / divider.
+     {"cmd":"dac_set","code16":0..65535,"value":0..255,"divider":N} */
 void handle_dac_set(int conn_id, const char *json) {
-    char val_s[8]  = {0};
+    char val_s[12] = {0};
     char div_s[12] = {0};
-    if (!json_get_value(json, "value", val_s, sizeof(val_s))) {
-        send_error(conn_id, "missing value");
+    long code;
+    if (json_get_value(json, "code16", val_s, sizeof(val_s)) && val_s[0]) {
+        char *end = NULL;
+        code = strtol(val_s, &end, 10);
+        if (end == val_s || *end || code < 0 || code > 65535) {
+            send_error(conn_id, "code16 out of range (0..65535)"); return;
+        }
+    } else if (json_get_value(json, "value", val_s, sizeof(val_s)) && val_s[0]) {
+        long v = atol(val_s);
+        if (v < 0 || v > 255) { send_error(conn_id, "value out of range"); return; }
+        code = v << 8;
+    } else {
+        send_error(conn_id, "missing code16 (or value)");
         return;
     }
-    int v = atoi(val_s);
-    if (v < 0 || v > 255) { send_error(conn_id, "value out of range"); return; }
     uint32_t divider = json_get_value(json, "divider", div_s, sizeof(div_s))
                            ? (uint32_t)atoi(div_s) : 0;   /* 0 -> clamped to 2 */
-    if (dac_set_constant((uint8_t)v, divider) != 0) {
+    if (dac_set_constant16((uint16_t)code, divider) != 0) {
         send_error(conn_id, "dac set failed");
         return;
     }

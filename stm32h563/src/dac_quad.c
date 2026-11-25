@@ -73,7 +73,7 @@ dac_quad_plan_t dac_quad_plan(analog_path_t path, int cur_ch, uint8_t live)
 uint16_t dac_quad_park_code(int ch)
 {
     const dac_limits_t *l = dac_limits_get();
-    if (l->enabled && (int)l->path == ch) return (uint16_t)((unsigned)dac_limits_park_code() << 8);
+    if (l->enabled && (int)l->path == ch) return dac_limits_park_code16();
     return dac_code16_for_volts(ch, 0.0f);   /* channel A..C = dac[] index 0..2 */
 }
 

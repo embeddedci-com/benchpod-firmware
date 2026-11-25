@@ -1165,7 +1165,7 @@ int dac_quad_write(int ch, uint16_t code) {
     return 0;
 }
 
-/* dac_set_constant on v3r2: one frame on the selected channel instead of a looped 1-sample
+/* dac_set_constant16 on v3r2: one frame on the selected channel instead of a looped 1-sample
    stream, so the DAC engine stays free.  A stream plays to that same channel: stop it first. */
 static int dac_quad_hold(uint16_t code) {
     if (dac_quiesce(false) != 0) return -1;
@@ -1227,25 +1227,6 @@ void dac_quad_boot(void) {
         sleep_ms(5);
         LOG_I("[sig] +-14 V on\n");
     }
-}
-
-int dac_set_constant(uint8_t value, uint32_t divider) {
-    /* Load a 1-byte waveform and start the sequencer with period=1.
-       The DAC sequencer will keep clocking that same byte to the DAC chip
-       continuously, giving a DC analog output for multimeter probing. */
-    if (dac_quad_present()) return dac_quad_hold((uint16_t)((unsigned)value << 8));
-    if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;
-    if (divider > 65535) divider = 65535;
-    /* DAC8551: one 16-bit sample (value in the high byte), 2 bytes. */
-    uint8_t one16[2] = { 0x00, value };
-    if (fpga_load_wave(one16, 2) != 0) return -1;
-    if (fpga_start_dac(1, divider) != 0) return -1;
-    dac_timed = false;
-    float dac_clk_hz = (float)DAC_CLK_HZ / (float)divider;
-    /* Integer Hz — newlib-nano printf has no %f (the old %.0f printed nothing). */
-    LOG_D("[sig] DAC held at 0x%02x (%u), DAC_CLK=%lu Hz (divider=%lu)\n",
-          value, value, (unsigned long)lroundf(dac_clk_hz), (unsigned long)divider);
-    return 0;
 }
 
 int dac_set_constant16(uint16_t code, uint32_t divider) {
