@@ -156,6 +156,44 @@ This keeps WAIT handling correct (no spurious data phase) and matches the ARM
 CMSIS-DAP `SWD_Transfer` reference, just emitting `remote_bitbang` bytes
 (`d/e/f/g/O/o/c/s/r`) instead of toggling GPIO.
 
+## Target ID read
+
+`dap_start` with `"op":"id"` reads which chip is on the wire and answers one JSON object. The
+connection stays JSON (it does not become a DAP connection): the pod arms the engine on the pins,
+reads, disarms, releases the pins and replies. Firmware with the `dap_id` feature only. It takes
+the same pins and gates as a DAP session (LA voltage, bus masters and the emulation image switch,
+`prog_flash` busy, pin claims, an open SWD session) and the same errors.
+
+```json
+{"cmd":"dap_start","op":"id","swclk":11,"swdio":12}
+{"cmd":"dap_start","op":"id","swclk":11,"swdio":12,"read":["0xE0042000","0x5C001000"],"wait_ms":2000}
+{"cmd":"dap_start","op":"id","tck":11,"tms":12,"tdi":9,"tdo":10,"trst":0}
+```
+
+With both pin sets, `"port":"swd"` (the default) or `"port":"jtag"` picks one. `wait_ms` is how
+long a missing answer is retried (default 200, up to 10000).
+
+SWD: line reset, JTAG-to-SWD, line reset, then the DPIDR. When the DP is version 2 or later it
+also reads TARGETID. It then requests debug power (CDBGPWRUPREQ and CSYSPWRUPREQ), reads AP 0's
+IDR and, on a MEM-AP, sets CSW to 32-bit with no increment, reads the Cortex CPUID (0xE000ED00) and
+each address in `read` (at most 8; more is refused). A read that faults or is not acknowledged
+gives `null` and the sticky error is cleared. At the end the power-up request is given back. The
+pod halts nothing, resets nothing and writes nothing but DP and AP registers.
+
+```json
+{"port":"swd","found":true,"dpidr":"0x2ba01477","targetid":null,"apidr":"0x24770011","cpuid":"0x410fc241","reads":[{"addr":"0xe0042000","value":"0x10006421"}]}
+{"port":"swd","found":false}
+```
+
+JTAG: Test-Logic-Reset, then up to 8 x 32 bits shifted out of the data register with TDI held high.
+A device whose first bit is 1 gives a 32-bit IDCODE; a first bit of 0 is a 1-bit BYPASS device
+(skipped). The scan ends at an all-ones word or a run of zeros. IDCODEs come TDO-nearest first.
+
+```json
+{"port":"jtag","found":true,"idcodes":["0x4ba00477","0x06421041"]}
+{"port":"jtag","found":false}
+```
+
 ## Host: pyOCD probe
 
 `embeddedci.benchpod.dap`:

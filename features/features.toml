@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 18
+revision = 19
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -1001,3 +1001,10 @@ gw_const = "BUS_MASTERS_SPLIT_MIN_GW"
 dated = "code"
 docs = "API.md#fpga_image--switch-the-running-gateware-image"
 note = "Gateware v65 has no bus masters in the emulation image: SWD (flash and debug), JTAG, the SPI master, the I2C master (and the GPIO expanders on it) and the two-wire pin programmers need the loop or deep image. dap_start, spi_start, i2c_start and prog_flash info on the emulation image switch to the loop image first (2 to 3 s) when no I2C, SPI or UART sensor runs; with one running they answer BP0059. prog_flash start answers BP0058 (its data is staged for the deep image). FPGA_FEATURES bit 5 (0x20) marks the images that have them."
+
+[features.dap_id]
+rev = 19
+firmware = "next"
+dated = "code"
+docs = "dap-over-tunnel.md#target-id-read"
+note = "dap_start with \"op\":\"id\" reads the IDs of the chip on the wire and answers one JSON object, without switching the connection to CMSIS-DAP: over SWD the DPIDR, TARGETID (DP version 2), AP0 IDR, the Cortex CPUID and up to 8 words of target memory from a \"read\" list (null when a read faults); over JTAG the IDCODEs of the chain. No halt, no reset, no target writes. Same gates and pin claims as dap_start."
