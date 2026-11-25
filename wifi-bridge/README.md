@@ -268,7 +268,8 @@ bridge's worst case from boot, with no access point. A shielded chamber has none
 firmware only transmits while it has joined a network. Like the pod's `EMI_TEST=1` build, it is
 never released: `RELEASE=1 ./build.sh emc` and the production overlay (secure boot, flash
 encryption) both refuse it. `build.sh` signs it with the developer key only, which release
-images do not trust. It takes signed updates like a dev image (the pod's release keys and the
+images do not trust; the manual workflow `sign-bridge-emc.yml` signs it with the release key.
+It takes signed updates like a dev image (the pod's release keys and the
 dev key), so the pod can put a newer EMC build or the normal firmware on it. After an update it
 confirms itself as soon as Ethernet has started and its first frame went out, without waiting
 for the pod, so it never rolls back on its own (an image whose Ethernet or radio does not come
@@ -284,16 +285,21 @@ replaces it.
 ./flash.sh                     # afterwards: back to the normal dev build
 ```
 
-Without a programmer, through the pod: the bridge must run a dev image (which trusts the dev key)
-and be paired with that pod, and the pod must run a dev build too (release pod firmware refuses
-the dev-signed blob with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`, is one). Its EMI
-loop keeps the pod busy, so `emi stop` on the pod console first and `emi start` after. Put the
-image into the pod's blob slot `bridge` and force the update; a release `benchpod flash-self`
-puts the pod's release firmware and bridge blob back. The pod confirms the new image by talking
-to it, and an EMC image also confirms itself, so either stays after reboots.
+Without a programmer, through the pod: the pod must run a dev build too if you use a dev-signed
+image (release pod firmware refuses it with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`,
+is one), and the bridge must be paired with that pod. A bridge that runs a **release** image trusts
+only the release keys, so it needs the release-signed EMC image: run **Actions > Sign bridge EMC
+image > Run workflow** (`.github/workflows/sign-bridge-emc.yml`, a reviewer approves it), download
+the artifact `bridge-emc-<version>` and use that folder instead of `build-emc/blobs` below. A
+dev-signed image from `./build.sh emc` works only on a bridge that runs a dev image (it trusts the
+dev key) and is paired with a pod that trusts the dev key too. The pod's EMI loop keeps it busy, so
+`emi stop` on the pod console first and `emi start` after. Put the image into the pod's blob slot
+`bridge` and force the update; a release `benchpod flash-self` puts the pod's release firmware and
+bridge blob back. The pod confirms the new image by talking to it, and an EMC image also confirms
+itself, so either stays after reboots.
 
 ```sh
-benchpod install-blobs --dir build-emc/blobs --only bridge --force   # slot "bridge" := EMC build
+benchpod install-blobs --dir build-emc/blobs --only bridge --force   # (or the artifact's folder) slot "bridge" := EMC build
 # pod JSON: {"cmd":"wifi_bridge","action":"update"}, then wifi_status until bridge.fw is 0.1.1-emc
 benchpod install-blobs --only bridge --force                        # afterwards: the release blob
 # pod JSON: {"cmd":"wifi_bridge","action":"update"} again

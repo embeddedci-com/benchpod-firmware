@@ -1,0 +1,117 @@
+# Build the Wi-Fi bridge's EMC test image and sign it with the release key, so it can be installed
+# over Ethernet on a bridge that runs a RELEASE image (wifi-bridge/README.md, "EMC test build").
+#
+# Why: release bridge images trust only stm32h563/keys/release-*.pub. `./build.sh emc` signs with the
+# developer key only, so a release bridge refuses that image ("unknown-key"). This workflow builds
+# the same image (no developer key exists in CI, so it compiles in the release keys only) and signs
+# it with FW_SIGNING_KEY.
+#
+# Run it by hand (Actions > Sign bridge EMC image > Run workflow). The job runs in the `release`
+# environment, so it waits for a required reviewer before it gets FW_SIGNING_KEY. Optional input
+# `ref`: the branch, tag or commit to build (default: the one the workflow runs on). The reviewer
+# approves the run with that ref's code, so check what the ref changes before approving.
+#
+# The result is the artifact `bridge-emc-<version>` (kept 7 days): blob-bridge.bin,
+# blob-bridge.bin.sig and blobs-manifest.json. Install it with the CLI, on a paired pod that runs
+# release firmware (4.0.x or later), after `emi stop` if the pod's EMI loop runs:
+#
+#   benchpod install-blobs --dir <downloaded folder> --only bridge --force
+#   # pod JSON: {"cmd":"wifi_bridge","action":"update"}
+#
+# Afterwards `benchpod install-blobs --only bridge --force` and the same pod command put the
+# release image back.
+#
+# The repo is public, so any signed-in GitHub user can download the artifact. That is acceptable:
+# the image has asset version 0, so a pod installs it only when forced (`--force`, then
+# `wifi_bridge update`) and only on a bridge paired with that pod, and a forced release update
+# (or flash-self) replaces it.
+name: Sign bridge EMC image
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag or commit to build (default: the ref this workflow runs on)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    if: github.repository == 'embeddedci-com/benchpod-firmware'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 40
+    steps:
+      # The ESP-IDF image and the EMC build take about 10 GB of / (see test.yml, wifi-bridge-build).
+      - name: Enough disk space for the ESP-IDF image
+        run: |
+          df -h /
+          free=$(df --output=avail -BG / | tail -1 | tr -dc 0-9)
+          if [ "$free" -lt 20 ]; then
+            echo "::error::only ${free} GB free on /: the ESP-IDF image and build need about 10 GB"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      # No developer key here: build.sh trusts the release keys only and signs nothing itself.
+      - name: Build the EMC test image
+        working-directory: wifi-bridge
+        run: ./build.sh emc
+
+      - name: Sign
+        id: sign
+        env:
+          FW_SIGNING_KEY: ${{ secrets.FW_SIGNING_KEY }}
+        working-directory: wifi-bridge
+        run: |
+          if [ -z "$FW_SIGNING_KEY" ]; then
+            echo "::error::FW_SIGNING_KEY is not set in the release environment"
+            exit 1
+          fi
+          python3 -c "import cryptography" 2>/dev/null || python3 -m pip install --quiet --user --break-system-packages cryptography
+          version=$(sed -n 's/^set(PROJECT_VER "\(.*\)")/\1/p' CMakeLists.txt)
+          emc="${version}-emc"
+          # build-emc/ belongs to root (Docker): the image goes to emc-blobs/, the same layout as
+          # build.sh's build-emc/blobs/ (the pod's blob slot "bridge").
+          if ! grep -aqF "$emc" build-emc/benchpod-wifi-bridge.bin; then
+            echo "::error::the image does not report its version as $emc"
+            exit 1
+          fi
+          mkdir -p emc-blobs
+          cp build-emc/benchpod-wifi-bridge.bin emc-blobs/blob-bridge.bin
+          python3 - emc-blobs <<'PY'
+          import hashlib, json, os, sys
+          d = sys.argv[1]
+          data = open(os.path.join(d, "blob-bridge.bin"), "rb").read()
+          json.dump({"format": 1, "blobs": [{"name": "bridge", "file": "blob-bridge.bin", "size": len(data),
+                     "sha256": hashlib.sha256(data).hexdigest(), "version": 0}]},
+                    open(os.path.join(d, "blobs-manifest.json"), "w"), indent=2)
+          PY
+          # Signs blob-bridge.bin.sig: target bridge, asset version 0 (from the manifest), release = the bridge version.
+          python3 ../tools/fwsign.py sign-blobs --key env:FW_SIGNING_KEY --release "$version" emc-blobs/blobs-manifest.json
+          python3 ../tools/fwsign.py verify --pub ../stm32h563/keys/release-1.pub --pub ../stm32h563/keys/release-2.pub \
+            --target bridge emc-blobs/blob-bridge.bin
+          echo "version=$emc" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Bridge EMC test image $emc"
+            echo "Signed with the release key, asset version 0 (installed only when forced)."
+            echo
+            echo "Install: \`benchpod install-blobs --dir <downloaded folder> --only bridge --force\`, then pod JSON \`{\"cmd\":\"wifi_bridge\",\"action\":\"update\"}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the signed image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bridge-emc-${{ steps.sign.outputs.version }}
+          path: wifi-bridge/emc-blobs/
+          retention-days: 7
+          if-no-files-found: error
