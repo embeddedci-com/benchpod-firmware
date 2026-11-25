@@ -1,0 +1,5 @@
+# age public keys that can decrypt the release-signed EMC test image from
+# .github/workflows/sign-bridge-emc.yml (one per line). The matching private key stays on the
+# machine that installs the image (~/.config/benchpod/bridge-emc-artifact.agekey). To add a
+# machine: `age-keygen -o ~/.config/benchpod/bridge-emc-artifact.agekey` there, add its public key.
+age1m2sjaytumq2ghc89f6cva9raqdla2xrppxc8vgrhpulfsuk5xp8q8t5tnp
