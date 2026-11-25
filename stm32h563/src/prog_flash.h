@@ -2,7 +2,7 @@
 #define PROG_FLASH_H
 
 /* prog_flash — flash a chip over its own programming pins: AVR UPDI, PIC ICSP (low-voltage entry),
- * SiLabs C2, AVR TPI, XMEGA PDI. Plan: embeddedci-server private-docs/pin-programmers/plan.md.
+ * SiLabs C2, AVR TPI, XMEGA PDI, MSP430 Spy-Bi-Wire. Plan: embeddedci-server private-docs/pin-programmers/plan.md.
  *
  * The host stages the image in PSRAM (load_bin with "psram"); `prog_flash` (command_handler_prog.c)
  * starts a background job on the hw worker that runs one protocol (prog_<proto>.c) over prog_wire.
@@ -79,7 +79,7 @@ typedef struct {
    job read these. Internal flash (prog_flash.c). The protocol code itself runs from the W25Q
    (xip_image.h, image "prog"): internal code reaches it only through prog_xip_call(). */
 typedef struct {
-    const char *name;        /* "updi", "pic", "c2", "tpi", "pdi" */
+    const char *name;        /* "updi", "pic", "c2", "tpi", "pdi", "sbw" */
     bool        uart;        /* true: one pin over the UART engine (UPDI); false: clk + data */
     bool        uses_nrst;   /* true: the pod's reset pin is part of the wiring (PIC MCLR, TPI RESET) */
     uint8_t     mems;        /* bit mask of prog_mem_t it supports */
@@ -87,7 +87,7 @@ typedef struct {
 } prog_proto_info_t;
 
 typedef enum { PROG_PROTO_UPDI = 0, PROG_PROTO_PIC, PROG_PROTO_C2, PROG_PROTO_TPI, PROG_PROTO_PDI,
-               PROG_PROTO_COUNT } prog_proto_id_t;
+               PROG_PROTO_SBW, PROG_PROTO_COUNT } prog_proto_id_t;
 
 /* The metadata, once per protocol: used by prog_flash.c's table and by the protocol's own source. */
 #define PROG_INFO_UPDI .name = "updi", .uart = true,  .uses_nrst = false, .id = PROG_PROTO_UPDI, \
@@ -100,6 +100,8 @@ typedef enum { PROG_PROTO_UPDI = 0, PROG_PROTO_PIC, PROG_PROTO_C2, PROG_PROTO_TP
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG)
 #define PROG_INFO_PDI  .name = "pdi",  .uart = false, .uses_nrst = false, .id = PROG_PROTO_PDI, \
     .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_EEPROM)|(1u<<PROG_MEM_CONFIG)|(1u<<PROG_MEM_USER)
+#define PROG_INFO_SBW  .name = "sbw",  .uart = false, .uses_nrst = false, .id = PROG_PROTO_SBW, \
+    .mems = (1u<<PROG_MEM_FLASH)|(1u<<PROG_MEM_CONFIG)
 
 /* What a protocol does, by operation: the `op` of prog_xip_call(). The job owns the sequence. */
 typedef enum {
@@ -129,6 +131,7 @@ int prog_pic_call(prog_ctx_t *ctx, unsigned op);
 int prog_c2_call(prog_ctx_t *ctx, unsigned op);
 int prog_tpi_call(prog_ctx_t *ctx, unsigned op);
 int prog_pdi_call(prog_ctx_t *ctx, unsigned op);
+int prog_sbw_call(prog_ctx_t *ctx, unsigned op);
 
 /* Host tests (and nothing on the pod) call a protocol's steps through this struct: every
    prog_<proto>.c defines one with PROG_PROTO() unless the firmware build says PROG_XIP (the
@@ -168,7 +171,8 @@ typedef struct {
     const prog_proto_t prog_proto_##nm = { __VA_ARGS__, .enter = fenter, .erase = ferase,               \
         .write = fwrite, .read = fread, .leave = fleave };
 #endif
-extern const prog_proto_t prog_proto_updi, prog_proto_pic, prog_proto_c2, prog_proto_tpi, prog_proto_pdi;
+extern const prog_proto_t prog_proto_updi, prog_proto_pic, prog_proto_c2, prog_proto_tpi, prog_proto_pdi,
+                          prog_proto_sbw;
 
 /* ---- the job (prog_flash.c), on the hw worker ---- */
 

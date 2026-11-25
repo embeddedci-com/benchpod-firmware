@@ -36,6 +36,8 @@ typedef struct {
     void (*nrst)(void *io, bool low);
     void (*delay_us)(void *io, uint32_t us);
     uint32_t (*now_ms)(void *io);
+    /* Per-protocol behavior of the real ops (PROG_WIRE_* flags below); NULL in ops that have none. */
+    void (*mode)(void *io, uint32_t flags);
     /* UPDI: one pin, UART engine, half duplex. */
     int  (*uart_config)(void *io, uint32_t baud, bool parity_even, bool stop2);
     int  (*uart_write)(void *io, const uint8_t *buf, size_t n);
@@ -43,6 +45,16 @@ typedef struct {
     size_t (*uart_read)(void *io, uint8_t *buf, size_t n, uint32_t timeout_ms);
     void (*uart_rx_clear)(void *io);
 } prog_wire_ops_t;
+
+/* mode() flags (SBW sets both): the pod's own wire layer behaves differently.
+ *  CLK_LOW_AT_CLOSE: prog_wire_close() leaves the clock LOW instead of high. An MSP430 re-enables
+ *    SBW (and disables its RST function) while TEST is high; low is the state that leaves it alone.
+ *  STRICT_LOW: the automatic flushes (queue full, sample guard) never run while the clock is low.
+ *    A burst cut inside a clock-low phase lasts tens of us and the chip leaves SBW after 7 us, so
+ *    the layer fails the flush (-1, "protocol error") rather than send a cut frame. The protocol
+ *    does its own accounting and flushes at cycle boundaries (prog_sbw.c). */
+#define PROG_WIRE_CLK_LOW_AT_CLOSE 0x01u
+#define PROG_WIRE_STRICT_LOW       0x02u
 
 /* Real ops on the pod (prog_wire.c): two-wire on (clk, data) LA channels (fpga_swd_arm's rc:
    -2 = the engine is in use), or UPDI on `data` (claims the pin itself; err says why not). */

@@ -309,6 +309,8 @@ static int sbw_enter(prog_ctx_t *c)
 {
     memset(c->state, 0, sizeof(sbw_state_t));
     c->phase = "enter";
+    /* prog_wire: close leaves TEST low; no automatic flush inside a clock-low phase (docs 17). */
+    if (c->w->mode) c->w->mode(c->w->io, PROG_WIRE_CLK_LOW_AT_CLOSE | PROG_WIRE_STRICT_LOW);
     return bring_up(c, (c->flags & SBW_FLAG_RST_LOW) != 0);
 }
 

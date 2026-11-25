@@ -12,6 +12,9 @@
  *   {"cmd":"prog_flash","op":"status"}
  *   {"cmd":"prog_flash","op":"abort"}
  *
+ * sbw (MSP430 Spy-Bi-Wire): clk = the chip's TEST (SBWTCK), data = its RST/NMI (SBWTDIO); the pod's
+ * reset pin is unused; flags 1 = enter with RST low; mem flash = main FRAM, config = information FRAM;
+ * erase chip = JTAG mailbox mass erase. Needs gateware v52+.
  * UPDI takes `data` only. Every reply fits one cloud frame. Runs on the hw worker.
  */
 #include "command_handler.h"
@@ -20,6 +23,7 @@
 #include "prog_flash.h"
 #include "prog_desc.h"
 #include "gw_caps.h"
+#include "signal_engine.h"   /* SPI_FAST_LINK_MIN_GW */
 #include "sensor_mgr.h"   /* sensor_mgr_digital_names: the bus-master gate */
 #include "la_pins.h"
 #include "bp_json.h"
@@ -113,7 +117,16 @@ void handle_prog_flash(int conn_id, const char *json) {
     char proto[12] = {0};
     bp_json_get(json, "proto", proto, sizeof(proto));
     p.proto = prog_proto_find(proto);
-    if (!p.proto) { send_error(conn_id, "missing or unknown proto (updi, pic, c2, tpi, pdi)"); return; }
+    if (!p.proto) { send_error(conn_id, "missing or unknown proto (updi, pic, c2, tpi, pdi, sbw)"); return; }
+    /* sbw (MSP430): the byte mode must be fast enough for the 7 us clock-low limit: the fast SPI
+       link of gateware v52 gives 4.1 us at worst, the boot link 8.2 us (docs/design/spy-bi-wire.md 14). */
+    if (strcmp(p.proto->name, "sbw") == 0 && !gw_caps()->spi_fast_link) {
+        char m[120];
+        snprintf(m, sizeof(m), "sbw needs gateware v%u or newer (fast SPI link): update the gateware",
+                 (unsigned)SPI_FAST_LINK_MIN_GW);
+        send_error(conn_id, m);
+        return;
+    }
     if (!get_la(conn_id, json, "data", &p.data)) return;
     if (!p.proto->uart && !get_la(conn_id, json, "clk", &p.clk)) return;
     char rs[8] = {0};

@@ -1,7 +1,7 @@
 /* xip_prog_mod.c — runs from the W25Q (xip_image.h): the prog image's table and dispatch.
  *
- * The prog image holds the five pin programmers of prog_flash (prog_updi.c, prog_pic.c, prog_c2.c,
- * prog_tpi.c, prog_pdi.c, linked into .xip_prog by name) and this file. It takes the same RAM
+ * The prog image holds the six pin programmers of prog_flash (prog_updi.c, prog_pic.c, prog_c2.c,
+ * prog_tpi.c, prog_pdi.c, prog_sbw.c, linked into .xip_prog by name) and this file. It takes the same RAM
  * region as the usb image: a prog_flash job holds a session for the whole job and the other image
  * is not loaded meanwhile. The protocols are pure logic over prog_ctx_t and its callbacks, with no
  * static state; internal code starts one operation at a time through XIP_PROG_FN_CALL
@@ -32,6 +32,7 @@ static int dispatch(prog_ctx_t *ctx, unsigned proto, unsigned op)
     case PROG_PROTO_C2:   return prog_c2_call(ctx, op);
     case PROG_PROTO_TPI:  return prog_tpi_call(ctx, op);
     case PROG_PROTO_PDI:  return prog_pdi_call(ctx, op);
+    case PROG_PROTO_SBW:  return prog_sbw_call(ctx, op);
     default:              return PROG_E_ARGS;
     }
 }

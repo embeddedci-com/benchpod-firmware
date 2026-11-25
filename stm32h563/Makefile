@@ -254,6 +254,7 @@ C_SOURCES := \
   src/prog_c2.c \
   src/prog_tpi.c \
   src/prog_pdi.c \
+  src/prog_sbw.c \
   src/esp_part_table.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \
@@ -472,7 +473,7 @@ $(BUILD_DIR)/xip_mod_msc_flash.o: CFLAGS += -Os
 # in the linker script); PROG_XIP leaves out their host-test structs of function pointers, which
 # the image may not hold (xip_image.h).
 $(BUILD_DIR)/xip_prog_mod.o $(BUILD_DIR)/prog_updi.o $(BUILD_DIR)/prog_pic.o $(BUILD_DIR)/prog_c2.o \
-$(BUILD_DIR)/prog_tpi.o $(BUILD_DIR)/prog_pdi.o: CFLAGS += -DPROG_XIP=1
+$(BUILD_DIR)/prog_tpi.o $(BUILD_DIR)/prog_pdi.o $(BUILD_DIR)/prog_sbw.o: CFLAGS += -DPROG_XIP=1
 
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
@@ -658,7 +659,7 @@ $(BUILD_DIR)/error.o: CFLAGS += -Os -fno-tree-switch-conversion
 # protocols and their job within the flash budget (docs/design/memory-budget.md).
 $(BUILD_DIR)/prog_desc.o $(BUILD_DIR)/prog_flash.o $(BUILD_DIR)/prog_job.o $(BUILD_DIR)/prog_wire.o $(BUILD_DIR)/command_handler_prog.o \
 $(BUILD_DIR)/prog_updi.o $(BUILD_DIR)/prog_pic.o $(BUILD_DIR)/prog_c2.o $(BUILD_DIR)/prog_tpi.o \
-$(BUILD_DIR)/prog_pdi.o: CFLAGS += -Os
+$(BUILD_DIR)/prog_pdi.o $(BUILD_DIR)/prog_sbw.o: CFLAGS += -Os
 
 # The EMI build's lab page (src/emi_http.h), built in from tools/emi/lab_page.html.
 $(BUILD_DIR)/gen/emi_page.c: tools/emi/lab_page.html tools/emi/embed_page.py

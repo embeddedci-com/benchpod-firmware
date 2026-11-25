@@ -5,7 +5,11 @@ listed below before any code (the five existing `prog_flash` protocols were firs
 and needed a datasheet review afterwards). Every sequence and timing cites a section, table or source
 function. Anything the documents leave unclear is marked **UNCLEAR** and collected in section 13.
 
-Code: `stm32h563/src/prog_sbw.c` (not in the build yet), host test `stm32h563/test/test_prog_sbw.c`.
+Status 2026-11-25: integrated into the firmware build (option a of section 17, inside the `xip_prog` image, 15,916 of 20,480 bytes
+after), proto `sbw`, id 5, both prog_wire gaps closed (section 17), gateware v52+ required. Host tests green; **still not run
+on hardware** (bench plan: section 18).
+
+Code: `stm32h563/src/prog_sbw.c`, host test `stm32h563/test/test_prog_sbw.c`.
 Timing decision and the bench measurement: section 14 on.
 
 ## 0. Sources
@@ -621,7 +625,7 @@ Options (a prog_flash job holds one session and runs one protocol, so protocols 
 | c. Internal flash | spends the code budget XIP saved |
 | d. Grow the region beyond 20 KB | the region is RAM shared with the usb image, and static RAM is nearly full |
 
-The wiring layer has two gaps, both in `prog_wire.c` and out of scope here: (1) `prog_wire_close()` leaves the clock
+(Both gaps below are closed since 2026-11-25, see section 19.) The wiring layer had two gaps, both in `prog_wire.c`: (1) `prog_wire_close()` leaves the clock
 **high**, which on an MSP430 re-enables SBW and disables its RST function (section 12): SBW needs a way to leave TEST low
 (an ops hook, or `close` not touching the clock when the protocol says so); `prog_sbw_call(LEAVE)` leaves it low
 and the host test checks that; (2) the `c` guard flush described in section 14.
@@ -646,10 +650,13 @@ lock. Order:
 ## 19. What waits
 
 - Gateware (`ice40/`): not touched. A slot engine (section 15) waits for the SWIM session's change to `swd_engine.v` and for M1/M4.
-- Adding `prog_sbw` to the build: the enum entry (`PROG_PROTO_SBW`, today `PROG_PROTO_SBW_ID` = 5 in `prog_sbw.h`),
-  the `prog_flash.c` metadata table, the dispatch case, `command_handler_prog.c` `proto` parsing and the SDK. It fits
-  the existing `xip_prog` image (section 17, option a); a `prog2` image only when flash parts or the faster paths come.
-- `prog_wire` changes (clock left low at close; flush rules): after the bench.
+- DONE 2026-11-25: `prog_sbw` is in the build: enum `PROG_PROTO_SBW` (5), the `prog_flash.c` metadata entry, the dispatch case,
+  `command_handler_prog.c` (`proto` "sbw", refused below gateware v52), Makefile/linker/`check_xip_refs.py` lists. A `prog2`
+  image only when flash parts or the faster paths come.
+- DONE 2026-11-25: `prog_wire` changes. `prog_wire_ops_t.mode()` takes `PROG_WIRE_CLK_LOW_AT_CLOSE` (close leaves TEST low) and
+  `PROG_WIRE_STRICT_LOW` (the automatic flushes never run while the clock is low: the frame fails with a protocol error instead
+  of being cut); `prog_sbw` sets both in ENTER. Host test: the flags are set (`test_enter`); `prog_wire.c` itself only builds
+  for the pod.
 - Flash parts (Xv1 0x89, F5xx/F6xx flash controller): after FRAM works on the bench.
 - The faster FRAM write paths (mailbox funclet, quick access): after M7.
 - Password unlock (FR5xxx/FR6xxx), IPE total erase, LPMx.5 recovery (magic pattern): later, on demand.

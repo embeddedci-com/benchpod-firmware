@@ -9,6 +9,7 @@ static const prog_proto_info_t k_protos[PROG_PROTO_COUNT] = {
     [PROG_PROTO_C2]   = { PROG_INFO_C2 },
     [PROG_PROTO_TPI]  = { PROG_INFO_TPI },
     [PROG_PROTO_PDI]  = { PROG_INFO_PDI },
+    [PROG_PROTO_SBW]  = { PROG_INFO_SBW },
 };
 
 size_t prog_proto_count(void) { return PROG_PROTO_COUNT; }

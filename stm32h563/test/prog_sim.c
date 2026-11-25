@@ -95,6 +95,8 @@ static size_t sim_uart_read(void *io, uint8_t *b, size_t n, uint32_t timeout_ms)
     return k;
 }
 
+static void sim_mode(void *io, uint32_t flags) { ((prog_sim_t *)io)->wire_mode = flags; }
+
 static void sim_rx_clear(void *io) {
     prog_sim_t *s = io;
     s->rx_tail = s->rx_head;
@@ -116,6 +118,7 @@ void prog_sim_init(prog_sim_t *s, prog_wire_ops_t *ops, const prog_sim_model_t *
     memset(ops, 0, sizeof(*ops));
     ops->io = s;
     ops->set = sim_set; ops->data_drive = sim_drive; ops->sample = sim_sample; ops->flush = sim_flush;
+    ops->mode = sim_mode;
     ops->nrst = sim_nrst; ops->delay_us = sim_delay; ops->now_ms = sim_now;
     ops->uart_config = sim_uart_config; ops->uart_write = sim_uart_write;
     ops->uart_read = sim_uart_read; ops->uart_rx_clear = sim_rx_clear;
