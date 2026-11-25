@@ -201,6 +201,16 @@ bool module_current_in_100r(void)
     return s_link && s_present && module_ee_has_100r_shunt(s_id_rc, &s_id);
 }
 
+bool module_dac_io_5v(void)
+{
+    /* The one place for the analog module revision that moves the DAC8554's IOVDD to its AVDD
+       (4.5/5 V) behind a 3.3 -> 5 V buffer, so t2/t3 drop to 10 ns and 24 MHz is always in spec.
+       When that revision is fixed: add MOD_DAC_IO5V_REV_MAJOR/MINOR and a module_ee_has_dac_io_5v()
+       to module_eeprom.h/.c and return s_link && s_present && module_ee_has_dac_io_5v(s_id_rc, &s_id)
+       here, like module_current_in_100r() above. */
+    return false;
+}
+
 bool module_dac_pinout_mismatch(void)
 {
     return dac_link_mismatch(s_link, s_present, board_caps()->cn1_dac_swap,

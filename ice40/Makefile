@@ -59,6 +59,7 @@ SRC = src/top_v2.v            \
       src/dsp_counter2.v      \
       src/lc_counter.v        \
       src/psram_pads.v        \
+      src/dac_pads.v          \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
@@ -292,32 +293,23 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# v65 seeds (the emulation image split): local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and CI sweep
-# 1-64 (run 45485242806, Yosys 0.65+7).  Each pin is the seed with the best worst relative margin
-# over the four gates (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk
-# <= 15 ns) in BOTH toolchains.  v65 drops the bus masters from the emulation image and SWIM from
-# the deep image: emu 4418/5280 LC (84%, v64 97.9%), deep 4036 (76%, v64 87%), loop 4306 (82%).
-# The LA pads are registered SB_IOs since v64 (synth/check_la_pads.py), which removes the
-# release glitch that made v63 loop seed 38 and emu seeds 52/6 fail the LA sample-rate test
-# while passing every gate.  Still run SDK e2e test_la_sample_rate_matches_the_host_clock on
-# hardware before pinning a new seed.
-# Loop image: seed 12 since v65 (local 50 ok, CI 50 ok, 38 in both).  Local: clk48 54.96 MHz,
-# clk 28.21 MHz, clk -> clk48 11.31 ns, clk48 -> clk 5.58 ns.  CI: clk48 56.53 MHz, clk 29.36 MHz,
-# clk -> clk48 12.03 ns, clk48 -> clk 6.85 ns.  (v62: 34; v63: 11; v64: 36.)
-SEED_LOOP ?= 12
-# The next seeds that pass both toolchains, by worst relative margin.
-SEED_LOOP_FALLBACK ?= 16 49 50 23
-# Deep image: seed 1 since v65 (local 36 ok, CI 44 ok, 24 in both).  Local: clk48 55.27 MHz,
-# clk 27.35 MHz, clk -> clk48 13.22 ns, clk48 -> clk 6.66 ns.  CI: clk48 55.60 MHz, clk 29.36 MHz,
-# clk -> clk48 13.11 ns, clk48 -> clk 4.39 ns.  (v62: 35; v63: 31; v64: 59.)
-SEED_DEEP ?= 1
-SEED_DEEP_FALLBACK ?= 56 41 30 63
-# Emulation image (USE_EMULATION): seed 26 since v65 (local 62 ok, CI 63 ok, 61 in both: the split
-# took it from the most fragile image to the least).  Local: clk48 68.40 MHz, clk 28.90 MHz,
-# clk -> clk48 11.92 ns, clk48 -> clk 4.39 ns.  CI: clk48 68.16 MHz, clk 29.17 MHz, clk -> clk48
-# 9.98 ns, clk48 -> clk 5.03 ns.  (v62: 30; v63: 41; v64: 20, 5171 LC, 97.9%.)
-SEED_EMU ?= 26
-SEED_EMU_FALLBACK ?= 64 38 29 23
+# v68 seeds (the switchable 16 / 24 MHz DAC SCLK): local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and
+# CI sweep 1-64 (run 45548329211, Yosys 0.65+7).  Each pin is the seed with the best worst relative
+# margin over the four gates (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk
+# <= 15 ns) in BOTH toolchains.  Per-version notes: ../docs/design/ice40-seed-history.md.
+# Still run SDK e2e test_la_sample_rate_matches_the_host_clock on hardware before pinning a new seed.
+# Loop image: seed 60 (local 53 ok, CI 50 ok, 40 in both).  Local: clk48 54.57 MHz, clk 28.81 MHz,
+# clk -> clk48 10.84 ns, clk48 -> clk 8.71 ns.  CI: 55.31 / 29.14 / 10.08 / 8.27.  (v65: 12.)
+SEED_LOOP ?= 60
+SEED_LOOP_FALLBACK ?= 6 3 61 49
+# Deep image: seed 9 (local 48 ok, CI 41 ok, 30 in both).  Local: 57.06 / 27.65 / 13.99 / 5.47.
+# CI: 55.60 / 27.35 / 13.27 / 5.03.  (v65: 1.)
+SEED_DEEP ?= 9
+SEED_DEEP_FALLBACK ?= 38 61 44 19
+# Emulation image (USE_EMULATION): seed 15 (local 63 ok, CI 64 ok, 62 in both).  Local: 68.21 /
+# 28.40 / 10.73 / 6.12.  CI: 68.72 / 28.88 / 10.62 / 4.93.  (v65: 26.)
+SEED_EMU ?= 15
+SEED_EMU_FALLBACK ?= 29 64 28 16
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -428,21 +420,27 @@ cdctest:
 # DAC8551 datasheet pin timing (t5-t9) and the clk/sample the firmware's rate model assumes.
 dactest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac.vvp \
-	         sim/tb_dac8551.v src/dac8551_engine.v
+	         sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac.vvp
+	iverilog -g2012 -DTB_SCLK24 -o /tmp/$(PROJECT)_dac24.vvp sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dac24.vvp
+	@rm -f /tmp/$(PROJECT)_dac24.vvp
 	@rm -f /tmp/$(PROJECT)_dac.vvp
 
 # DAC8554 support (v49): the stream control byte and the one-shot static frame (OP_DAC_CTRL).
 dac8554test:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac8554.vvp \
-	         sim/tb_dac8554.v src/dac8551_engine.v
+	         sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac8554.vvp
+	iverilog -g2012 -DTB_SCLK24 -o /tmp/$(PROJECT)_dac855424.vvp sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dac855424.vvp
+	@rm -f /tmp/$(PROJECT)_dac855424.vvp
 	@rm -f /tmp/$(PROJECT)_dac8554.vvp
 
 # Self-checking simulation of the DAC8551 waveform-loop terminal (sleft counter).
 daclooptest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dacloop.vvp \
-	         sim/tb_dac8551_loop.v src/dac8551_engine.v
+	         sim/tb_dac8551_loop.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacloop.vvp
 	@rm -f /tmp/$(PROJECT)_dacloop.vvp
 
@@ -469,7 +467,7 @@ dacpsramskewtest:
 # of the reader FIFO (reader -> dac8551_engine in psram_mode) to the DAC8551 frames.
 dacpsramreplaytest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrep.vvp \
-	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/dac_pads.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrep.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrep.vvp
 
@@ -533,7 +531,7 @@ looptest:
 # never {new high byte, old low byte} (v38; 176 of 1111 frames were torn before).
 loopframetest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_loopframe.vvp \
-	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v
+	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_loopframe.vvp
 	@rm -f /tmp/$(PROJECT)_loopframe.vvp
 

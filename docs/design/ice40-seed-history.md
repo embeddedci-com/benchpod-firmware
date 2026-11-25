@@ -462,3 +462,48 @@ To use it: turn it on (default to `?= 1`, or build with `PIN_CLKDIV=1`) together
 `GATEWARE_VERSION` bump, run the seed sweep with `pin_clkdiv=true` locally and in CI, re-pin
 `SEED_LOOP`, `SEED_DEEP` and `SEED_EMU`, and test both pods on hardware before promoting. Seeds
 pinned without the option do not carry over: the pin changes every placement.
+
+## v66
+
+The 19.2 MHz DAC SCLK: `dac8551_engine` puts out half pairs and the new `dac_pads` drives SCLK and
+DIN through DDR SB_IOs. Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10)
+and in CI's (yosys 0.65+7, run 45512812320). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 58/64 | 48/64 | 42 |
+| deep  | 49/64 | 39/64 | 28 |
+| emu   | 59/64 | 63/64 | 57 |
+
+Each pin is the seed whose worst relative margin over the four gates, in both toolchains, is the
+largest. Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns |
+|-------|------|-----------|---------|-----------------|-----------------|
+| loop  | 36   | 53.80 (55.87) | 28.82 (28.24) | 11.27 (12.57) | 9.31 (8.27) |
+| deep  | 17   | 57.20 (54.27) | 28.00 (28.96) | 13.16 (13.27) | 6.12 (5.58) |
+| emu   | 49   | 64.21 (62.05) | 29.30 (28.63) | 10.19 (10.62) | 5.68 (6.33) |
+
+A first v66 netlist (SCLK 2 halves high / 3 low, swept the same way) is superseded: the bench
+read its SCLK high at the 20 ns limit, and the final netlist has 3 halves high / 2 low.
+
+## v68
+
+The switchable DAC SCLK (16 MHz by default, 24 MHz for explicit rates above the 16 MHz maximum).
+v66 (19.2 MHz) and the v67 candidate (16 MHz only) were not released; their pins are superseded.
+Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10) and in CI's (yosys 0.65+7,
+run 45548329211). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 53/64 | 50/64 | 40 |
+| deep  | 48/64 | 41/64 | 30 |
+| emu   | 63/64 | 64/64 | 62 |
+
+Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns |
+|-------|------|-----------|---------|-----------------|-----------------|
+| loop  | 60   | 54.57 (55.31) | 28.81 (29.14) | 10.84 (10.08) | 8.71 (8.27) |
+| deep  | 9    | 57.06 (55.60) | 27.65 (27.35) | 13.99 (13.27) | 5.47 (5.03) |
+| emu   | 15   | 68.21 (68.72) | 28.40 (28.88) | 10.73 (10.62) | 6.12 (4.93) |
