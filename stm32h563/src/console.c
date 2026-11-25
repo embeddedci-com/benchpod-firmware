@@ -81,6 +81,7 @@ bool clock_on_hsi(void);   /* main.c */
 #include "lwip/stats.h"    /* lwIP memory high-water marks in status */
 #include "lwip/memp.h"
 #include "status_led.h"
+#include "ice40_switch.h"   /* ice40_reflash_image counts its writes */
 #if defined(BENCHPOD_EMI_TEST)
 #include "emi_test.h"
 #endif
@@ -126,6 +127,7 @@ int ice40_reflash_image(int n)
        image of the same gateware version (boot_policy_gateware_action). */
     gw_ident_t ident;
     gw_ident_make(&ident, (uint16_t)id, blob_store_info(id)->len, blob_store_info(id)->sha256);
+    ice40_switch_note_reflash();
     psram_reset_to_spi();
     int rc = ice40_flash_program_src_ident(blob_store_read, (void *)(uintptr_t)id, blob_store_info(id)->len, &ident);
     psram_init();                       /* re-enter QPI for the new gateware (bus-yank now safe: gw v26) */

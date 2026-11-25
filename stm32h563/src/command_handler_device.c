@@ -52,6 +52,7 @@
 
 #include "pico/time.h"
 #include "bp_log.h"
+#include "ice40_switch.h"   /* fpga_image: switch counters */
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -342,15 +343,22 @@ void handle_nrst(int conn_id, const char *json) {
    cold-reconfig (~2-3 s). Returns the new image's {image, name, version, features}; also asks the
    net task to re-announce capabilities so the server's cached caps track the swap.
    {"cmd":"fpga_image"} alone reports the running image. Leaving the emulation image while I2C,
-   SPI or UART sensors run is refused (they need it): sensor_stop them first. */
+   SPI or UART sensors run is refused (they need it): sensor_stop them first.
+   Asking for the image that already runs does nothing ("switched":false, no flash write);
+   "force":true reloads it anyway. Every reply carries the switch counters since boot
+   (ice40_switch.h, also in status). */
 void handle_fpga_image(int conn_id, const char *json) {
     char s[16] = {0};
+    char payload[256];
+    bp_emit_t e;
     if (!json_get_value(json, "image", s, sizeof(s)) || !s[0]) {
         int kind = signal_engine_image_kind();
-        char payload[112];
-        snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
-                 kind, signal_engine_image_name(kind), signal_engine_fpga_version(),
-                 signal_engine_fpga_features());
+        bp_emit_init(&e, payload, sizeof(payload));
+        bp_emit(&e, "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u,",
+                kind, signal_engine_image_name(kind), signal_engine_fpga_version(),
+                signal_engine_fpga_features());
+        ice40_switch_emit(&e);
+        bp_emit_raw(&e, "}");
         send_ok_str(conn_id, payload);
         return;
     }
@@ -368,16 +376,26 @@ void handle_fpga_image(int conn_id, const char *json) {
         }
     }
     uint8_t ver = 0, feats = 0;
-    if (!fpga_image_swap(conn_id, img, &ver, &feats)) return;
-    char payload[112];
-    snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
-             img, signal_engine_image_name(img), ver, feats);
+    bool skipped = false;
+    if (!fpga_image_swap_ex(conn_id, img, json_flag(json, "force"), &skipped, &ver, &feats)) return;
+    bp_emit_init(&e, payload, sizeof(payload));
+    bp_emit(&e, "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u,\"switched\":%s,",
+            img, signal_engine_image_name(img), ver, feats, skipped ? "false" : "true");
+    ice40_switch_emit(&e);
+    bp_emit_raw(&e, "}");
     send_ok_str(conn_id, payload);
 }
 
 bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out) {
+    return fpga_image_swap_ex(conn_id, img, false, NULL, ver_out, feats_out);
+}
+
+bool fpga_image_swap_ex(int conn_id, int img, bool force, bool *skipped_out,
+                        uint8_t *ver_out, uint8_t *feats_out) {
     if (!heavy_begin(conn_id)) return false;
-    int rc = fpga_warmboot((uint8_t)img);
+    bool skipped = false;
+    int rc = fpga_warmboot_ex((uint8_t)img, force, &skipped);
+    if (skipped_out) *skipped_out = skipped;
     uint8_t ver = signal_engine_fpga_version();
     uint8_t feats = signal_engine_fpga_features();
     heavy_release(conn_id);
@@ -392,6 +410,11 @@ bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out)
     if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return false; }
     if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return false; }
     if (rc != 0)  { send_error(conn_id, "image switch failed"); return false; }
+    if (skipped) {   /* nothing changed: no caps resend, no DAC re-park */
+        if (ver_out) *ver_out = ver;
+        if (feats_out) *feats_out = feats;
+        return true;
+    }
     /* The live image (and thus dac_control_loop / dac_deep_replay / dac_replay_max_samples) just
        changed — re-announce so the cloud/webapp gate on the NEW image, not the connect-time one. */
     cloud_client_request_caps_resend();

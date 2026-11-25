@@ -212,8 +212,13 @@ bool     signal_engine_has_control_loop(void);
    from W25Q slot gw0/gw1/gw2 (ice40_reflash_image, ~2 s) and reconfigures, then re-reads
    version/features and runs a 16-sample PSRAM-write selftest.  Returns 0 ok, -1 bad image number,
    -2 the image's W25Q slot is empty (nothing changed), -3 reflash failed twice (falls back to
-   image 0), -5 the PSRAM-write selftest failed on the new image (falls back to image 0). */
+   image 0), -5 the PSRAM-write selftest failed on the new image (falls back to image 0).
+   When the requested image already runs (CDONE high, a live FPGA_FEATURES read names it, the
+   PSRAM write path works) it returns 0 at once and touches nothing (ice40_switch_plan): no flash
+   write, no DAC stop. fpga_warmboot_ex(image, true, ...) reloads it anyway. *skipped (may be NULL)
+   says which happened. */
 int      fpga_warmboot(uint8_t image);
+int      fpga_warmboot_ex(uint8_t image, bool force, bool *skipped);
 
 /* Bring every gateware PSRAM master (deep-replay reader / closed loop / capture writer) to a
    safe IDLE boundary before firmware grabs the shared quad bus for a runtime reflash or OTA.

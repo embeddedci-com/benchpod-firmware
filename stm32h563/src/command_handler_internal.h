@@ -121,6 +121,9 @@ float parse_sample_rate_hz(const char *json);
    gate, then re-announce the caps and re-park the DAC.  false = the error was sent.  ver_out /
    feats_out (may be NULL) get the new image's version and FPGA_FEATURES. command_handler_device.c */
 bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out);
+/* The same with "force" (reload even when img already runs) and whether it was skipped. */
+bool fpga_image_swap_ex(int conn_id, int img, bool force, bool *skipped_out,
+                        uint8_t *ver_out, uint8_t *feats_out);
 /* SWD, the SPI master and the I2C master (and the two-wire pin programmers on that engine) need an
    image with the bus masters (gateware v65: loop or deep).  On the emulation image: swaps to the
    loop image when no emulated digital sensor runs, else BP0059.  false = the error was sent. */

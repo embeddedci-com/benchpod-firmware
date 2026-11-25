@@ -15,6 +15,7 @@
 #include "pico_compat.h"
 #include "stm32h5xx_hal.h"
 #include "bp_log.h"
+#include "ice40_switch.h"   /* erase count in status.fpga_switch */
 #include <stdio.h>
 #include <string.h>
 
@@ -188,10 +189,12 @@ int ice40_flash_program_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
     /* The record names the image about to be replaced: drop it first, so a write that fails or is
        cut leaves no record (the next boot compares) rather than a wrong one. */
     s_ident_ok = false;
+    ice40_switch_note_erases(1);
     if (w25q_erase_sector(GW_IDENT_OFF) != 0) goto fail;
     /* Erase enough 4 KB sectors to hold the bitstream. */
     for (uint32_t a = 0; a < len; a += W25Q_SECTOR) {
         erased = true;
+        ice40_switch_note_erases(1);
         if (w25q_erase_sector(a) != 0) goto fail;
     }
     /* Program in 256-byte pages. */
@@ -286,6 +289,7 @@ int ice40_flash_matches_src_ident(ice40_src_read_fn rd, void *ctx, size_t len, c
     }
     if (same == 1 && ident && len <= GW_IDENT_OFF) {
         s_ident_ok = false;
+        ice40_switch_note_erases(1);
         if (w25q_erase_sector(GW_IDENT_OFF) == 0) (void)ident_write(ident);
     }
     (void)release_and_wait_cdone();

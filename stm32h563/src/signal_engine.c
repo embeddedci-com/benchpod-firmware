@@ -160,6 +160,7 @@ static inline bool busy_read(void)
 #include "blob_store.h"
 #include "dac_link.h"      /* the flat cable's DAC pinout: no DAC frames on a mismatched pair */
 #include "module_link.h"
+#include "ice40_switch.h"   /* skip a switch to the running image; switch counters */
 
 /* spi_cmd_write refused a DAC command: the boards disagree on the DAC pinout (dac_link.h). */
 #define SE_ERR_DAC_PINOUT (-20)
@@ -1865,9 +1866,40 @@ void signal_engine_quiesce_psram_masters(void) {
     }
 }
 
-int fpga_warmboot(uint8_t image) {
+/* The running image from a LIVE FPGA_FEATURES read: -1 when the iCE40 does not answer it (the
+   cached value could predate a reconfigure, so it never proves anything here). */
+static int fpga_warmboot_load(uint8_t image);
+static int running_image_live(void) {
+    if (s_fpga_version == 0 || !gw_caps()->capture_bases) return -1;
+    uint8_t f = 0;
+    if (spi_cmd_read(CMD_FPGA_FEATURES, NULL, 0, &f, 1) != 0) return -1;
+    s_fpga_features = f;
+    return signal_engine_image_kind();
+}
+
+int fpga_warmboot(uint8_t image) { return fpga_warmboot_ex(image, false, NULL); }
+
+int fpga_warmboot_ex(uint8_t image, bool force, bool *skipped) {
+    if (skipped) *skipped = false;
     if (image >= ICE40_IMAGE_COUNT) return -1;
+    /* Already on it: no erase, no reload, nothing the running gateware does is interrupted. */
+    const uint8_t embedded = ice40_embedded_gw_version();
+    if (!force && ice40_switch_plan((int)image, running_image_live(), ice40_is_configured() != 0,
+                                    signal_engine_psram_operable(),
+                                    embedded == 0 || s_fpga_version == embedded, false) == ICE40_SW_SKIP) {
+        ice40_switch_note_skip();
+        if (skipped) *skipped = true;
+        LOG_D("[sig] image %u already runs: not reloaded\n", image);
+        return 0;
+    }
     if (!blob_store_present((blob_id_t)ice40_image_slot(image))) return -2;
+    ice40_switch_note_switch();
+    int rc = fpga_warmboot_load(image);
+    if (rc != 0) ice40_switch_note_failed();
+    return rc;
+}
+
+static int fpga_warmboot_load(uint8_t image) {
     /* Quiesce the running gateware so the swap takes the bus at a safe (masters-idle) boundary —
        this is what makes the swap robust under load instead of wedging the PSRAM (see the helper). */
     signal_engine_quiesce_psram_masters();

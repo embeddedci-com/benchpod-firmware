@@ -86,6 +86,7 @@ WIFIBRIDGE_SRCS := test_wifi_bridge.c ../src/wifi_bridge.c ../src/wifi_bridge_ot
                    ../lib/monocypher/src/optional/monocypher-ed25519.c
 PWRPROF_SRCS  := test_power_profile.c ../src/power_profile.c ../src/ina238.c ../src/bp_json.c
 BOOTPOL_SRCS  := test_boot_policy.c ../src/boot_policy.c
+ICE40SW_SRCS  := test_ice40_switch.c ../src/ice40_switch.c ../src/bp_json.c
 # hw_worker.c is #included by its test; shim_worker has the FreeRTOS + HAL headers it needs.
 HWWORKER_SRCS := test_hw_worker.c ../src/hw_worker.c ../src/net_reload.c
 # boot_guard.c is #included by its test (shim_hal stands in for the HAL header).
@@ -164,7 +165,7 @@ CHCAPTURE_SRCS := test_ch_capture.c ../src/gw_caps.c ../src/command_handler_capt
 CHPINS_SRCS := test_ch_pins.c ../src/gw_caps.c ../src/command_handler_pins.c ../src/la_pull.c ../src/pull_tca9554.c ../src/la_pins.c ../src/board_caps.c \
                ../src/bp_json.c ../src/pull_exp.c ../src/pull_exp_logic.c ../src/bp_errors.c
 # status: the real handler with its inputs faked at their longest, the caps[] list from cloud_caps.c.
-CHSTATUS_SRCS := test_ch_status.c ../src/command_handler_status.c ../src/cloud_caps.c ../src/bp_json.c
+CHSTATUS_SRCS := test_ch_status.c ../src/command_handler_status.c ../src/ice40_switch.c ../src/cloud_caps.c ../src/bp_json.c
 CHSTATUS_DEFS := -DBENCHPOD_WIFI_BRIDGE=1 -I../../wifi-bridge/components/bridge_core/include \
                  -DLWIP_STATS=1 -DMEM_STATS=1 -DMEMP_STATS=1
 CHNET_SRCS := test_ch_net.c ../src/command_handler_net.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c ../src/config_store.c \
@@ -509,6 +510,10 @@ build/test_boot_policy: $(BOOTPOL_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(BOOTPOL_SRCS) -lm -o $@
 
+build/test_ice40_switch: $(ICE40SW_SRCS)
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(ICE40SW_SRCS) -lm -o $@
+
 build/test_hw_worker: $(HWWORKER_SRCS) $(wildcard shim_worker/*.h)
 	@mkdir -p build
 	$(CC) $(CFLAGS) -Ishim_worker test_hw_worker.c ../src/net_reload.c -lm -o $@
@@ -688,7 +693,7 @@ build/test_fw_sign: $(FWSIGN_SRCS) vectors/fwsign_vectors.h fw_sign_keys_gen.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(MONO_INC) $(FWSIGN_SRCS) -lm -o $@
 
-TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_dap_jtag build/test_dap_id build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_xspi_guard build/test_msc_flash build/test_usb_flash_wait build/test_ctrl_flash build/test_ser_flash build/test_prog_updi build/test_prog_pic build/test_prog_c2 build/test_prog_tpi build/test_prog_pdi build/test_prog_sbw build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_usb_host_desc build/test_usb_check build/test_picoboot build/test_usb_hid build/test_usb_serial_con build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_dac_link build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_lan_clients build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_mdns_nsec build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status build/test_lan_tls_resume $(OTA_TARGET)
+TESTS := build/test_portable build/test_sensor_def build/test_sensor_mgr build/test_sensor_def_fuzz build/test_gps build/test_dap build/test_dap_jtag build/test_dap_id build/test_swd_ll build/test_net_dhcp build/test_net_route build/test_usb_dhcpd build/test_xfer build/test_target_power build/test_status_led build/test_la_rate build/test_psram_alloc build/test_bus_owner build/test_xspi_guard build/test_msc_flash build/test_usb_flash_wait build/test_ctrl_flash build/test_ser_flash build/test_prog_updi build/test_prog_pic build/test_prog_c2 build/test_prog_tpi build/test_prog_pdi build/test_prog_sbw build/test_psram_regions build/test_json build/test_bp_errors build/test_wiring_doc build/test_conn_tx build/test_cloud_rx build/test_cloud_caps build/test_cloud_reply_cap build/test_device_identity build/test_ws_frame build/test_uart_status build/test_dac_loop_params build/test_dac_rearm build/test_adc_scale build/test_esp_pump build/test_la_pins build/test_spi_flash build/test_spi_stream build/test_i2c_txn build/test_eth_diag build/test_wifi_bridge build/test_power_profile build/test_boot_policy build/test_ice40_switch build/test_boot_guard build/test_hw_worker build/test_esp_wifi_ctrl build/test_c3_restarts build/test_wifi_scan build/test_esp_part_table build/test_scpi_paced build/test_bus_recovery build/test_can_timing build/test_config_store build/test_lan_tls_pem build/test_dac_limits build/test_dac_quad build/test_analog_path build/test_adc_cal build/test_current_out build/test_dac_code16 build/test_wave16 build/test_flash_layout build/test_board_variant build/test_board_caps build/test_usb_host_desc build/test_usb_check build/test_picoboot build/test_usb_hid build/test_usb_serial_con build/test_gw_caps build/test_la_io build/test_vref build/test_pull_exp build/test_pull_exp_state build/test_module_eeprom build/test_dac_link build/test_fw_sign build/test_adc_pool build/test_cmd_tier build/test_lan_clients build/test_cmd_gate build/test_pod_policy build/test_lease_gate build/test_lease_local build/test_net_reload build/test_altcp_bp_proxy build/test_mdns_nsec build/test_ch_transport build/test_ch_dap build/test_ch_uart build/test_ch_pins build/test_ch_dac build/test_ch_calibrate build/test_ch_capture build/test_ch_net build/test_ch_status build/test_lan_tls_resume $(OTA_TARGET)
 
 TESTS += build/test_bp_log build/test_log_level build/test_console_prompt build/test_emi_log build/test_emi_http build/test_recovery
 
@@ -759,6 +764,7 @@ run: $(TESTS)
 	@./build/test_wifi_bridge
 	@./build/test_power_profile
 	@./build/test_boot_policy
+	@./build/test_ice40_switch
 	@./build/test_boot_guard > build/test_boot_guard.log || { cat build/test_boot_guard.log; exit 1; }
 	@tail -n 1 build/test_boot_guard.log
 	@./build/test_hw_worker
