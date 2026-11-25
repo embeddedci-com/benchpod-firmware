@@ -91,6 +91,16 @@ size_t sd_err_format(const sd_err_t *e, char *out, size_t cap);
 int sd_compile(const char *json, size_t json_len, void *prog, size_t prog_cap,
                void *work, size_t work_cap, size_t *prog_len, sd_err_t *err);
 
+/* sd_compile's arguments in one struct: the firmware runs the compiler from the W25Q (the prog
+   image, xip_prog_mod.c), which takes a single context pointer. */
+typedef struct {
+    const char *json;  size_t json_len;
+    void       *prog;  size_t prog_cap;
+    void       *work;  size_t work_cap;
+    size_t     *prog_len;
+    sd_err_t   *err;
+} sd_compile_args_t;
+
 /* ---- instance ---- */
 typedef struct {
     const char *key;  uint8_t key_len;

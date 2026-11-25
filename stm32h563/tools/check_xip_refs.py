@@ -14,7 +14,8 @@
    around it.
 2. Inside .xip, function addresses appear only in the table: XIP code hands no callback to
    anything that could run it outside a session.
-3. XIP objects (xip_mod_*.o) have no .data or .bss.
+3. XIP objects (xip_mod_*.o, the prog image's protocol files, sensor_def_compile.o and
+   sensor_def_expr.o) have no .data or .bss.
 """
 import glob
 import os
@@ -53,7 +54,8 @@ IMAGES = (
     ("prog", ".xip_prog", "xip_prog_table", "__xip_prog_start"),
 )
 # The XIP objects of each image, by object file pattern, for the "no static state" rule.
-OBJECTS = ("xip_mod_*.o", "xip_prog_mod.o", "prog_updi.o", "prog_pic.o", "prog_c2.o", "prog_tpi.o", "prog_pdi.o", "prog_sbw.o")
+OBJECTS = ("xip_mod_*.o", "xip_prog_mod.o", "prog_updi.o", "prog_pic.o", "prog_c2.o", "prog_tpi.o", "prog_pdi.o", "prog_sbw.o",
+           "sensor_def_compile.o", "sensor_def_expr.o")
 
 
 def symbols(elf):

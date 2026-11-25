@@ -246,6 +246,17 @@ void sensor_port_free(void *p) {
     free(h);
 }
 size_t sensor_port_heap_free(void) { return g_fpga.heap_limit ? g_fpga.heap_limit - s_heap_used : 100000; }
+int  sensor_port_compile_ready(char *err, size_t cap) {
+    if (!g_fpga.compile_refuse) return 0;
+    snprintf(err, cap, "%s", g_fpga.compile_refuse);
+    return -1;
+}
+int  sensor_port_compile(const char *json, size_t n, void *prog, size_t prog_cap, void *work, size_t work_cap,
+                         size_t *prog_len, sd_err_t *se, char *err, size_t cap) {
+    if (sensor_port_compile_ready(err, cap) != 0) return SM_COMPILE_REFUSED;
+    g_fpga.compiles++;
+    return sd_compile(json, n, prog, prog_cap, work, work_cap, prog_len, se);
+}
 int  sensor_port_image(void) { return g_fpga.image; }
 int  sensor_port_load_emulation(char *err, size_t cap) {
     if (g_fpga.load_rc) { snprintf(err, cap, "the emulation image is not installed"); return -1; }

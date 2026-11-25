@@ -53,7 +53,7 @@ The largest flash users in the release build:
 | Merged string literals (`.rodata.str1.1`) | about 133.8 KB |
 | `signal_engine` | 28 KB |
 | `sensor_def_vm` | 20 KB |
-| `sensor_def_compile` | 19.6 KB |
+| `sensor_def_compile` | 19.6 KB (in the `xip_prog` image since 2026-11-25, with `sensor_def_expr`) |
 | `sensor_mgr` | 18.4 KB |
 | `monocypher` | 17 KB |
 
@@ -70,7 +70,7 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
 | Image | Section | Slot (W25Q) | Code | Size (release = dev build) | Of the 64 KB region |
 |---|---|---|---|---|---|
 | usb | `.xip` | `xip` (0x200000) | the USB flash protocols (`xip_mod_*.c`) | 17,700 B | 27.0% |
-| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`) and the dispatch (`xip_prog_mod.c`) | 16,340 B | 24.9% |
+| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`), the sensor definition compiler (`sensor_def_compile.c`, `sensor_def_expr.c`) and the dispatch (`xip_prog_mod.c`) | 53,064 B (16,340 B before the compiler) | 81.0% |
 
 - **XIP_RAM=1 (the release default, every board shipped so far):** both images are linked over
   `adc_pool` (the 64 KB shared sample buffer, below), an overlay of all three. From 2026-11-25 the
@@ -115,6 +115,34 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
   Static RAM now excludes the pool (it is its own 64 KB region), so the free RAM at link time is the
   same as before (5,208 B release): the 20 KB moved from the region to the heap, the pool moved
   from `.bss` to `POOL`. Flash grew by 176 B (the pool takeover and one error code).
+- The sensor definition compiler in the prog image (2026-11-25, `XIP_PROG_ABI` 2, table entry
+  `XIP_PROG_FN_SD_COMPILE`): `sensor_def_compile.c` and `sensor_def_expr.c` (about 37.6 KB of code
+  and strings) leave internal flash. They run only when a definition is uploaded
+  (`sensor_define`, `sm_define_chunk` on the hw worker), inside one prog-image session
+  (`sensor_port_compile` in `sensor_port.c`). They have no mutable statics (their working memory is
+  the 20 KB work buffer the caller allocates), and call the JSON reader, the VM and the instance
+  code, which stay internal, as ordinary calls. Stayed internal: `sensor_def_json.c` (the stimulus
+  compiler and `sensor_fault` use it; `sdj_path_at` and `sd_err_format` moved there from the
+  compiler's file), `sensor_def_vm.c`, `sensor_def_math.c`, `sensor_def_inst.c`, `sensor_def_regs.c`,
+  `sensor_def_uart.c`, `sensor_def_analog.c`, `sensor_stim.c` (the stimulus compiler: a stimulus
+  upload compiles in internal flash) and the sensor manager. The EMC test build (`EMI_TEST=1`) keeps
+  the compiler internal (its linker script drops the `XIP_PROG_SENSOR_COMPILE` lines), because it
+  defines its UART sensor without a session on boards that cannot map the W25Q.
+
+| Build | Internal flash left before | after | `xip_prog` image |
+|---|---|---|---|
+| release (`make RELEASE=1`) | 21,508 B (895,996 B used, 97.66%) | 56,420 B (861,084 B used, 93.85%) | 16,340 B -> 53,064 B (81.0% of 64 KB) |
+| dev (`make`) | about 7,844 B (the table above) | 42,756 B (874,748 B used, 95.34%) | 16,340 B -> 53,064 B |
+
+  Static RAM and the FreeRTOS heap do not change. A session copies the image over the adc_pool and
+  checks its SHA-256 first: for 53 KB that is about 8.5 ms of W25Q read (1-line read at the 50 MHz
+  operation clock, 256-byte reads), about 2 ms of command overhead and about 7 ms of software
+  SHA-256 (est., 30 to 40 cycles per byte at 250 MHz): roughly 20 ms per definition, estimated, not
+  yet measured (`{"cmd":"xip","selftest":true,"image":"prog"}` reports `begin_us` on a pod). While
+  the session runs the pod answers busy to captures (BP0048), and a `sensor_define` while a capture
+  or upload runs answers busy; a pod without the matching `xip_prog` blob cannot compile a
+  definition at all (BP0083: install the blobs). Every emulated sensor, the library's included, is a
+  definition, so such a pod cannot start one.
 - What stays in internal flash: the protocol metadata (`prog_flash.c`: name, uart, uses_nrst,
   mems), `prog_job.c`, `prog_wire.c` (its functions are the callbacks the job stores in
   `prog_wire_ops_t`, and internal code may not hold pointers to XIP functions) and the command.

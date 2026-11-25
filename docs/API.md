@@ -3619,6 +3619,17 @@ the other fields, in a command of at most 1152 bytes, which is what the SDK send
 One upload (a definition or a stimulus) is in flight at a time: a chunk at offset 0 starts a new
 one and drops the old. An upload idle for 60 s is dropped.
 
+The definition compiler runs from the pod's W25Q (the `xip_prog` blob, `blob-xip_prog.bin`, made by
+the same build as the firmware and installed with the other blobs; see [`xip`](#xip--code-that-runs-from-the-w25q)),
+for the time of the compile only. So `sensor_define` (and `dry_run`, which compiles too) needs two
+things, and answers before the upload when it lacks them (on the chunk at offset 0) or after the last
+chunk when the situation changed meanwhile: no capture, upload, update or flash may be running
+(`BP0048`, `storage_bus_busy`; try again when it ends, the upload is dropped and starts again at
+offset 0), and the pod must hold the `xip_prog` image of its firmware (`BP0083`, `xip_unavailable`:
+install the blobs with `benchpod install-blobs`). Every emulated sensor is a definition, the library
+ones included, so a pod without the blob cannot start one; `sensor_stimulus` (a stimulus compiles
+in the firmware itself), a running sensor, `sensor_set` and the captures do not need it.
+
 Replies: `{"status":"ok","data":{"instance":"env","received":768}}` for a chunk, and for the last:
 
 ```json
@@ -3641,11 +3652,14 @@ Errors:
 | `total` out of range | `"total must be 1..32768 bytes"` |
 | not base64 / too long | `"data_b64 is not base64"`, `"data_b64 too long: at most 1240 characters per chunk"` |
 | the definition does not compile | `"invalid definition: registers[4].s16be: unknown name 'ax' at 17"` (format.md section 10) |
+| a capture, upload, update or flash is running | `BP0048` (`storage_bus_busy`): `"busy: a capture, upload or update is using the PSRAM bus; try again when it ends"` (or the words of what holds the bus) |
+| the `xip_prog` blob is missing or from another build | `BP0083` (`xip_unavailable`): `"... sensor_define needs the xip_prog blob, which is missing or from another build: install the blobs (benchpod install-blobs)"` |
 | the heap is short | `"out of memory: compiling needs N bytes, M free"` |
 | 8 instances defined | `"8 instances are defined already: sensor_stop one first"` |
 
 Memory: the upload, the compiler's scratch (about 28 KB) and the program live on the heap only
-while they are needed; a running instance holds its program (up to 8 KB, typically 1.5 to 3 KB),
+while they are needed (the compiler's code, about 37 KB, is in the `xip_prog` image and takes the
+pod's shared sample buffer for the compile, which is why a running capture refuses it); a running instance holds its program (up to 8 KB, typically 1.5 to 3 KB),
 about 4.5 KB of state, a 256-byte register image (I2C/SPI) or 2.5 KB of UART buffers.
 
 ### `sensor_start` — start an instance
@@ -5042,8 +5056,10 @@ is off, for every test but `reset`).
 Some rarely used code runs straight from the pod's W25Q flash instead of the MCU's own flash. There
 are two images, each a blob made by the same build as the firmware and installed with the other
 blobs (the pod runs only the ones built with its firmware): `xip` (`blob-xip.bin`), the USB flash
-protocols, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash` pin programmers. Only one runs at
-a time (a `usb_flash` or a `prog_flash` job holds its image until it ends; the other waits).
+protocols, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash` pin programmers and the compiler of
+`sensor_define` (a session of a few tens of milliseconds per definition). Only one runs at
+a time (a `usb_flash` or a `prog_flash` job holds its image until it ends; the other waits; a
+`sensor_define` meanwhile answers busy).
 While one runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
 are refused with BP0048 until it ends. Release builds copy the running image into one shared RAM
 region of the pod, so the two images together cost no more RAM than one.

@@ -5,9 +5,16 @@
  * region as the usb image: a prog_flash job holds a session for the whole job and the other image
  * is not loaded meanwhile. The protocols are pure logic over prog_ctx_t and its callbacks, with no
  * static state; internal code starts one operation at a time through XIP_PROG_FN_CALL
- * (prog_xip_call in prog_job.c). */
+ * (prog_xip_call in prog_job.c).
+ *
+ * The sensor definition compiler (sensor_def_compile.c and sensor_def_expr.c, linked into
+ * .xip_prog by name) is in this image too: it runs only when a definition is uploaded
+ * (sensor_port_compile in sensor_port.c, inside a session on the hw worker). It keeps no static
+ * state (its working memory is the caller's work buffer) and reaches the JSON reader, the VM and
+ * the instance code, which stay in internal flash, as ordinary calls. */
 #include "xip_image.h"
 #include "prog_flash.h"
+#include "sensor_def.h"
 
 #include <stdint.h>
 
@@ -37,9 +44,17 @@ static int dispatch(prog_ctx_t *ctx, unsigned proto, unsigned op)
     }
 }
 
+/* sd_compile with its arguments in one struct; its own return value (SD_OK or SD_E_*). */
+static int sd_compile_entry(void *ctx)
+{
+    sd_compile_args_t *a = (sd_compile_args_t *)ctx;
+    return sd_compile(a->json, a->json_len, a->prog, a->prog_cap, a->work, a->work_cap, a->prog_len, a->err);
+}
+
 __attribute__((section(".xip_prog.table"), used))
 const xip_table_t xip_prog_table = {
     XIP_TABLE_MAGIC, XIP_PROG_ABI, XIP_PROG_FN_COUNT,
     { [XIP_PROG_FN_SELFTEST] = (const void *)selftest,
-      [XIP_PROG_FN_CALL] = (const void *)dispatch },
+      [XIP_PROG_FN_CALL] = (const void *)dispatch,
+      [XIP_PROG_FN_SD_COMPILE] = (const void *)sd_compile_entry },
 };

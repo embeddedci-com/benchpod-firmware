@@ -38,62 +38,8 @@ void cc_fail(sd_cc_t *c, int code, uint32_t json_off, int32_t expr_off, const ch
     e->msg[n] = '\0';
 }
 
-/* The path of the value (or key) at off: "registers[3].s16be". */
-void sdj_path_at(const sdj_t *j, uint32_t root, uint32_t off, char *out, size_t cap) {
-    size_t n = 0;
-    uint32_t cur = sdj_ws(j, root);
-    out[0] = '\0';
-    for (int depth = 0; depth < SDJ_MAX_DEPTH; depth++) {
-        char t = sdj_type(j, cur);
-        if (t != '{' && t != '[') return;
-        uint32_t it = cur, k = 0, v, idx = 0;
-        bool found = false;
-        while (t == '{' ? sdj_obj_next(j, &it, &k, &v) : sdj_arr_next(j, &it, &v)) {
-            uint32_t vend = sdj_skip(j, v);
-            bool in_key = t == '{' && off >= k && off < v;
-            if (in_key || (off >= v && off < vend)) {
-                if (t == '{') {
-                    uint32_t len;
-                    const char *r = sdj_raw(j, k, &len, NULL);
-                    if (n) n = put(out, cap, n, ".", 1);
-                    n = put(out, cap, n, r, len);
-                } else {
-                    char b[12];
-                    size_t q = 0;
-                    char d[10];
-                    unsigned x = idx, m = 0;
-                    do { d[m++] = (char)('0' + x % 10); x /= 10; } while (x);
-                    b[q++] = '[';
-                    while (m) b[q++] = d[--m];
-                    b[q++] = ']';
-                    n = put(out, cap, n, b, q);
-                }
-                if (in_key || off == sdj_ws(j, v)) return;
-                cur = v;
-                found = true;
-                break;
-            }
-            idx++;
-        }
-        if (!found) return;
-    }
-}
-
-size_t sd_err_format(const sd_err_t *e, char *out, size_t cap) {
-    if (!e || !out || !cap) return 0;
-    size_t n = 0;
-    out[0] = '\0';
-    if (e->path[0]) { n = put(out, cap, n, e->path, strlen(e->path)); n = put(out, cap, n, ": ", 2); }
-    n = put(out, cap, n, e->msg, strlen(e->msg));
-    if (e->expr_off >= 0) {
-        char d[12];
-        unsigned x = (unsigned)e->expr_off, m = 0;
-        do { d[m++] = (char)('0' + x % 10); x /= 10; } while (x);
-        n = put(out, cap, n, " at ", 4);
-        while (m) { char ch = d[--m]; n = put(out, cap, n, &ch, 1); }
-    }
-    return n;
-}
+/* sdj_path_at and sd_err_format are in sensor_def_json.c: the stimulus compiler and the sensor
+   commands (internal flash) use them, and this file runs from the W25Q (xip_prog_mod.c). */
 
 /* ---- program emission ---- */
 bool cc_emit(sd_cc_t *c, const void *d, size_t n) {

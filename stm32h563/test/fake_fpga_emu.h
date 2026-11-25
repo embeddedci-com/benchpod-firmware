@@ -55,6 +55,8 @@ typedef struct {
     unsigned analog_sets, analog_releases;
     long     allocs;          /* live heap blocks */
     size_t   heap_limit;      /* 0 = no limit */
+    const char *compile_refuse; /* sensor_port_compile_ready/compile refuse with this text (a capture is running, no blob) */
+    unsigned compiles;        /* sensor_port_compile calls that ran the compiler */
 } fake_fpga_t;
 
 extern fake_fpga_t g_fpga;

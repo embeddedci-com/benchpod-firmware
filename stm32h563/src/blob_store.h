@@ -22,7 +22,8 @@
  *   0x200000  slot XIP, inside the old ESP slot: code that runs straight from the W25Q
  *             (xip_image.h), 256 KB. On every board that can run W25Q code
  *             (blob_store_set_xip_listed), with or without a C3.
- *   0x240000  slot XIP_PROG, the second code image (the pin programmers of prog_flash), 256 KB,
+ *   0x240000  slot XIP_PROG, the second code image (the pin programmers of prog_flash, the sensor definition
+ *             compiler), 256 KB,
  *             listed with the XIP slot.
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
@@ -68,7 +69,7 @@ typedef enum {
     BLOB_XIP,               /* code that runs from the W25Q (xip_image.h): a release blob on boards
                                that list it (blob_store_set_xip_listed), at the start of the old ESP
                                slot */
-    BLOB_XIP_PROG,          /* the second W25Q image: the pin programmers of prog_flash. Listed like
+    BLOB_XIP_PROG,          /* the second W25Q image: the prog_flash pin programmers and the sensor_define compiler. Listed like
                                BLOB_XIP, at W25Q 0x240000, the next 256 KB of the old ESP slot */
     BLOB_SLOT_COUNT
 } blob_id_t;

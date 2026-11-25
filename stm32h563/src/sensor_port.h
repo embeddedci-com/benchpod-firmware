@@ -17,6 +17,17 @@ void    *sensor_port_alloc(size_t n);    /* NULL when the heap is short */
 void     sensor_port_free(void *p);
 size_t   sensor_port_heap_free(void);    /* for the out-of-memory message */
 
+/* The definition compiler (sd_compile, sensor_def.h). On the pod it runs from the W25Q: the prog
+   image (xip_prog_mod.c), inside one XIP session on the hw worker, so a capture or an upload
+   running (BP0048) or a missing xip_prog blob (BP0083) refuses it. The host tests call it directly.
+   sensor_port_compile_ready: 0 when a compile would start now, else <0 with the reason in err (the
+   refusal sensor_define would give after the upload: asked before the first chunk). */
+#define SM_COMPILE_REFUSED (-1000)   /* sensor_port_compile: no compile ran, err holds the reason */
+int  sensor_port_compile_ready(char *err, size_t cap);
+/* sd_compile's own result (SD_OK, or SD_E_* with *se filled), or SM_COMPILE_REFUSED with err set. */
+int  sensor_port_compile(const char *json, size_t json_len, void *prog, size_t prog_cap, void *work,
+                         size_t work_cap, size_t *prog_len, sd_err_t *se, char *err, size_t cap);
+
 /* The running gateware image: 0 loop, 1 deep, 2 emulation, -1 unknown. */
 int  sensor_port_image(void);
 /* Load the emulation image (about 2 s). 0 ok; <0 with the reason in err. The reconfiguration
