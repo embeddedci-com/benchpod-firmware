@@ -289,27 +289,23 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# v66 seeds (the 19.2 MHz DAC SCLK through DDR pads): local sweep 1-64 (Yosys 0.65, nextpnr 0.10)
-# and CI sweep 1-64 (run 45512812320, Yosys 0.65+7).  Each pin is the seed with the best worst
+# v67 seeds (candidate A, 16 MHz DAC SCLK 3/3 halves): local sweep 1-64 (Yosys 0.65, nextpnr 0.10)
+# and CI sweep 1-64 (run 45535860168, Yosys 0.65+7).  Each pin is the seed with the best worst
 # relative margin over the four gates (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns,
 # clk48 -> clk <= 15 ns) in BOTH toolchains.  Per-version notes: ../docs/design/ice40-seed-history.md.
 # Still run SDK e2e test_la_sample_rate_matches_the_host_clock on hardware before pinning a new seed.
-# Loop image: seed 36 since v66 (local 58 ok, CI 48 ok, 42 in both).  Local: clk48 53.80 MHz,
-# clk 28.82 MHz, clk -> clk48 11.27 ns, clk48 -> clk 9.31 ns.  CI: clk48 55.87 MHz, clk 28.24 MHz,
-# clk -> clk48 12.57 ns, clk48 -> clk 8.27 ns.  (v63: 11; v64: 36; v65: 12.)
-SEED_LOOP ?= 36
-# The next seeds that pass both toolchains, by worst relative margin.
-SEED_LOOP_FALLBACK ?= 39 33 62 49
-# Deep image: seed 17 since v66 (local 49 ok, CI 39 ok, 28 in both).  Local: clk48 57.20 MHz,
-# clk 28.00 MHz, clk -> clk48 13.16 ns, clk48 -> clk 6.12 ns.  CI: clk48 54.27 MHz, clk 28.96 MHz,
-# clk -> clk48 13.27 ns, clk48 -> clk 5.58 ns.  (v63: 31; v64: 59; v65: 1.)
-SEED_DEEP ?= 17
-SEED_DEEP_FALLBACK ?= 9 25 48 10
-# Emulation image (USE_EMULATION): seed 49 since v66 (local 59 ok, CI 63 ok, 57 in both).  Local:
-# clk48 64.21 MHz, clk 29.30 MHz, clk -> clk48 10.19 ns, clk48 -> clk 5.68 ns.  CI: clk48 62.05 MHz,
-# clk 28.63 MHz, clk -> clk48 10.62 ns, clk48 -> clk 6.33 ns.  (v63: 41; v64: 20; v65: 26.)
-SEED_EMU ?= 49
-SEED_EMU_FALLBACK ?= 56 51 23 62
+# Loop image: seed 57 (local 35 ok, CI 57 ok, 30 in both).  Local: clk48 56.44 MHz, clk 27.18 MHz,
+# clk -> clk48 11.96 ns, clk48 -> clk 6.66 ns.  CI: 58.85 / 27.51 / 11.79 / 6.22.  (v66: 36.)
+SEED_LOOP ?= 57
+SEED_LOOP_FALLBACK ?= 39 45 61 11
+# Deep image: seed 40 (local 48 ok, CI 35 ok, 28 in both).  Local: 57.41 / 28.35 / 13.76 / 6.12.
+# CI: 55.60 / 28.37 / 13.31 / 5.58.  (v66: 17.)
+SEED_DEEP ?= 40
+SEED_DEEP_FALLBACK ?= 14 43 44 34
+# Emulation image (USE_EMULATION): seed 20 (local 63 ok, CI 59 ok, 57 in both).  Local: 60.65 /
+# 28.31 / 10.08 / 5.68.  CI: 57.20 / 28.02 / 12.78 / 6.87.  (v66: 49.)
+SEED_EMU ?= 20
+SEED_EMU_FALLBACK ?= 12 56 36 45
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
