@@ -41,7 +41,18 @@ Mutual TLS on port 8443, without a CA:
    a computer takes effect on its next command, also on a connection that is already open.
 
 Resumed sessions (session cache and tickets) keep the peer certificate
-(`MBEDTLS_SSL_KEEP_PEER_CERTIFICATE`), so a resumed connection is paired the same way.
+(`MBEDTLS_SSL_KEEP_PEER_CERTIFICATE`), so a resumed connection is paired the same way: the verdict
+belongs to the session, and it is the hash of the saved certificate checked against the current
+list on every command, never a stored yes/no. A computer removed from the list is refused on its
+next command, resumed or not (`test/test_lan_tls_resume.c`).
+
+A session set up without a client certificate is never resumed (`src/lan_tls_resume.c`: the ticket
+and cache callbacks refuse it). Otherwise a client that caches sessions by server address alone
+(the CLI does) would resume a certificate-less session after it got a key, and stay unpaired until
+the ticket expired (an hour): TLS cannot add a client certificate to a resumed session. The pod
+answers that client with a full handshake and a CertificateRequest, the client sends its
+certificate, and the new ticket carries it. Cost: a client that never sends a certificate does a
+full handshake on every connection (about 0.46 s on the pod).
 
 SCPI has no pairing step of its own: on the external LAN it answers only on a paired TLS
 connection while pairing is on. Plaintext 8080 is never paired.

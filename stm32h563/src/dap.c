@@ -1,6 +1,8 @@
-/* dap.c — see dap.h.  CMSIS-DAP v1 command processor, SWD subset. */
+/* dap.c — see dap.h.  CMSIS-DAP v1 command processor: SWD, and JTAG in dap_jtag.c. */
 
 #include "dap.h"
+#include "dap_jtag.h"
+#include "jtag_ll.h"
 #include "swd_ll.h"
 
 #include <string.h>
@@ -20,6 +22,9 @@
 #define ID_DAP_SWJ_Clock         0x11u
 #define ID_DAP_SWJ_Sequence      0x12u
 #define ID_DAP_SWD_Configure     0x13u
+#define ID_DAP_JTAG_Sequence     0x14u
+#define ID_DAP_JTAG_Configure    0x15u
+#define ID_DAP_JTAG_IDCODE       0x16u
 #define ID_DAP_SWD_Sequence      0x1Du
 #define ID_DAP_Invalid           0xFFu
 
@@ -57,10 +62,26 @@ static uint32_t s_budget;
 static uint32_t s_match_mask;
 static uint16_t s_packet_size  = DAP_PACKET_DEFAULT;
 static uint8_t  s_packet_count = 1;
+static uint8_t  s_ports = DAP_PORTS_SWD;   /* the ports dap_start armed pins for */
+static uint8_t  s_port  = DAP_PORT_SWD;    /* the one the engine runs now */
+static dap_port_switch_fn s_switch;
+static uint32_t s_clock_hz;               /* the last DAP_SWJ_Clock (0: none yet) */
+
+void dap_set_ports(uint8_t ports, uint8_t active, dap_port_switch_fn sw) {
+    s_ports  = ports;
+    s_port   = active;
+    s_switch = sw;
+}
+uint8_t dap_port(void) { return s_port; }
 
 /* batching state (see the batching section below) */
 #define REC_MAX 128u
-static swd_op_t  s_ops[REC_MAX];
+/* The recording buffer is used only inside one dap_process() call. prog_flash (prog_job.c) borrows
+   it while no DAP session is open: the two exclude each other (dap_start and prog_flash_start
+   both refuse while the other runs), so it costs no RAM of its own. */
+static union { swd_op_t ops[REC_MAX]; uint32_t raw[REC_MAX * sizeof(swd_op_t) / 4u]; } s_rec_buf;
+#define s_ops (s_rec_buf.ops)
+void *dap_scratch(size_t *len) { *len = sizeof(s_rec_buf); return &s_rec_buf; }
 static uint8_t  *s_dst[REC_MAX];     /* where a read's value goes (NULL: discarded) */
 static uint16_t  s_cnt_at[REC_MAX];  /* the command's transfer count when the op was issued */
 static uint8_t  *s_rp_at[REC_MAX];   /* ... and its response write position */
@@ -96,6 +117,11 @@ void dap_reset(void) {
     s_recording = false;
     s_rec_n     = 0;
     s_failed    = false;
+    s_ports     = DAP_PORTS_SWD;
+    s_port      = DAP_PORT_SWD;
+    s_switch    = NULL;
+    s_clock_hz  = 0;
+    dap_jtag_reset();
 }
 
 /* ---- little-endian helpers ----------------------------------------------- */
@@ -341,8 +367,10 @@ done:
 static size_t do_info(const uint8_t *req, size_t req_len, uint8_t *resp) {
     uint8_t id = (req_len > 1) ? req[1] : 0;
     switch (id) {
-        case INFO_CAPABILITIES:
-            resp[1] = 1; resp[2] = 0x01;            /* bit0 = SWD */
+        case INFO_CAPABILITIES:                      /* bit0 = SWD, bit1 = JTAG */
+            resp[1] = 1;
+            resp[2] = (uint8_t)(((s_ports & DAP_PORTS_SWD) ? 0x01u : 0u) |
+                                ((s_ports & DAP_PORTS_JTAG) ? 0x02u : 0u));
             return 3;
         case INFO_PACKET_COUNT:
             resp[1] = 1; resp[2] = s_packet_count;
@@ -393,6 +421,28 @@ static size_t do_swd_sequence(const uint8_t *req, size_t req_len, uint8_t *resp)
     return (size_t)(rp - resp);
 }
 
+/* ---- DAP_Connect ---------------------------------------------------------- */
+/* Port 0 is the default (the one armed now); 1 SWD, 2 JTAG.  A port dap_start armed no pins for
+   answers 0 (failed).  Switching re-arms the engine through the transport's callback. */
+static size_t do_connect(const uint8_t *req, size_t req_len, uint8_t *resp) {
+    uint8_t port = (req_len > 1) ? req[1] : 0;
+    if (port == 0) port = s_port;
+    uint8_t mask = (port == DAP_PORT_SWD) ? DAP_PORTS_SWD : (port == DAP_PORT_JTAG) ? DAP_PORTS_JTAG : 0u;
+    if (!(s_ports & mask)) { resp[1] = 0; return 2; }
+    if (port != s_port) {
+        if (!s_switch || !s_switch(port)) { resp[1] = 0; return 2; }
+        s_port = port;
+    }
+    if (port == DAP_PORT_JTAG && s_clock_hz) jtag_ll_set_clock(s_clock_hz);
+    resp[1] = port;
+    return 2;
+}
+
+static dap_jtag_cfg_t jtag_cfg(void) {
+    dap_jtag_cfg_t c = { s_idle_cycles, s_wait_retry, s_match_retry, &s_match_mask, &s_budget };
+    return c;
+}
+
 /* ---- top level ----------------------------------------------------------- */
 size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t resp_cap) {
     if (req_len == 0 || resp_cap < DAP_PACKET_SIZE) {
@@ -411,10 +461,8 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             resp[1] = DAP_OK;
             return 2;
 
-        case ID_DAP_Connect:                     /* req[1]=port (1=SWD,2=JTAG) */
-            if (req_len > 1 && req[1] == 2) { resp[1] = 0; return 2; }  /* JTAG: fail */
-            resp[1] = 1;                         /* connected as SWD */
-            return 2;
+        case ID_DAP_Connect:                     /* req[1]=port (0=default, 1=SWD, 2=JTAG) */
+            return do_connect(req, req_len, resp);
 
         case ID_DAP_Disconnect:
             resp[1] = DAP_OK;
@@ -433,14 +481,17 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             return 2;
 
         case ID_DAP_Transfer:
+            if (s_port == DAP_PORT_JTAG) { dap_jtag_cfg_t c = jtag_cfg(); return dap_jtag_transfer(req, req_len, resp, &c); }
             if (swd_ll_batch_supported() && !has_match_read(req, req_len)) rec_begin();
             return do_transfer(req, req_len, resp);
 
         case ID_DAP_TransferBlock:
+            if (s_port == DAP_PORT_JTAG) { dap_jtag_cfg_t c = jtag_cfg(); return dap_jtag_transfer_block(req, req_len, resp, &c); }
             if (swd_ll_batch_supported()) rec_begin();
             return do_transfer_block(req, req_len, resp);
 
         case ID_DAP_WriteABORT: {
+            if (s_port == DAP_PORT_JTAG) return dap_jtag_write_abort(req, req_len, resp);
             uint8_t ack = SWD_ACK_OK;
             if (req_len >= 6) {
                 uint32_t v = get_le32(req + 2);
@@ -464,12 +515,18 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             uint8_t sel = (req_len > 2) ? req[2] : 0;
             if (sel & 0x80u)                     /* nRESET (active low) */
                 swd_ll_nreset((out & 0x80u) == 0);
+            if ((sel & 0x20u) && s_port == DAP_PORT_JTAG)   /* nTRST (active low) */
+                jtag_ll_trst((out & 0x20u) == 0);
             resp[1] = out;                       /* best-effort pin readback */
             return 2;
         }
 
         case ID_DAP_SWJ_Clock:                   /* req[1..4] = Hz: the batch SWCLK */
-            if (req_len >= 5) swd_ll_set_clock(get_le32(req + 1));
+            if (req_len >= 5) {
+                s_clock_hz = get_le32(req + 1);
+                swd_ll_set_clock(s_clock_hz);
+                if (s_port == DAP_PORT_JTAG) jtag_ll_set_clock(s_clock_hz);
+            }
             resp[1] = DAP_OK;
             return 2;
 
@@ -479,6 +536,10 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
             /* The request must carry all (nbits + 7) / 8 data bytes: never clock stale buffer
                bytes onto SWDIO. */
             if (req_len < 2 || req_len - 2 < (nbits + 7u) / 8u) { resp[1] = DAP_ERROR; return 2; }
+            if (s_port == DAP_PORT_JTAG) {          /* on TMS, TDI high */
+                resp[1] = (dap_jtag_tms(req + 2, nbits) == 0) ? DAP_OK : DAP_ERROR;
+                return 2;
+            }
             swd_ll_seq_out(req + 2, nbits);
             resp[1] = DAP_OK;
             return 2;
@@ -492,7 +553,19 @@ size_t dap_process(const uint8_t *req, size_t req_len, uint8_t *resp, size_t res
         }
 
         case ID_DAP_SWD_Sequence:
+            if (s_port != DAP_PORT_SWD) { resp[1] = DAP_ERROR; return 2; }
             return do_swd_sequence(req, req_len, resp);
+
+        case ID_DAP_JTAG_Sequence:
+            if (s_port != DAP_PORT_JTAG) { resp[1] = DAP_ERROR; return 2; }
+            return dap_jtag_sequence(req, req_len, resp);
+
+        case ID_DAP_JTAG_Configure:
+            return dap_jtag_configure(req, req_len, resp);
+
+        case ID_DAP_JTAG_IDCODE:
+            if (s_port != DAP_PORT_JTAG) { resp[1] = DAP_ERROR; return 2; }
+            return dap_jtag_idcode(req, req_len, resp);
 
         default:
             resp[0] = ID_DAP_Invalid;

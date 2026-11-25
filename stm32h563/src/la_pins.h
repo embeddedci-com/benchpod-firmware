@@ -51,6 +51,11 @@ typedef enum {
     LA_FN_I2CM_SCL,
     LA_FN_UART_HD,    /* uart_proxy_start half_duplex: one wire, TX open drain + RX (gateware v57) */
     LA_FN_UART_DE,    /* uart_proxy_start de: an RS-485 transceiver's DE + /RE (gateware v58) */
+    LA_FN_JTAG_TCK,   /* dap_start with JTAG pins (the SWD engine's JTAG master, gateware v61) */
+    LA_FN_JTAG_TMS,
+    LA_FN_JTAG_TDI,
+    LA_FN_JTAG_TDO,
+    LA_FN_JTAG_TRST,  /*   optional nTRST, driven as a GPIO output */
     LA_FN__COUNT
 } la_fn_t;
 

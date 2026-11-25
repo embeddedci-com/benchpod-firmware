@@ -830,6 +830,40 @@ static void chgscan_fail(const char *why) {
     heavy_release(chgscan.conn_id);
 }
 
+/* The trigger channel's level (bit `bit` of the event state) at ticks trig - 2 and trig - 1, from a
+   second pass over the start of the stream.  Bounded: a pre-trigger stream holds at most the ring's
+   newest pre-trigger words before the trigger.  -1 (both unknown) on a read error. */
+static int chgscan_levels_before(uint64_t trig, unsigned bit, int *m2, int *m1) {
+    uint64_t t = 0;
+    uint32_t st = 0, off = 0;
+    bool first = true;
+    *m2 = *m1 = -1;
+    if (trig < 2u) return -1;
+    while (off + 3u <= chgscan.off) {
+        uint32_t n = chgscan.off - off;
+        if (n > 255u) n = 255u;
+        n -= n % 3u;
+        if (fpga_la_psram_read(off, psram_chunk, n) != 0) { *m2 = *m1 = -1; return -1; }
+        for (uint32_t i = 0; i + 3u <= n; i += 3u) {
+            uint32_t e = (uint32_t)psram_chunk[i] | ((uint32_t)psram_chunk[i + 1] << 8) |
+                         ((uint32_t)psram_chunk[i + 2] << 16);
+            uint32_t d = e >> 14, s = e & 0x3FFFu;
+            if (first) { first = false; st = s; continue; }  /* t = 0: the state at the stream start */
+            if (d == 0u) goto end;                           /* END */
+            uint64_t te = t + d;                             /* this event's tick */
+            if (*m2 < 0 && te > trig - 2u) *m2 = (int)((st >> bit) & 1u);
+            if (te > trig - 1u) { *m1 = (int)((st >> bit) & 1u); return 0; }
+            t = te;
+            st = s;
+        }
+        off += n;
+    }
+end:
+    if (*m2 < 0) *m2 = (int)((st >> bit) & 1u);
+    *m1 = (int)((st >> bit) & 1u);
+    return 0;
+}
+
 /* Scan a few KB of the change stream per poll; at END check it and start the read-back. */
 static void chgscan_step(void) {
     for (int reads = 0; reads < 16 && !chgscan.ended; reads++) {
@@ -871,6 +905,13 @@ static void chgscan_step(void) {
             return;
         }
         uint64_t trig = chgscan.t + 1u - post;               /* t0 (0 without a pre-trigger) */
+        if (chgscan.pre && trig_reply.present && trig_reply.t.la >= 1u) {
+            /* The trigger is seen at 24 MHz and the samples are 48 MHz: move it to the edge's own
+               sample when the edge fell in the first half of the clk period (la_change_trigger_tick). */
+            int m2, m1;
+            if (chgscan_levels_before(trig, (unsigned)trig_reply.t.la - 1u, &m2, &m1) == 0)
+                trig = la_change_trigger_tick(trig, (uint8_t)trig_reply.t.edge, m1, m2);
+        }
         if (chgscan.pre) {
             uint64_t avail = trig / k;
             pre = avail < chgscan.pre ? (uint32_t)avail : chgscan.pre;

@@ -99,7 +99,10 @@ static const cmd_desc_t k_tiers[] = {
     { { "ota_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_ota_status), NULL },
     { { "blob_status", CMD_TIER_T0 }, CMD_F_ANY_CLIENT, CMD_FN(handle_blob_status), NULL },
     { { "xip", CMD_TIER_T0 }, 0, CMD_FN(handle_xip), writes_selftest },
+    { { "usb_hid", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_hid), NULL },
     { { "usb_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_usb_flash), NULL },
+    { { "usb_serial", CMD_TIER_T0 }, 0, CMD_FN(handle_usb_serial), NULL },
+    { { "usb_check", CMD_TIER_T1 }, 0, CMD_FN(handle_usb_check), NULL },
     { { "wiring_list", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_list), NULL },
     { { "wiring_get", CMD_TIER_T0 }, CMD_F_NO_HW, CMD_FN(handle_wiring_get), NULL },
 #if defined(BENCHPOD_EMI_TEST)
@@ -167,6 +170,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "spi_stream", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_stream), NULL },
     { { "spi_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_spi_flash), NULL },
     { { "esp_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_esp_flash), NULL },
+    { { "prog_flash", CMD_TIER_T1 }, 0, CMD_FN(handle_prog_flash), NULL },
     { { "la_dir", CMD_TIER_T1 }, 0, CMD_FN(handle_la_dir), NULL },
     { { "lease_acquire", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_acquire), NULL },
     { { "lease_renew", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_LEASE, CMD_FN(handle_lease_renew), NULL },

@@ -87,18 +87,39 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
 
 /* ---- DAC sample period ------------------------------------------------------------------
  * Extra clk48 the DAC8551 sequencer spends per sample BEYOND the inter-sample divider gap:
- * 3 fetch/latch cycles (BRAM: S_RDLO + S_RDHI + S_LAT) plus a 24-bit SPI frame shifted at
- * 2 clocks/bit (S_SHIFT) = 3 + 48 = 51.  See ice40/src/dac8551_engine.v and tb_dac8551.  So
- * one sample takes max(divider, DAC_MIN_DIVIDER) + 51 clocks and the real update rate is
- * DAC_CLK/(divider + 51), NOT DAC_CLK/divider.  Ignoring it made generate() play far below
- * the requested frequency at small dividers, and made replay play slow (80 kS/s asked came
- * out at 73.7 kS/s, 400 kS/s at 281 kS/s; measured on the pod). */
-#define DAC_SEQ_OVERHEAD_CLK 51u
+ * 3 fetch/latch cycles (BRAM: S_RDLO + S_RDHI + S_LAT) plus the 24-bit SPI frame (S_SHIFT).
+ * Gateware v67+ shifts it at 3 clocks/bit (a 16 MHz SCLK through DDR pads, both phases 31 ns, for
+ * the DAC8554's 20 ns SCLK high/low time): 3 + 72 = 75.  v66: 2.5 clocks/bit (19.2 MHz) = 63.  Up
+ * to v65, 2 clocks/bit (24 MHz): 3 + 48 = 51.  See
+ * ice40/src/dac8551_engine.v and tb_dac8551.  So one sample takes max(divider, DAC_MIN_DIVIDER)
+ * + overhead clocks and the real update rate is DAC_CLK/(divider + overhead), NOT
+ * DAC_CLK/divider.  Ignoring it made generate() play far below the requested frequency at small
+ * dividers, and made replay play slow (80 kS/s asked came out at 73.7 kS/s, 400 kS/s at
+ * 281 kS/s; measured on the pod).  Use dac_seq_overhead_clk(gw) for the running gateware. */
+#define DAC_SCLK_DDR_MIN_GW      66u
+#define DAC_SCLK_16M_MIN_GW      67u
+#define DAC_SCLK_SWITCH_MIN_GW   68u   /* OP_DAC_CTRL flags bit2/bit3 pick 16 or 24 MHz per start */
+#define DAC_SEQ_OVERHEAD_CLK_24M 51u   /* gateware >= DAC_SCLK_SWITCH_MIN_GW in its 24 MHz mode */
+#define DAC_SEQ_OVERHEAD_CLK     75u   /* gateware >= DAC_SCLK_16M_MIN_GW (16 MHz, 3 clocks/bit) */
+#define DAC_SEQ_OVERHEAD_CLK_V66 63u   /* gateware 66 (19.2 MHz, 2.5 clocks/bit) */
+#define DAC_SEQ_OVERHEAD_CLK_OLD 51u   /* gateware <  DAC_SCLK_DDR_MIN_GW (24 MHz) */
+uint32_t dac_seq_overhead_clk(uint8_t gw_version);
+/* The same for an SCLK mode: sclk24 counts only on gateware >= DAC_SCLK_SWITCH_MIN_GW (24 MHz, 51);
+   otherwise (and with sclk24 false) it is dac_seq_overhead_clk(). */
+uint32_t dac_seq_overhead_clk_mode(uint8_t gw_version, bool sclk24);
+/* The SCLK mode for a requested rate (gateware >= DAC_SCLK_SWITCH_MIN_GW; false before it):
+ * 16 MHz (false) whenever the rate is reachable there within half a clock, i.e. not above the
+ * 16 MHz maximum (48 MHz / 79 = 607.6 kS/s from RAM, / 80 = 600 kS/s from PSRAM); 24 MHz (true)
+ * only for an explicit rate above that.  req_rate_hz <= 0 (the maximum / auto) is 16 MHz, so
+ * the default stays inside the DAC8554's 20 ns SCLK high/low time.  fast_io = a board whose DAC
+ * meets 10 ns (IOVDD on its 5 V AVDD, module_dac_io_5v()): always 24 MHz. */
+bool dac_sclk24_for_rate(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram, uint8_t gw_version,
+                         bool fast_io);
 /* A deep (PSRAM) replay takes one more clk48 per sample: the dac_psram_reader FIFO is
  * first-word-fall-through and refills its head one clk48 after each pop, so the engine's
- * S_PHI waits a cycle for the high byte.  tb_dac_psram_replay checks it (divider + 52);
- * the pod measured the same (48 MHz / (3 + 52) = 872.7 kS/s at the old divider floor of 3;
- * 48 MHz / (4 + 52) ~= 857 kS/s at today's floor of 4). */
+ * S_PHI waits a cycle for the high byte.  tb_dac_psram_replay checks it (divider + 64 on v66+,
+ * + 52 before); the pod measured the same (48 MHz / (4 + 52) ~= 857 kS/s on v59-v65;
+ * 48 MHz / (4 + 64) ~= 706 kS/s on v66+). */
 #define DAC_PSRAM_EXTRA_CLK  1u
 
 /* Smallest DAC divider firmware sends.  The next frame's SYNC falls divider+3 clocks after the
@@ -115,15 +136,23 @@ typedef struct {
     uint32_t rate_hz;   /* the rate that divider really plays at, rounded */
     uint8_t  clamped;   /* 1 = request above the ceiling, played at the ceiling;
                            2 = request below the slowest rate, played at that */
+    bool     sclk24;    /* the SCLK mode the plan is for (dac_sclk24_for_rate) */
 } dac_rate_plan_t;
 
-/* Clocks one DAC sample takes at `divider`, from the BRAM (from_psram false) or PSRAM. */
-uint32_t dac_sample_clocks(uint32_t divider, bool from_psram);
+/* Clocks one DAC sample takes at `divider`, from the BRAM (from_psram false) or PSRAM, on
+ * gateware `gw_version` in its default (16 MHz) SCLK mode; _mode for an explicit one. */
+uint32_t dac_sample_clocks(uint32_t divider, bool from_psram, uint8_t gw_version);
+uint32_t dac_sample_clocks_mode(uint32_t divider, bool from_psram, uint8_t gw_version, bool sclk24);
 
 /* Divider for a replay at `req_rate_hz` (the real sample rate) on a `dac_clk_hz` engine clock:
  * the nearest achievable one, accounting for the frame overhead.  req_rate_hz <= 0 asks for the
  * maximum rate (DAC_MIN_DIVIDER).  Requests outside the range are clamped and flagged. */
-dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram);
+dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram,
+                                uint8_t gw_version);
+/* The same with the board's fast_io (dac_sclk24_for_rate); dac_replay_plan() is fast_io false.
+ * The plan picks the SCLK mode first (plan.sclk24), then the divider for it. */
+dac_rate_plan_t dac_replay_plan_ex(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram,
+                                   uint8_t gw_version, bool fast_io);
 
 /* LA CHANGE capture (gateware >= LA_CHANGE_MIN_GW): above the raw sampler's LA_RAW_MAX_HZ the
    firmware records the changes at 48 MS/s instead and reads them back as 48 MHz / k samples,
@@ -135,5 +164,15 @@ uint32_t la_change_divisor(float sample_rate_hz, uint8_t gw_version);
 /* A pre-trigger capture always uses the change capture: k = 48 MHz / rate rounded, 1..65535 (any
    rate up to 48 MS/s); rate 0 ("max") keeps the raw default of 12 MS/s (k = 4).  0 = older gateware. */
 uint32_t la_change_divisor_pre(float sample_rate_hz, uint8_t gw_version);
+
+/* The trigger tick of a change capture, refined to the 48 MHz sample.  The gateware's trigger looks
+   at the LA in the 24 MHz clk domain while the change capture samples at 48 MHz, so the tick it
+   marks is the edge's sample when the edge fell in the second half of a clk period and one sample
+   late when it fell in the first half.  (A DUT's edges land in either half; since gateware v64 the
+   pod's own registered outputs land in the first.)  `trig` is the marked tick, `edge` the trigger
+   mode (la_edge_t: 1 rising, 2 falling, 3 high, 4 low), `lvl_m1` / `lvl_m2` the trigger channel's
+   level at trig - 1 / trig - 2 (0, 1, or -1 unknown).  Returns trig - 1 when the condition already
+   held at trig - 1 and not at trig - 2 (the change was on trig - 1), else trig. */
+uint64_t la_change_trigger_tick(uint64_t trig, uint8_t edge, int lvl_m1, int lvl_m2);
 
 #endif /* LA_RATE_H */

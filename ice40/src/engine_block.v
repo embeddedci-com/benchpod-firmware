@@ -75,6 +75,7 @@ module engine_block #(
     output wire [31:0]  stop_after_cfg,
     // ---- DAC frame control byte (OP_DAC_CTRL 0x38, v2 >= v49) -> top ----
     output wire [7:0]   dac_ctrl,         // stream control byte, taken at each DAC start
+    output wire         dac_sclk24,       // v68: DAC SCLK mode (1 = 24 MHz), taken at each DAC start
     output wire         dac_wr_stb,       // one static frame...
     output wire [23:0]  dac_wr_cfg,       // ...{ctrl, code_hi, code_lo}
     // closed-loop DAC control (OP_START_DAC_LOOP 0x15, >=v23)
@@ -158,7 +159,7 @@ module engine_block #(
     wire [3:0]  swd_clk_ch, swd_dio_ch;
     wire        swd_clk_val, swd_clk_oe, swd_dio_val, swd_dio_oe;
     wire        spi_arm_stb, spi_cs_stb, spi_cs_assert;
-    wire [2:0]  spi_flags;
+    wire [4:0]  spi_flags;
     wire [3:0]  spi_sck_ch, spi_mosi_ch, spi_miso_ch, spi_cs_ch_arg;
     wire [6:0]  spi_half;
     wire        spi_mode, spi_busy, swd_cs_on, swd_cs_val;
@@ -212,7 +213,7 @@ module engine_block #(
         .dac_period(dac_period), .dac_divider(dac_divider),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
         .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
-        .dac_ctrl(dac_ctrl), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
+        .dac_ctrl(dac_ctrl), .dac_sclk24(dac_sclk24), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
         .dac_loop_mode(dac_loop_mode),
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),
@@ -413,7 +414,28 @@ module engine_block #(
     );
 
     // ---- SWD bit-bang engine + SPI master (SWDIO / MISO sampled back via la_in[swd_in_ch]) ----
-    swd_engine #(.REPLY_AW(9)) swd_i (
+`ifdef HAS_EMULATION
+    // v65: the emulation image has NO bus-master engine (SWD, SPI master, I2C master; JTAG and SWIM
+    // were already out).  At 98.5% LC the image was seed-fragile; without swd_engine it is ~84%.
+    // FPGA_FEATURES bit 5 (bus masters) is clear here: the firmware refuses the master commands on
+    // this image, or swaps to the loop image first when no emulated digital sensor runs.  The tie-offs
+    // keep cmd_dispatch and la_bank unchanged: no reply bytes, never armed, never driving a pad.
+    assign swd_rd_data = 8'd0; assign swd_reply_count = 16'd0; assign swd_armed = 1'b0;
+    assign spi_mode = 1'b0; assign spi_busy = 1'b0; assign q_done = 8'd0; assign q_flags = 8'd0;
+    assign swd_clk_ch = 4'd0; assign swd_clk_val = 1'b0; assign swd_clk_oe = 1'b0;
+    assign swd_dio_ch = 4'd0; assign swd_dio_val = 1'b0; assign swd_dio_oe = 1'b0;
+    assign swd_in_ch = 4'd0; assign swd_cs_ch = 4'd0; assign swd_cs_val = 1'b1; assign swd_cs_on = 1'b0;
+`else
+`ifdef HAS_DAC_LOOP
+    localparam SWD_HAS_JTAG = 1;
+    localparam SWD_HAS_SWIM = 0;   // v62: the loop image places only without it (5333 LC at first, ~4900 slimmed: noplace)
+`else
+    localparam SWD_HAS_JTAG = 1;
+    // v65: SWIM out of the deep image too (no firmware drives it yet; -623 LC, 88% -> ~76%).
+    // swim_engine.v stays in the tree for a later programmer image.
+    localparam SWD_HAS_SWIM = 0;
+`endif
+    swd_engine #(.REPLY_AW(9), .HAS_JTAG(SWD_HAS_JTAG), .HAS_SWIM(SWD_HAS_SWIM)) swd_i (
         .clk(clk), .rst(rst),
         .arm_stb(swd_arm_stb), .arm_clk_ch(swd_clk_ch_arg), .arm_dio_ch(swd_dio_ch_arg),
         .spi_arm_stb(spi_arm_stb), .spi_sck_ch(spi_sck_ch), .spi_mosi_ch(spi_mosi_ch),
@@ -429,6 +451,7 @@ module engine_block #(
         .dio_ch(swd_dio_ch), .dio_val(swd_dio_val), .dio_oe(swd_dio_oe),
         .in_ch(swd_in_ch), .cs_ch(swd_cs_ch), .cs_val(swd_cs_val), .cs_on(swd_cs_on)
     );
+`endif
 
     // ---- LA GPIO bank: arbitration of all the engine drivers onto the pads,
     //      plus the la_in readback that I2C/UART/SWD sample above ----

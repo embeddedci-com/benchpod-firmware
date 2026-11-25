@@ -47,14 +47,17 @@ module tb_dac_loop_frames;
         .v_out(v_out), .in_used(in_used), .tripped(tripped),
         .tlm_stb(tlm_stb)
     );
+    wire sync_e, sclk_a, sclk_b, din_a, din_b;
     dac8551_engine #(.ADDR_W(12)) dac (
         .clk(clk48), .rst(rst48), .start(start), .stop(stop),
         .period_samples(13'd0), .divider(16'd0),
-        .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
+        .ctrl(8'h00), .sclk24(1'b0), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(wave_addr), .wave_data(8'd0),
         .psram_mode(1'b1), .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
-        .dac_sync(sync), .dac_sclk(sclk), .dac_din(din), .running(running)
+        .dac_sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b), .running(running)
     );
+    dac_pads dac_pads_i (.clk48(clk48), .sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b),
+                   .dac_sync(sync), .dac_sclk(sclk), .dac_din(din));
 
     // ---- curve: every entry distinct, and both bytes move from one entry to the next ----
     reg [7:0] lut [0:(1<<ADDR_W)-1];
@@ -96,11 +99,13 @@ module tb_dac_loop_frames;
         tlm_prev = {tripped, in_used, v_out};
     end
 
-    // ---- frame decoder (as tb_dac8551): DIN taken on SCLK falling with SYNC low ----
+    // ---- frame decoder (as tb_dac8551, per half clk48 since v66's DDR pads): DIN taken on SCLK
+    //      falling with SYNC low ----
     integer errors = 0, bits = 0, nfr = 0, torn = 0, k, stale = 0;
     reg     ps = 1'b1, pc = 1'b0, pd = 1'b0;
     reg [23:0] sh = 24'd0;
-    always @(posedge clk48) if (!rst48) begin
+    always @(clk48) if (!rst48) begin
+        #1;
         if (!sclk && pc && !ps) begin
             sh = {sh[22:0], pd};
             bits = bits + 1;

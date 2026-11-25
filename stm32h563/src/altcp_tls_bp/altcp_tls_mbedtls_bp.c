@@ -106,6 +106,7 @@
 #include "mbedtls/memory_buffer_alloc.h"
 #include "mbedtls/ssl_cache.h"
 #include "mbedtls/ssl_ticket.h"
+#include "lan_tls_resume.h"   /* BenchPod: a session without a client certificate is not resumed */
 
 #include "mbedtls/ssl_internal.h" /* to call mbedtls_flush_output after ERR_MEM */
 
@@ -908,7 +909,7 @@ altcp_tls_create_config(int is_server, u8_t cert_count, u8_t pkey_count, int hav
      altcp_tls_free_config. */
   mbedtls_ssl_cache_init(&conf->cache);
   if (is_server) {
-    mbedtls_ssl_conf_session_cache(&conf->conf, &conf->cache, mbedtls_ssl_cache_get, mbedtls_ssl_cache_set);
+    mbedtls_ssl_conf_session_cache(&conf->conf, &conf->cache, lan_tls_cache_get, mbedtls_ssl_cache_set);
     mbedtls_ssl_cache_set_timeout(&conf->cache, ALTCP_MBEDTLS_SESSION_CACHE_TIMEOUT_SECONDS);
     mbedtls_ssl_cache_set_max_entries(&conf->cache, ALTCP_MBEDTLS_SESSION_CACHE_SIZE);
   }
@@ -930,7 +931,7 @@ altcp_tls_create_config(int is_server, u8_t cert_count, u8_t pkey_count, int hav
     return NULL;
   }
 
-  mbedtls_ssl_conf_session_tickets_cb(&conf->conf, mbedtls_ssl_ticket_write, mbedtls_ssl_ticket_parse,
+  mbedtls_ssl_conf_session_tickets_cb(&conf->conf, mbedtls_ssl_ticket_write, lan_tls_ticket_parse,
     &conf->ticket_ctx);
   }
 #endif

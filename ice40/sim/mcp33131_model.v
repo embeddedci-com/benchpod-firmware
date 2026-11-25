@@ -15,8 +15,13 @@
 //     INDETERMINATE — the model drives 1'bx there.  A capture engine that samples
 //     inside that window reads x and the testbench flags a FAIL.  This is exactly
 //     the "sampled mid-transition -> 0x5555" failure seen on hardware at 24 MHz
-//     SCLK.  Sampling on the SCLK rising edge (half a period later) is the
-//     datasheet-recommended, margin-safe point.
+//     SCLK.  The engine samples in the middle of SCLK high (v63: the falling clk edge
+//     after the SCLK rise, 1.5 clk after the SCLK fall left the FPGA; v62 and earlier
+//     sampled 1 clk after, on the SCLK rise).
+//   • `bit_evt` toggles when a new bit is valid on SDO (the MSB tEN after CNVST falls,
+//     later bits tDO after an SCLK fall) and `chg_evt` when SDO starts to change (CNVST
+//     fall, SCLK fall).  Delay them like SDO and the testbench measures the setup and
+//     hold margins at the engine's sampling instant.
 //
 // Datasheet numbers (DS20005947B, Table 1-2, DVIO >= 3.3 V unless noted):
 //   tCONV(tCNV) max  710 ns      tEN max 10 ns       tDO max  9.5 ns @3.3V
@@ -31,9 +36,10 @@
 //   model.sdo        --#(SDO_IN_NS)  -->  engine.adc_sdo
 //
 // so the effective settle window at the engine's sample FF is
-//   N_settle_cycles * T_clk  -  (SCLK_OUT_NS + tDO + SDO_IN_NS)
-// which is what actually has to stay positive.  Those pad/PCB round-trip terms —
-// not tDO alone — are why one engine-clock of margin (~21 ns at 48 MHz) is fragile.
+//   1.5 * T_clk  -  (SCLK_OUT_NS + tDO + SDO_IN_NS)          (v63; 1 * T_clk until v62)
+// which is what actually has to stay positive.  Those pad/cable round-trip terms
+// (series resistors on the module FFC, ESD array capacitance) — not tDO alone — are
+// what eats the margin.
 // ============================================================================
 `timescale 1ns/1ps
 module mcp33131_model #(
@@ -47,6 +53,8 @@ module mcp33131_model #(
     input  wire        sdi,            // must be held HIGH for normal 3-wire op
     input  wire [15:0] analog_code,    // the code the ADC will "convert" this cycle
     output reg         sdo,            // serial data out (drive back through SDO_IN)
+    output reg         bit_evt,        // toggles: a new bit is valid on sdo
+    output reg         chg_evt,        // toggles: sdo starts to change (invalid until bit_evt)
 
     // observability for the testbench
     output reg         conv_active,    // high during tCONV
@@ -60,6 +68,7 @@ module mcp33131_model #(
     initial begin
         sdo = 1'b1;                    // idle high (mimics the FPGA pull-up on SDO)
         conv_active = 1'b0; reading = 1'b0; sdi_ok = 1'b1; idx = 0;
+        bit_evt = 1'b0; chg_evt = 1'b0;
         latched = 16'h0000; result = 16'h0000;
     end
 
@@ -80,9 +89,12 @@ module mcp33131_model #(
 
     // ---- read phase: CNVST falling edge -> present MSB after tEN --------------
     always @(negedge cnvst) begin
+        chg_evt = ~chg_evt;
+        sdo     = 1'bx;                // leaving Hi-Z/idle: indeterminate until tEN
         #(TEN_NS);
         idx     = 15;
         sdo     = result[15];          // MSB valid before the first SCLK edge
+        bit_evt = ~bit_evt;
         reading = 1'b1;
     end
 
@@ -92,9 +104,11 @@ module mcp33131_model #(
     always @(negedge sclk) begin
         if (reading && !cnvst) begin
             sdo = 1'bx;                // indeterminate during the tDO transition
+            chg_evt = ~chg_evt;
             #(TDO_NS);
             if (idx > 0) idx = idx - 1;
             sdo = result[idx];         // next bit settled and held until next fall
+            bit_evt = ~bit_evt;
         end
     end
 

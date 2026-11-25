@@ -21,6 +21,7 @@ typedef struct {
     uint32_t flash_base;
     uint8_t  erased[64];          /* DfuSe sectors erased */
     uint32_t xfer;                /* the device's transfer size */
+    uint8_t  alts;                /* alternate settings of the DFU interface (0 = 1) */
     const char *layout;
     /* DFU state */
     int      state, pending, busy_left, status;
@@ -61,16 +62,23 @@ static int put_utf16(uint8_t *out, const char *s)
     return 2 + 2 * n;
 }
 
+/* The configuration: one DFU interface with d->alts alternate settings (STM32 ROMs have one per
+   memory: flash, option bytes, OTP, ...), then the DFU functional descriptor, which the DFU spec
+   puts after all of them. */
 static int config_desc(sim_dev_t *d, uint8_t *b)
 {
-    uint8_t cfg[] = {
-        9, 2, 27, 0, 1, 1, 0, 0x80, 50,
-        9, 4, 0, 0, 0, 0xFE, 0x01, 0x02, 4,
-        9, 0x21, 0x0B, 0xFF, 0x00, (uint8_t)d->xfer, (uint8_t)(d->xfer >> 8),
-        d->kind == DEV_DFUSE ? 0x1A : 0x10, 0x01,
-    };
-    memcpy(b, cfg, sizeof(cfg));
-    return sizeof(cfg);
+    unsigned alts = d->alts ? d->alts : 1u, n = 9;
+    for (unsigned a = 0; a < alts; a++, n += 9) {
+        const uint8_t itf[] = { 9, 4, 0, (uint8_t)a, 0, 0xFE, 0x01, 0x02, (uint8_t)(4 + a) };
+        memcpy(b + n, itf, 9);
+    }
+    const uint8_t fn[] = { 9, 0x21, 0x0B, 0xFF, 0x00, (uint8_t)d->xfer, (uint8_t)(d->xfer >> 8),
+                           d->kind == DEV_DFUSE ? 0x1A : 0x10, 0x01 };
+    memcpy(b + n, fn, 9);
+    n += 9;
+    const uint8_t cfg[] = { 9, 2, (uint8_t)n, 0, 1, 1, 0, 0x80, 50 };
+    memcpy(b, cfg, 9);
+    return (int)n;
 }
 
 static void dfu_do_pending(sim_dev_t *d)
@@ -184,11 +192,11 @@ static void ctx(ctrl_flash_ctx_t *c, sim_dev_t *d, ctrl_flash_mode_t mode, uint3
     c->leave = true;
 }
 
-static void test_dfuse(uint32_t dev_xfer, uint32_t offset, uint32_t len)
+static void test_dfuse(uint32_t dev_xfer, uint32_t offset, uint32_t len, uint8_t alts)
 {
     static sim_dev_t d;
     memset(&d, 0, sizeof(d));
-    d.kind = DEV_DFUSE; d.flash_base = 0x08000000; d.xfer = dev_xfer; d.state = 2;
+    d.kind = DEV_DFUSE; d.flash_base = 0x08000000; d.xfer = dev_xfer; d.state = 2; d.alts = alts;
     d.layout = "@Internal Flash  /0x08000000/04*016Kg,01*064Kg,03*128Kg";
     memset(d.flash, 0x5A, sizeof(d.flash));   /* not erased */
     uint8_t *img = malloc(len);
@@ -323,9 +331,11 @@ static void test_hostile_descriptors(void)
 
 int main(void)
 {
-    test_dfuse(2048, 0, 100 * 1024 + 7);          /* STM32 ROM: 2048-byte blocks, 7 sectors */
-    test_dfuse(1024, 20 * 1024, 30 * 1024);       /* a smaller transfer size, mid-flash */
-    test_dfuse(4096, 0, 40 * 1024 + 1);           /* larger than our buffer: address before each block */
+    test_dfuse(2048, 0, 100 * 1024 + 7, 0);       /* STM32 ROM: 2048-byte blocks, 7 sectors */
+    test_dfuse(1024, 20 * 1024, 30 * 1024, 0);    /* a smaller transfer size, mid-flash */
+    test_dfuse(4096, 0, 40 * 1024 + 1, 0);        /* larger than our buffer: address before each block */
+    test_dfuse(2048, 0, 30 * 1024, 2);            /* STM32H7 ROM: 2 alternate settings, then the functional descriptor */
+    test_dfuse(2048, 0, 30 * 1024, 4);            /* a ROM with 4 memories */
     test_dfuse_refusals();
     test_dfu_plain();
     test_no_dfu();

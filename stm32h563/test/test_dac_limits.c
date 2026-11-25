@@ -57,11 +57,15 @@ static void test_inverted_solar(void) {
     CHECK(refused("analog_path", "{\"path\":\"off\"}", "near 0 V"), "path off allowed");
     CHECK(refused("analog_path", "{\"path\":\"3v3\"}", "Routing to 3v3"), "another DAC path allowed");
     CHECK(refused("analog_path", "{\"path\":\"cal2\"}", NULL), "cal2 allowed");
-    CHECK(allowed("analog_path", "{\"path\":\"cal1\"}"), "cal1 refused on a 5v stage");
+    /* cal1 energizes K1: J11 is left floating, so the inverted stage's input sits near 0 V */
+    CHECK(refused("analog_path", "{\"path\":\"cal1\"}", "Routing to cal1"), "cal1 allowed on an inverted 5v stage");
     CHECK(allowed("analog_path", "{\"path\":\"ext\"}"), "ext refused");
     CHECK(allowed("analog_path", "{\"path\":\"dac_5v\"}"), "own path alias refused");
     CHECK(allowed("adc_read", "{\"cmd\":\"adc_read\"}"), "adc_read default refused");
     CHECK(refused("adc_read", "{\"source\":\"cal2\"}", NULL), "adc_read cal2 allowed");
+    CHECK(refused("adc_read", "{\"source\":\"cal1\"}", "Routing to cal1"), "adc_read cal1 allowed on an inverted 5v stage");
+    CHECK(refused("dac_out", "{\"path\":\"cal1\",\"v\":2.6}", "Routing to cal1"), "dac_out cal1 allowed on an inverted 5v stage");
+    CHECK(refused("dac_out", "{\"path\":\"cal1\"}", "Routing to cal1"), "dac_out cal1 (route only) allowed");
 
     /* held levels */
     CHECK(allowed("dac_out", "{\"path\":\"5v\",\"v\":3.6}"), "park refused");
@@ -95,9 +99,9 @@ static void test_inverted_solar(void) {
     CHECK(refused("dac_control_loop", j, "HIGHEST"), "trip allowed on inverted");
 
     /* park rounds INTO the window */
-    uint8_t code = dac_limits_park_code();
-    float v = DAC_CAL[1].a + DAC_CAL[1].b * (float)code;
-    CHECK(v <= 3.6f && v > 3.55f, "park code %u = %.3f V", code, (double)v);
+    uint16_t code = dac_limits_park_code16();
+    float v = dac_volts_for_code16(1, code);
+    CHECK(v <= 3.6f && v > 3.5995f, "park code %u = %.3f V", code, (double)v);
 }
 
 static void test_normal_stage(void) {
@@ -106,15 +110,21 @@ static void test_normal_stage(void) {
     dac_limits_set_active(&n);
     CHECK(allowed("analog_path", "{\"path\":\"off\"}"), "path off refused on a normal stage");
     CHECK(refused("dac_out", "{\"path\":\"5v\",\"v\":4.5}", "outside"), "over-limit allowed");
+    /* cal1 on a normal 5v stage: allowed to route, the level is held to the 5v window */
+    CHECK(allowed("analog_path", "{\"path\":\"cal1\"}"), "cal1 route refused on a normal stage");
+    CHECK(allowed("adc_read", "{\"source\":\"cal1\"}"), "adc_read cal1 refused on a normal stage");
+    CHECK(allowed("dac_out", "{\"path\":\"cal1\",\"v\":3.5}"), "dac_out cal1 in the window refused");
+    CHECK(refused("dac_out", "{\"path\":\"cal1\",\"v\":4.5}", "outside"), "dac_out cal1 over the 5v window allowed");
+    CHECK(refused("dac_out", "{\"path\":\"cal1\",\"v\":0.1}", "outside"), "dac_out cal1 under the 5v window allowed");
     CHECK(refused("generate", "{}", "raw"), "generate allowed");
     CHECK(refused("current_out", "{\"ua\":4000}", "shares that DAC"), "current_out allowed on a normal stage");
     CHECK(allowed("analog_path", "{\"path\":\"current_out\"}"), "current_out route refused on a normal stage");
     char j[96];
     snprintf(j, sizeof(j), "{\"vmin\":%ld,\"vmax\":%ld,\"in_trip\":900}", page_code(0.3), page_code(3.9));
     CHECK(allowed("dac_control_loop", j), "trip refused on a normal stage");
-    uint8_t code = dac_limits_park_code();
-    float v = DAC_CAL[1].a + DAC_CAL[1].b * (float)code;
-    CHECK(v >= 0.2f && v < 0.25f, "normal park code %u = %.3f V", code, (double)v);
+    uint16_t code = dac_limits_park_code16();
+    float v = dac_volts_for_code16(1, code);
+    CHECK(v >= 0.2f && v < 0.2005f, "normal park code %u = %.3f V", code, (double)v);
 }
 
 static void test_store(void) {
@@ -142,6 +152,7 @@ static void test_store(void) {
     CHECK(dac_limits_load() == -1, "cleared limits came back");
 
     CHECK(dac_limits_path_index("dac_12v") == 2 && dac_limits_path_index("ext") == -1, "path names");
+    CHECK(dac_limits_path_index("cal1") == -1, "cal1 is not a limit path");
 }
 
 int main(void) {

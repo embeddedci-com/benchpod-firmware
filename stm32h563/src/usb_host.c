@@ -4,6 +4,7 @@
  * changes the role. The TinyUSB host callbacks run on the usb task and fill s_info; readers take
  * a copy inside a critical section, so they never see half a descriptor. */
 #include "usb_host.h"
+#include "usb_bus.h"
 #include "board_caps.h"
 
 #include "tusb.h"
@@ -13,6 +14,8 @@
 #include "task.h"
 
 #include <string.h>
+
+#include "host/hcd.h"   /* hcd_port_connect_status, hcd_port_speed_get */
 
 static volatile usb_host_port_t s_want_port;   /* NONE: device mode wanted */
 static volatile uint32_t        s_deadline;    /* HAL tick the request expires */
@@ -69,15 +72,21 @@ usb_host_port_t usb_host_wanted(void)
     return p;
 }
 
+static bool s_enum_open;        /* a device descriptor arrived, no mount yet */
+static uint32_t s_enum_tick;    /* when it arrived */
+
 void usb_host_role_changed(usb_host_port_t port)
 {
+    usb_bus_role_changed();
     taskENTER_CRITICAL();
     s_active_port = port;
     if (port != USB_HOST_PORT_NONE) {
         s_host_since = s_epoch = HAL_GetTick();
         s_info.enumerations = 0;
+        s_info.descriptors = 0;
         s_info.attached = false;
         s_info.seen = false;
+        s_enum_open = false;
     } else {
         s_info.attached = false;
     }
@@ -100,6 +109,11 @@ void usb_host_info(usb_host_info_t *out)
     int32_t left = (int32_t)(deadline - now);
     out->remaining_s = (want != USB_HOST_PORT_NONE && left > 0) ? ((uint32_t)left + 999u) / 1000u : 0;
     out->host_ms = act != USB_HOST_PORT_NONE ? now - since : 0;
+    out->enumeration = usb_host_enum_state(out->seen, out->attached, s_enum_open, now - s_enum_tick);
+    /* What the port sees on the wire, before any enumeration (one flag and one register: safe to read
+       from any task while the usb task hosts). */
+    out->connected = act != USB_HOST_PORT_NONE && want == act && hcd_port_connect_status(0);
+    out->line_low_speed = out->connected && hcd_port_speed_get(0) == TUSB_SPEED_LOW;
 }
 
 /* ---- TinyUSB host callbacks (usb task) ---------------------------------------------- */
@@ -147,6 +161,7 @@ void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *d)
     uint32_t ms = HAL_GetTick() - s_epoch;
     taskENTER_CRITICAL();
     s_info.seen = true;
+    if (s_info.descriptors < UINT16_MAX) s_info.descriptors++;
     s_info.vid = d->idVendor;               s_info.pid = d->idProduct;
     s_info.bcd_usb = d->bcdUSB;             s_info.bcd_device = d->bcdDevice;
     s_info.dev_class = d->bDeviceClass;     s_info.dev_subclass = d->bDeviceSubClass;
@@ -154,6 +169,8 @@ void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *d)
     s_info.ep0_size = d->bMaxPacketSize0;   s_info.num_configs = d->bNumConfigurations;
     s_info.descriptor_ms = ms;
     s_info.mounted_ms = 0;
+    s_enum_open = true;
+    s_enum_tick = HAL_GetTick();
     s_info.manufacturer[0] = s_info.product[0] = s_info.serial[0] = '\0';
     memset(&s_info.config, 0, sizeof(s_info.config));
     taskEXIT_CRITICAL();
@@ -182,6 +199,7 @@ void tuh_mount_cb(uint8_t daddr)
     taskENTER_CRITICAL();
     s_info.attached = true;
     s_info.mounted_ms = ms;
+    s_enum_open = false;
     s_info.speed = (uint8_t)sp;
     if (s_info.enumerations < UINT16_MAX) s_info.enumerations++;
     taskEXIT_CRITICAL();
@@ -197,6 +215,7 @@ void tuh_umount_cb(uint8_t daddr)
     (void)daddr;
     taskENTER_CRITICAL();
     s_info.attached = false;
+    s_enum_open = false;
     taskEXIT_CRITICAL();
     s_str_next = 3;
     s_epoch = HAL_GetTick();   /* the next attach is timed from here */

@@ -403,3 +403,156 @@ largest; the fallbacks are the next ones in that order. Local results on the pin
 CI on the same seeds: loop 56.02 / 29.66 / 10.73 / 6.98, deep 57.67 / 28.72 / 13.27 / 6.85,
 emu 56.06 / 28.36 / 11.78 / 8.17. The first emu pick, seed 57 (the best local seed), fails timing
 in CI's toolchain (clk48 43.83 MHz), so emu is pinned from the seeds good in both. Hardware-verified on benchpod-30a9f1 on 2026-11-20 (`ice40/release/MANIFEST`).
+
+## v65
+
+The emulation image split: the emulation image drops the bus-master engine (SWD, the SPI master,
+the I2C master) and the deep image drops SWIM, on top of v64's registered LA pads. Swept 1..64 in
+the local toolchain (Homebrew yosys 0.65, nextpnr 0.10) and in CI's (yosys 0.65+7, run
+45485242806). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 50/64 | 50/64 | 38 |
+| deep  | 36/64 | 44/64 | 24 |
+| emu   | 62/64 | 63/64 | 61 |
+
+Each pin is the seed whose worst relative margin over the four gates, in both toolchains, is the
+largest. Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns | logic cells |
+|-------|------|-----------|---------|-----------------|-----------------|-------------|
+| loop  | 12   | 54.96 (56.53) | 28.21 (29.36) | 11.31 (12.03) | 5.58 (6.85) | 4306/5280 (82%) |
+| deep  | 1    | 55.27 (55.60) | 27.35 (29.36) | 13.22 (13.11) | 6.66 (4.39) | 4036/5280 (76%) |
+| emu   | 26   | 68.40 (68.16) | 28.90 (29.17) | 11.92 (9.98)  | 4.39 (5.03) | 4418/5280 (84%) |
+
+The emulation image went from 98.5% LC (v63) and the fewest good seeds to the most.
+
+## Pinning the clk divider (`PIN_CLKDIV`, opt-in)
+
+`clk` (24 MHz) is the clk48/2 divider flop (net `clkdiv`) through an `SB_GB`. Unpinned, the placer
+puts that flop anywhere in the fabric, because the net also feeds the clock enables of the
+`la48_sampler` flops. The only part of clk's lag behind clk48 that depends on placement is the
+routed `clkdiv` net from the flop to the `SB_GB`, and it moves by about 4 ns per seed (loop 1.1 to
+5.1 ns, emu 5.2 to 9.2 ns, seeds 1 to 16).
+
+`make PIN_CLKDIV=1` adds a second nextpnr `--pre-pack` script, `ice40/pin_clkdiv.py`, that locks the
+divider flop to `X13/Y30/lc0` and the `SB_GB` to `X13/Y31/gb`. The script raises (and the build
+fails) if the net, the flop or the single `SB_GB` is not found. The default is `PIN_CLKDIV=0`: the
+nextpnr command line, the `.asc` and the `.bin` are byte-identical to a build without the option.
+`synth/seed_sweep.sh` takes `PIN_CLKDIV=1` from its environment (the table header shows it), and the
+`ice40-seed-sweep` workflow has a `pin_clkdiv` input (default false).
+`synth/clkdiv_lag.py` is a post-route hook that prints the routed divider-to-`SB_GB` delay (usage
+in its header); it is not part of any build.
+
+Study (v63 netlist, local toolchain, seeds 1 to 16):
+
+| image | pin  | ok gates | lag ns | clk48 MHz median | clk -> clk48 ns median |
+|-------|------|----------|--------|------------------|------------------------|
+| loop  | off  | 14/16    | 1.10 to 5.07 | 54.73 | 11.78 |
+| loop  | on   | 16/16    | 1.10 (14 seeds), 1.75 (2) | 54.32 | 13.11 |
+| emu   | off  | 12/16    | 5.17 to 9.21 | 58.68 | 13.60 |
+| emu   | on   | 14/16    | 1.10 (16 seeds) | 56.52 | 13.27 |
+
+The pin costs about 0.4 MHz (loop) and 2.2 MHz (emu) of clk48 Fmax and makes the lag a known
+constant. The lag did not separate the hardware-bad seeds (loop 38, emu 52 and 6) from the good
+ones, so the pin is not shown to fix that fault by itself.
+
+To use it: turn it on (default to `?= 1`, or build with `PIN_CLKDIV=1`) together with the next
+`GATEWARE_VERSION` bump, run the seed sweep with `pin_clkdiv=true` locally and in CI, re-pin
+`SEED_LOOP`, `SEED_DEEP` and `SEED_EMU`, and test both pods on hardware before promoting. Seeds
+pinned without the option do not carry over: the pin changes every placement.
+
+## v66
+
+The 19.2 MHz DAC SCLK: `dac8551_engine` puts out half pairs and the new `dac_pads` drives SCLK and
+DIN through DDR SB_IOs. Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10)
+and in CI's (yosys 0.65+7, run 45512812320). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 58/64 | 48/64 | 42 |
+| deep  | 49/64 | 39/64 | 28 |
+| emu   | 59/64 | 63/64 | 57 |
+
+Each pin is the seed whose worst relative margin over the four gates, in both toolchains, is the
+largest. Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns |
+|-------|------|-----------|---------|-----------------|-----------------|
+| loop  | 36   | 53.80 (55.87) | 28.82 (28.24) | 11.27 (12.57) | 9.31 (8.27) |
+| deep  | 17   | 57.20 (54.27) | 28.00 (28.96) | 13.16 (13.27) | 6.12 (5.58) |
+| emu   | 49   | 64.21 (62.05) | 29.30 (28.63) | 10.19 (10.62) | 5.68 (6.33) |
+
+A first v66 netlist (SCLK 2 halves high / 3 low, swept the same way) is superseded: the bench
+read its SCLK high at the 20 ns limit, and the final netlist has 3 halves high / 2 low.
+
+## v68
+
+The switchable DAC SCLK (16 MHz by default, 24 MHz for explicit rates above the 16 MHz maximum).
+v66 (19.2 MHz) and the v67 candidate (16 MHz only) were not released; their pins are superseded.
+Swept 1..64 in the local toolchain (Homebrew yosys 0.65, nextpnr 0.10) and in CI's (yosys 0.65+7,
+run 45548329211). Seeds passing every gate:
+
+| image | local | CI | both |
+|-------|-------|----|------|
+| loop  | 53/64 | 50/64 | 40 |
+| deep  | 48/64 | 41/64 | 30 |
+| emu   | 63/64 | 64/64 | 62 |
+
+Local results on the pins (CI in brackets):
+
+| image | seed | clk48 MHz | clk MHz | clk -> clk48 ns | clk48 -> clk ns |
+|-------|------|-----------|---------|-----------------|-----------------|
+| loop  | 60   | 54.57 (55.31) | 28.81 (29.14) | 10.84 (10.08) | 8.71 (8.27) |
+| deep  | 9    | 57.06 (55.60) | 27.65 (27.35) | 13.99 (13.27) | 5.47 (5.03) |
+| emu   | 15   | 68.21 (68.72) | 28.40 (28.88) | 10.73 (10.62) | 6.12 (4.93) |
+
+## nextpnr `--opt-timing` trial (2026-11-25, on gateware v68, not adopted)
+
+Question: does `--opt-timing` raise the seed pass rate enough to adopt it? Seeds 1..32 per image,
+default build otherwise (no `PIN_CLKDIV`), same gates (`MIN_CLK48_MHZ` 50, `MIN_CLK_MHZ` 25.5,
+`MAX_X48_NS` 15, `MAX_X24_NS` 15).  CI: OSS CAD Suite 2026-05-13 (Yosys 0.65), runs 45631709812
+(baseline) and 45631716166 (`--opt-timing`).  Local: Homebrew yosys/nextpnr, 4 jobs.  Tooling:
+`NEXTPNR_EXTRA` in `seed_sweep.sh` and the allowlisted `nextpnr_extra` input of the sweep workflow.
+
+| image | toolchain | flag | ok of 32 | median clk48 MHz | min clk48 | median clk MHz | min clk |
+|-------|-----------|------|----------|------------------|-----------|----------------|---------|
+| loop  | CI    | none | 29 | 53.0 | 45.8 | 28.5 | 26.2 |
+| loop  | CI    | opt  | 28 | 53.6 | 43.1 | 27.4 | 25.3 |
+| loop  | local | none | 26 | 54.5 | 48.3 | 28.0 | 26.3 |
+| loop  | local | opt  | 27 | 53.6 | 47.6 | 27.9 | 25.7 |
+| deep  | CI    | none | 17 | 53.1 | 43.4 | 27.4 | 25.7 |
+| deep  | CI    | opt  | 20 | 53.0 | 46.6 | 27.1 | 25.1 |
+| deep  | local | none | 23 | 57.1 | 49.7 | 27.3 | 25.1 |
+| deep  | local | opt  | 25 | 57.7 | 50.1 | 27.3 | 25.8 |
+| emu   | CI    | none | 32 | 63.6 | 54.7 | 28.3 | 26.4 |
+| emu   | CI    | opt  | 32 | 64.5 | 55.2 | 27.9 | 25.9 |
+| emu   | local | none | 32 | 64.5 | 55.2 | 27.5 | 26.4 |
+| emu   | local | opt  | 26 | 64.9 | 56.4 | 26.6 | 24.8 |
+
+The median clk -> clk48 delay (x48) and clk48 -> clk delay (x24) do not move (loop 13.0 / 7.5 ns,
+deep 14.5 / 5.6 ns, emu 11.3 / 5.6 ns on CI): `--opt-timing` does not touch the unconstrained
+gearbox paths that the x48 and x24 gates exist for.  The deep image's 9 to 10 `xdomain` failures
+stay.
+
+Seeds ok in both toolchains (what a pin needs):
+
+| image | none | `--opt-timing` |
+|-------|------|----------------|
+| loop  | 24 | 23 |
+| deep  | 12 | 14 |
+| emu   | 32 | 26 |
+| total | 68 | 63 |
+
+Runtime: CI sweep jobs (8 or 16 seeds each, includes toolchain setup and synthesis) took 161 to
+204 s for loop, 173 to 216 s for deep and 145 to 169 s for emu without the flag, and 261 to 292 s,
+175 to 184 s and 160 to 183 s with it.  Locally (32 seeds, 4 jobs) loop went from 291 s to 439 s,
+deep from 125 s to 151 s, emu from 210 s to 323 s: 1.2x to 1.5x, not the 2x to 4x of the earlier
+small study.
+
+Recommendation: do not adopt.  The median Fmax gain is at most 1 MHz, the pass counts differ by
+at most 3 seeds in either direction (CI loop 29 to 28, deep 17 to 20, local emu 32 to 26), and the
+seeds ok in both toolchains drop from 68 to 63 in total.  The flag does not fix the x48 gate that
+limits the deep image, and it adds 20 to 50 percent to every PnR.  `--opt-timing` placements are
+also different seeds, so adopting it re-rolls every pin for no net gain.  The Makefile is unchanged.

@@ -67,6 +67,9 @@ module cmd_dispatch #(
     // persistent register the top carries into clk48 with each DAC start.  dac_wr_stb asks for
     // ONE static frame {ctrl, code}, payload as wires off arg_buf like the loop strobes below.
     output reg  [7:0]        dac_ctrl,
+    // v68: DAC SCLK mode, flags bit2 = set it from flags bit3 (0 = 16 MHz, 1 = 24 MHz); persistent,
+    // taken at the next DAC start like dac_ctrl.  Reset: 16 MHz.
+    output reg               dac_sclk24,
     output reg               dac_wr_stb,
     output wire [23:0]       dac_wr_cfg,      // {ctrl, code_hi, code_lo}
 
@@ -190,7 +193,7 @@ module cmd_dispatch #(
     output wire [3:0]        spi_miso_ch,
     output wire [3:0]        spi_cs_ch,
     output wire [6:0]        spi_half,
-    output wire [2:0]        spi_flags,       // {i2c, inv, cpol} (v55: I2C master, SPI modes 1/2)
+    output wire [4:0]        spi_flags,       // {swim, jtag, i2c, inv, cpol} (v55: I2C master, SPI modes 1/2; v61: JTAG; v62: SWIM)
     output reg               spi_cs_stb,
     output wire              spi_cs_assert,
     input  wire              spi_mode,
@@ -505,7 +508,7 @@ module cmd_dispatch #(
     assign spi_miso_ch       = arg_buf[6][3:0];
     assign spi_cs_ch         = arg_buf[7][3:0];
     assign spi_half          = arg_buf[8][6:0];
-    assign spi_flags         = rx_byte[2:0];
+    assign spi_flags         = rx_byte[4:0];
     assign spi_cs_assert     = rx_byte[0];
     assign swd_feed_q        = current_cmd[3];
     assign q_cfg_half        = arg_buf[8][5:0];
@@ -654,6 +657,7 @@ module cmd_dispatch #(
             dac_psram_len  <= 24'd0;
             stop_after_stb <= 1'b0;
             dac_ctrl       <= 8'h00;   // DAC8551 frame until DAC_CTRL says otherwise
+            dac_sclk24     <= 1'b0;    // v68: 16 MHz SCLK until DAC_CTRL asks for 24 MHz
             dac_wr_stb     <= 1'b0;
             dac_loop_mode <= 1'b0;
             cap_start     <= 1'b0;
@@ -1104,9 +1108,11 @@ module cmd_dispatch #(
                                 end
                                 // DAC frame control (v49): [flags][ctrl][code_lo][code_hi(=rx_byte)].
                                 // flags bit0 = ctrl becomes the stream control byte (taken at the
-                                // next DAC start), bit1 = send {ctrl, code} once (dac_wr_cfg).
+                                // next DAC start), bit1 = send {ctrl, code} once (dac_wr_cfg),
+                                // v68: bit2 = the SCLK mode becomes bit3 (taken at the next start).
                                 `CD_DAC_CTRL: begin
                                     if (arg_buf[6][0]) dac_ctrl <= arg_buf[7];
+                                    if (arg_buf[6][2]) dac_sclk24 <= arg_buf[6][3];
                                     dac_wr_stb <= arg_buf[6][1];
                                 end
                                 // Capture trigger (persistent; the top applies it at every later

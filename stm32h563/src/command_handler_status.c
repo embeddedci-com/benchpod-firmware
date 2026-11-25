@@ -45,6 +45,7 @@
 #include "fault.h"       /* reset cause + last-crash summary */
 #include "sys_health.h"  /* heap/stack headroom */
 #include "ice40_flash.h"
+#include "ice40_switch.h"
 #if defined(BENCHPOD_EMI_TEST)
 #include "emi_test.h"
 #endif
@@ -243,6 +244,9 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
     /* A wrong parity bit in the current (or last) UART session (gateware v56+). Full form only:
        the cloud's short form has no room left. */
     if (!brief) bp_emit(e, "\"uart_rx_parity_error\":%s,", fpga_uart_rx_parity_error() ? "true" : "false");
+    /* Gateware image switches since boot and the config-flash writes they cost (ice40_switch.h).
+       Full form only (the short form has no room); fpga_image replies carry it too. */
+    if (!brief) { ice40_switch_emit(e); bp_emit_raw(e, ","); }
     bp_emit(e, "\"psram\":\"%s\",\"psram_ok\":%s,\"heap_free\":%u,\"heap_min\":%u,\"stack_min\":%u,"
                 "\"reset\":\"%s\",\"last_crash\":",
             psram_selftest_str(), signal_engine_psram_operable() ? "true" : "false",

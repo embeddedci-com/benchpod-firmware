@@ -252,14 +252,14 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `la_voltage` | T1 | Select the LA I/O-bank voltage (1.8/3.3 V); required before any LA op | object | no |
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
-| `usb_host` | T0/T2 | Development builds only. USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `enabled`: T2) | object | no |
+| `usb_host` | T0/T2 | USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `enabled`: T2) | object | no |
 | `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
 | `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
 | `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
 | `power_profile` | T1 | Record a current/voltage profile of one eFuse rail | object | on `stop` |
 | `module` | T0/T2 | Digital v3r3: the analog module's state, and its ID and calibration EEPROM | object | no |
 | `module_power` | T1 | Digital v3r3: switch the analog module's 5 V and the USB-A bridge port | object | no |
-| `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe | `"dap ready"` (string) | no |
+| `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe; `"op":"id"` reads the chip's IDs instead (see [dap-over-tunnel.md](dap-over-tunnel.md#target-id-read)) | `"dap ready"` (string), object for `op` `id` | no |
 | `uart_proxy_start` | T1 | Enter transparent UART bridge mode | `"uart ready"` (string) | no |
 | `spi_start` | T1 | Claim four LA pins as an SPI master | object | no |
 | `spi_stop` | T1 | End the SPI session | `"spi stopped"` | no |
@@ -267,6 +267,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `spi_xfer` | T1 | Raw full-duplex SPI transfer | object | no |
 | `spi_stream` | T1 | Send a staged PSRAM upload in one CS frame | object | no |
 | `esp_flash` | T1 | Flash an ESP32-family target over its UART ROM bootloader | object | no |
+| `prog_flash` | T1 | Flash a chip over its programming pins: AVR UPDI, PIC ICSP, Silicon Labs C2, AVR TPI, XMEGA PDI, MSP430 Spy-Bi-Wire | object | no |
 | `i2c_start` | T1 | Claim two LA pins as an I2C master | object | no |
 | `i2c_stop` | T1 | End the I2C session | `"i2c stopped"` | no |
 | `i2c_status` | T0 | The I2C session's pins, rate and pull-ups | object | no |
@@ -322,7 +323,10 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `ota_selftest` | T3 | Test the flash writer on a scratch sector | object | no |
 | `ota_commit` | T3 | Write the verified image and reset (or write a blob) | object | no |
 | `blob_status` | T0 | What each W25Q blob slot holds | object | no |
-| `usb_flash` | T1 | Development builds only. Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy | object | no |
+| `usb_hid` | T0 | The HID interfaces of the board on the USB host port: report descriptors, and its input reports (keyboard, mouse, gamepad) | object | no |
+| `usb_flash` | T1 | Flash a board over USB: UF2 and drag-and-drop drives (DAPLink), USB DFU / STM32 DfuSe, Teensy, Arduino AVR and SAMD bootloaders, ESP32, RP2040 and RP2350 PICOBOOT | object | no |
+| `usb_serial` | T0 | The state of the board's USB serial port (open through `uart_proxy_start` with `"port":"usb"`) | object | no |
+| `usb_check` | T1 | Check the board's own USB firmware: enumeration time after power-on, current against bMaxPower and in suspend, bus resets, short VBUS dropouts | object | no |
 | `xip` | T0/T2 | Code that runs from the W25Q: whether this pod can run it, and a self-test (`selftest`: T2) | object | no |
 | `wiring_list` | T0 | The wiring profiles stored on the pod, and the default | object | no |
 | `wiring_get` | T0 | One stored wiring profile, up to 600 bytes a call | object | no |
@@ -403,12 +407,12 @@ Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `waveform` | string | yes | — | `"sine"`, `"square"` or `"sawtooth"` |
-| `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
+| `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"`, `"12v"` or `"cal1"`. The pod switches to it before the waveform starts. `"cal1"` plays the waveform on the 5 V stage routed into the ADC loopback (with the 5 V calibration); the 5 V output is disconnected meanwhile. |
 | `amplitude_v`, `offset_v` | number (V) | together | — | Peak and center in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
 | `amplitude_ua`, `offset_ua` | number (µA) | together, instead of `_v` | — | Peak and center on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
 | `freq_hz` | number (Hz) | no | `1000` | Output frequency |
 | `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run until the next command |
-| `sample_rate_hz` | number (Hz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 51 cycles of the 48 MHz engine clock (divider ≥ 4), so the maximum is 48 MHz ÷ 55 ≈ 873 kS/s; the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `sample_rate_hz` | number (Hz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 75 cycles of the 48 MHz engine clock (divider ≥ 4; + 63 on gateware 66, + 51 on gateware 65 and older), so the Auto maximum is 48 MHz ÷ 79 ≈ 608 kS/s. On gateware 68 and later an explicit faster rate, up to 48 MHz ÷ 55 ≈ 873 kS/s, switches the DAC's serial clock from 16 to 24 MHz for that waveform (51 cycles per sample); 24 MHz runs the DAC at the limit of its serial timing, so Auto never picks it (716 kS/s at most on gateware 66, 873 kS/s on 65 and older); the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
 | `route` | boolean | no | `true` | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: wait and start the waveform at the next capture's t0 (the DAC co-trigger). The reply is then `{"cotrig":true}`, or `{"cotrig":false}` when the gateware cannot co-trigger and the waveform started right away. |
 
@@ -426,7 +430,7 @@ The firmware precomputes one full period in a sample buffer and the FPGA loops i
 period_samples = floor(sample_rate / freq_hz)
 ```
 
-where `sample_rate = 48 MHz / (divider + 51)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 51 clocks per sample on top of the divider (3 to fetch the sample, 48 to shift the 24-bit SPI frame). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 873 kS/s.
+where `sample_rate = 48 MHz / (divider + 75)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 75 clocks per sample on top of the divider (3 to fetch the sample, 72 to shift the 24-bit SPI frame at a 16 MHz serial clock). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 608 kS/s. On gateware 68 and later a `sample_rate_hz` above that (up to about 873 kS/s) runs the serial clock at 24 MHz instead: 51 clocks per sample, `sample_rate = 48 MHz / (divider + 51)`. Gateware 66 shifts the frame at 19.2 MHz (63 clocks, 716 kS/s at most), 65 and older at 24 MHz (51 clocks, 873 kS/s).
 
 The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_hz` out and the firmware picks one that fits the period.
 
@@ -461,7 +465,7 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`. Firmwar
 |---|---|
 | Unknown or missing `waveform` | `"unknown waveform"` |
 | Neither `amplitude_v` nor `amplitude_ua` (for example the old 8-bit form) | `amplitude_v (with path and offset_v) or amplitude_ua (with offset_ua) is required` |
-| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
+| `amplitude_v` without a 3v3/5v/12v/cal1 `path` | `path must be 3v3\|5v\|12v\|cal1 with amplitude_v` |
 | `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
 | `amplitude_v` not above 0 | `amplitude_v must be above 0 V` |
 | A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
@@ -1007,7 +1011,7 @@ Play the trace back out the DAC. The trace is whichever was most recently put th
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | full recorded length | Number of samples to play, ≤ the recorded length. |
-| `sample_rate_hz` | number (Hz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 51 cycles of the 48 MHz DAC clock from RAM, divider + 52 from PSRAM, divider ≥ 4). The maximum, also the default, is about 873 kS/s from RAM and 857 kS/s for a deep (PSRAM) replay; a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
+| `sample_rate_hz` | number (Hz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 75 cycles of the 48 MHz DAC clock from RAM, divider + 76 from PSRAM, divider ≥ 4; + 63 / + 64 on gateware 66, + 51 / + 52 on 65 and older). The default is the maximum at the DAC's 16 MHz serial clock, about 608 kS/s from RAM and 600 kS/s for a deep (PSRAM) replay. On gateware 68 and later a faster request, up to about 873 kS/s from RAM and 857 kS/s from PSRAM, plays at a 24 MHz serial clock (divider + 51 / + 52 cycles), which runs the DAC at the limit of its serial timing; a request above that is clamped to it. (716 / 706 kS/s at most on gateware 66, 873 / 857 kS/s on 65 and older.) The reply's `sample_rate_hz` is the rate it plays at. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: start at the next capture's t0 (the DAC co-trigger). |
 
 #### Response
@@ -1071,20 +1075,24 @@ with the path routed, and replies `{"parked_mv":3600}`.
 
 ### `dac_set` — hold a raw DAC level
 
-Holds the DAC at a fixed 8-bit level (scaled to the 16-bit DAC), with no routing and no
-calibration. For a calibrated voltage use [`dac_out`](#analog-paths--analog_path--dac_out--adc_read).
+Holds the DAC at a fixed 16-bit code, with no routing and no calibration. For a calibrated
+voltage use [`dac_out`](#analog-paths--analog_path--dac_out--adc_read).
 
 ```json
-{"cmd":"dac_set","value":128,"divider":240}
+{"cmd":"dac_set","code16":32768,"value":128,"divider":240}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `value` | integer 0..255 | yes | — | The level. |
+| `code16` | integer 0..65535 | one of the two | — | The 16-bit DAC code. |
+| `value` | integer 0..255 | one of the two | — | The older 8-bit level, held as `value × 256`. |
 | `divider` | integer | no | `2` | DAC engine clock = 48 MHz ÷ divider. |
 
-Reply `null`. Errors: `"missing value"`, `"value out of range"`, `"dac set failed"`, and the
-`dac_limits` refusal when limits are set.
+With both, `code16` wins. Send `value` too (`code16 >> 8`) to stay compatible: firmware up to
+4.0.4 has no `code16` and holds `value`.
+
+Reply `null`. Errors: `"missing code16 (or value)"`, `"code16 out of range (0..65535)"`,
+`"value out of range"`, `"dac set failed"`, and the `dac_limits` refusal when limits are set.
 
 ---
 
@@ -1124,9 +1132,9 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 
 | Command | Refused when |
 |---|---|
-| `dac_out` | `v` on the limited path is outside `min_mv`..`max_mv` |
+| `dac_out` | `v` on the limited path is outside `min_mv`..`max_mv` (path `cal1` is checked against the `5v` window) |
 | `dac_control_loop` | `vmin`/`vmax` (16-bit codes) fall outside the limits; `in_trip` on an inverted stage (it trips to `vmin`, the highest output there) |
-| `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1` unless the path is `5v`), which leaves the module input near 0 V |
+| `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1`), which leaves the module input near 0 V. `cal1` counts even on the `5v` path: it energizes K1, which disconnects the 5 V output and leaves the module input floating |
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
 | `current_out` | always, when it has `ua`: the 4-20 mA output shares the DAC, so setting a current moves the limited path. Without `ua` it only reads the range and is allowed |
 
@@ -1192,6 +1200,15 @@ after routing; without it the range stays as it is. `off` and `cal2` put the ran
 |---|---|
 | `mv`, `uv` | The voltage the chosen code gives, in millivolts and in microvolts |
 | `code16` | The 16-bit DAC code now held |
+
+`path` is `3v3`, `5v`, `12v`, `cal1` or `off` (anything else: `path must be 3v3|5v|12v|cal1|off`).
+`cal1` sets the level on the 5 V stage and routes it into the ADC loopback (K1 and K4), with the
+5 V calibration. K1 is a changeover relay: the 5 V output (J11) is disconnected while `cal1` is
+selected, so an [`adc_read`](#analog-paths--analog_path--dac_out--adc_read) with `source` `cal1`
+needs no relay switching in between. The reply's `path` is `cal1`. While
+[DAC limits](#dac_limits--dac-output-limits-for-an-external-output-stage) are set on an inverted
+stage, `cal1` is refused (the stage's input would float near 0 V, which is full output); on a
+normal stage its level is checked against the `5v` window.
 
 When only routing, the reply is `{"path":…,"mv":0}` with no `uv` or `code16`. Firmware up to
 3.10.13 also replied `code`, the nearest 8-bit code (`-1` when only routing).
@@ -1825,6 +1842,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `loop_tripped` | boolean | The control loop's over-range trip is latched. |
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
 | `uart_rx_parity_error` | boolean | A frame of the current (or last) UART proxy session arrived with a wrong parity bit (gateware v56+). Full form only. |
+| `fpga_switch` | object | Gateware image switches since the pod started (firmware 4.0.6+), full form only; [`fpga_image`](#fpga_image--switch-the-running-gateware-image) replies carry it too. `switches`: images loaded, `skipped`: requests for the image already running (nothing done), `failed`: loads that did not end on the requested image, `slave_loads` / `slave_fails`: loads straight from a slot that worked / did not (each failure retries, then falls back to a flash write), `reflashes`: writes of the image the iCE40 boots from (gateware updates and fallbacks), `erases`: 4 KB sector erases of the config flash those writes cost, `last_ms`: how long the last load took in the pod. |
 | `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
@@ -2227,6 +2245,7 @@ and the loser simply did not work. The firmware now keeps a table and refuses th
 | `gpio` | [`gpio`](#gpio--use-la-pins-as-gpio) with mode `input` / `output` / `open_drain` | `gpio` mode `off` |
 | `uart_rx`, `uart_tx`, `uart_hd`, `uart_de` | [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) | the proxy ending (`+++`, send failure, connection close, tunnel reset) |
 | `swd_clk`, `swd_dio` | `dap_start` (see [dap-over-tunnel.md](dap-over-tunnel.md)) | SWD disarm, connection close, tunnel reset |
+| `jtag_tck`, `jtag_tms`, `jtag_tdi`, `jtag_tdo`, `jtag_trst` | `dap_start` with JTAG pins (gateware v61+, see [dap-over-tunnel.md](dap-over-tunnel.md#jtag)) | the same as SWD |
 | `i2c_sda`, `i2c_scl` | [`sensor_start`](#sensor_start--start-an-instance) of an I2C sensor (shared by the I2C sensors on the same pair) | `sensor_stop` of the last instance on it, a reconfiguration away from the emulation image |
 | `sensor_tx`, `sensor_rx`, `sensor_drdy`, `sensor_sck`, `sensor_mosi`, `sensor_miso`, `sensor_cs` | `sensor_start` of a UART sensor, a data-ready pin, the SPI sensor | `sensor_stop`, a reconfiguration away from the emulation image |
 | `step`, `step_dir` | the [`la_step` train](#step-a-pulse-train) on a free pin | the train finishing (the firmware polls the gateware) |
@@ -2606,18 +2625,27 @@ power-on-reset behaviour, or recovering a target that wedged itself.
 
 ### `usb_host` — USB host mode
 
-**Development builds only** (`make USB_HOST=1`, not in releases yet: other firmware answers
-`usb_host` as an unknown command). The pod's USB port becomes a full-speed USB host for the board under test, for a
-limited time, and reports the device that enumerates on it: IDs, strings, speed, how long
-enumeration took, the configuration and its interfaces. No class drivers yet (USB serial,
-flashing over USB and class access come later).
+Firmware 4.0.3 and later (feature `usb_host_mode`; older firmware answers `usb_host` as an
+unknown command, except development builds made with `USB_HOST=1`). The pod's USB port becomes a
+full-speed USB host for the board under test, for a limited time, and reports the device that
+enumerates on it: IDs, strings, speed, how long enumeration took, the configuration and its
+interfaces. [`usb_flash`](#usb_flash--flash-a-board-over-usb) flashes the board over it.
+
+Which port:
+
+| Pod | Port | How the board connects |
+|---|---|---|
+| digital v3r4 and later | `usb_a` (the default) | its normal USB cable in the pod's USB-A host port |
+| older pods only (no USB-A host port) | `usb_c` | the pod's own USB-C connector, through a breakout: D+, D- and GND to the board, 5 V from a supply into the pod's VBUS (the pod gives the board no VBUS: a board powered from USB gets the same 5 V) |
+
+`status` `board_rev` tells them apart (`"v3r4"` has the USB-A host port).
 
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_c", "timeout_s": 120}
 {"cmd": "usb_host"}
 {"status": "ok", "data": {
   "mode": "host", "port": "usb_c", "remaining_s": 112, "host_ms": 8011,
-  "enumerations": 1, "attached": true,
+  "enumerations": 1, "attached": true, "enumeration": "done", "connected": true, "line_speed": "full",
   "device": {
     "vid": 11914, "pid": 3, "speed": "full", "usb": "2.10", "release": "1.00",
     "class": 239, "subclass": 2, "protocol": 1, "ep0_size": 64, "configurations": 1,
@@ -2650,6 +2678,9 @@ flashing over USB and class access come later).
 | `host_ms` | Time in host mode so far. |
 | `enumerations` | Devices that enumerated since host mode started (a replug counts again). |
 | `attached` | A device is enumerated now. |
+| `enumeration` | How far the current device got: `none` (nothing since host start or the last detach), `running` (its device descriptor arrived), `done` (enumerated), `stuck` (no enumeration 2 s after its device descriptor; the pod reads configuration descriptors of up to 1024 bytes, and a longer one stops here). A stuck device is reported until the next device sends its descriptor. |
+| `connected` | Host mode: a device's pull-up is on the port, before any enumeration. `false` while a board draws power but never shows up means its USB lines do not reach the pod. |
+| `line_speed` | `"full"` or `"low"`: the line the device pulls up (D+ or D-); `"none"` when nothing is connected. `"low"` from a full-speed board means D+ and D- are swapped. |
 | `device` | The device that enumerated last; kept after it detaches (`attached` false) until the next one. |
 | `device.vid`, `device.pid` | Vendor and product ID. |
 | `device.speed` | `"full"` or `"low"`. |
@@ -3026,6 +3057,38 @@ Like `dap_start`, this is **connection-scoped** and changes how the connection's
 | `de_active_low` | boolean | no | `false` | Drive `de` low while sending, for a transceiver whose enable is active low. |
 | `entry` | object | no | none | A boot-mode entry the pod runs before the ack, timed on the pod so no network delay sits between the reset and the first byte. See [boot-mode entry](#boot-mode-entry). Needs the pod's reset pin (`nrst_pin` in `caps`). |
 
+#### USB serial port (`"port":"usb"`)
+
+Firmware 4.0.3 and later (feature `uart_usb`). With `"port":"usb"` the bridge carries the serial
+port of the board the pod hosts ([`usb_host`](#usb_host--usb-host-mode) on): a CDC ACM port, or the
+FTDI, CP210x or CH34x chip of a dev kit, instead of the soft UART on LA channels. No LA channel, pull-up
+or I/O voltage is involved and none is touched. After the ack the connection is the same raw byte
+stream: client bytes go to the port, the port's bytes come back, `<1 s idle> +++ <1 s idle>` returns
+to JSON, and closing the socket ends the session. Ending the session closes the port (DTR and RTS go
+low, as when a computer closes a serial port) and frees its 4 KB receive ring.
+
+```json
+{"cmd":"uart_proxy_start","port":"usb","baud":115200,"dtr":true,"rts":true,"parity":"none","stop_bits":1}
+{"status":"ok","data":"uart ready"}
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `port` | string | none | `"usb"`. Left out: the soft UART on `rx` and `tx`. |
+| `baud` | integer | 115200 | 300 to 3000000. Real on a USB-serial chip; a board's own USB port ignores it. |
+| `dtr`, `rts` | boolean | `true` | The control lines. Many boards reset or enter their loader on these: set them to what the board expects. |
+| `data_bits`, `parity`, `stop_bits` | | `8`, `"none"`, `1` | 5 to 8; `"none"`, `"even"` or `"odd"`; 1 or 2. |
+
+`rx`, `tx`, `half_duplex`, `de` and `entry` do not apply. Client bytes the port cannot take within
+20 ms are dropped; when the board resets and enumerates again the session stays open (no bytes
+meanwhile) and the pod sets baud, format and lines again once a port of the same kind is back. The
+session ends, and the pod closes the connection, when host mode ends or its timeout runs out.
+Refusals: BP0085 (`usb_serial_no_port`, arg `why`: host mode off, no device attached or no serial
+port), BP0086 (`usb_serial_busy`: a `usb_flash` or `usb_check` runs), BP0049 (`uart_session_open`:
+another UART session is open). While the port is open, `usb_flash` and `usb_check` are refused
+(BP0084 and BP0087). The SDK's UART capture (`capture_uart`) and `open_uart` take `"port":"usb"` on
+top of this command.
+
 #### Boot-mode entry
 
 Some boot ROMs pick their mode from the level of the UART pin when the chip leaves reset, then
@@ -3105,7 +3168,9 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 Gateware v45+ (`status` caps `spi_master`; `spi_stream` with it on firmware that has the command).  The iCE40 engine that runs SWD has a second job:
 an SPI master on any four LA pins, used to read and program SPI NOR flash (W25Q, MX25, GD25,
 IS25 and other 25-series parts) or to talk to any other SPI device.  One engine, so an SPI
-session and an SWD session (`dap_start`) exclude each other.
+session and an SWD session (`dap_start`) exclude each other.  From gateware v65 the engine is not
+in the emulation image: `spi_start` switches to the loop image first when no I2C, SPI or UART
+sensor runs, and fails with `BP0059` while one does ([the emulation image](#the-emulation-image)).
 
 Hold the DUT in reset while you flash its SPI flash (`{"cmd":"nrst","assert":true}`) so its own
 controller does not drive the same wires, and release it afterwards.
@@ -3205,6 +3270,141 @@ bits; a part that ships protected needs its status register written with `spi_xf
 A whole image: `spi_start`, `nrst` assert, `op:"id"`, `erase` the image's range in 1 MB steps,
 `write` it in 768-byte chunks, `nrst` release, `spi_stop`.
 
+## Chips without SWD or a bootloader (prog_flash)
+
+### `prog_flash` — flash a chip over its programming pins
+
+Firmware 4.0.4 and later (feature `prog_flash`). The pod runs the chip's own programming protocol on its LA
+pins: no programmer, no USB cable to the target. At the DUT's I/O voltage (1.8 or 3.3 V).
+
+| `proto` | Chips | Wiring |
+|---|---|---|
+| `updi` | AVR tinyAVR 0/1/2, megaAVR 0, AVR DA/DB/DD | UPDI on an LA pin, `data` |
+| `pic` | PIC16F1xxx, PIC16F18xxx, PIC18F Q (low-voltage entry) | ICSPCLK on `clk`, ICSPDAT on `data`, MCLR on the pod's reset pin or an LA pin (`reset`) |
+| `c2` | Silicon Labs EFM8, C8051F | C2CK on `clk`, C2D on `data` |
+| `tpi` | AVR ATtiny4/5/9/10/20/40/102/104 | TPICLK on `clk`, TPIDATA on `data`, RESET on the pod's reset pin or an LA pin (`reset`) |
+| `pdi` | AVR XMEGA | PDI_CLK (the chip's RESET pin) on `clk`, PDI_DATA on `data` |
+| `sbw` | MSP430 FRAM parts (FR2xx, FR4xx, FR5xxx, FR6xxx) over Spy-Bi-Wire | SBWTCK (the chip's TEST pin) on `clk`, SBWTDIO (its RST/NMI pin) on `data`; the pod's reset pin is not used; gateware v52+ |
+
+`status` lists the protocols the running firmware has in `protos`. A protocol that is listed but
+not finished answers `not supported` (the result).
+
+The six protocols run from the pod's W25Q (the `xip_prog` blob, `blob-xip_prog.bin`, made by the
+same build as the firmware and installed with the other blobs), like the USB flash protocols: a
+job holds that W25Q code for its whole run, so a `usb_flash` cannot start meanwhile (it answers
+busy) and the other way round. Without the blob, or with another build's, `start` and `info` are
+refused with an error that says to install the blobs (`benchpod install-blobs`).
+
+AVR TPI and XMEGA PDI notes:
+
+- Voltage: the ATtiny4/5/9/10, 20 and 40 can be programmed at 5 V only (their datasheets say
+  "Apply 5V", 4.75-5.5 V). The pod's 1.8 and 3.3 V I/O cannot program them: use the board's own 5 V
+  with a level shifter. The ATtiny102/104 datasheet contradicts itself (1.8-5.5 V
+  in one place, 5 V in another): try it. XMEGA: 3.3 V is fine, 1.8 V when BODLEVEL is below VCC.
+- `tpi` fields (the SDK sets them from its device table): `write_words` = words per flash write (1:
+  ATtiny4/5/9/10 and 102/104; 2: ATtiny20; 4: ATtiny40), `page_erase` = the chip has a page erase
+  (ATtiny102/104). Before firmware 4.0.6 these were bits of `flags` (bits 0-2 and bit 3). `page` must be a multiple of the write size (2, 4 or 8 bytes). The chips erase
+  flash only as a whole code section, so `erase: "page"` is one section erase before the first page
+  (the whole code section is gone, also outside the written range); with the page-erase flag it
+  erases each page it writes. Use `erase: "chip"` when in doubt.
+- `pdi`: needs no chip fields. The PDI turns itself off when its clock runs slower than about 10 kHz; the
+  pod keeps the clock running while it waits and re-enters programming mode when a pause between
+  two steps of a job switched it off. The chip may start its program for a moment in such a pause.
+- `sbw` (MSP430 Spy-Bi-Wire, FRAM parts with CPUXv2: FR2xx, FR4xx, FR5xxx, FR6xxx): `clk` is the
+  chip's TEST pin (SBWTCK) and `data` its RST/NMI pin (SBWTDIO); the pod's reset pin is not used.
+  The I/O voltage must equal the chip's VCC. It needs gateware v52 or newer (the fast SPI link keeps
+  the clock-low phase under the chip's 7 us limit); older gateware answers an error. `id` is 3 bytes:
+  JTAG ID (0x98 FR2xx/FR4xx, 0x99, 0x91) then the device ID low and high byte (FR2433: `984082`). A
+  JTAG-locked chip answers `info` with the JTAG ID only (1 byte); `start` then fails with `locked`
+  and `erase: "chip"` (JTAG mailbox mass erase, about 0.7 s) unlocks it. `mem` is `flash` (main FRAM)
+  or `config` (information FRAM, signatures): the same access, you pass the address; `addr` and
+  `len` must be even and `addr + len` at most 0x100000. `erase: "page"` writes 0xFFFF over the
+  range (FRAM needs no erase). `page` is not used (send any value 1..4096). `flags` bit 0 (1): enter
+  with RST held low, for a chip that does not answer while its program runs. `baud` is not used.
+  Speed: about 4 ms per 16-bit word written and verified, so 16 KB takes about 70 s; poll `status`.
+  Flash parts (MSP430F/G series, JTAG ID 0x89) answer `not supported`. At the end TEST is left low.
+
+Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
+`pic`, `c2`, `tpi`, `pdi` and `sbw` run on the FPGA's bus-master engine, which gateware v65 and later has
+only in the loop and deep images. On the emulation image `start` fails with `BP0058` (load the deep
+image, then stage the file) or `BP0059` while I2C, SPI or UART sensors run; `info` switches to the
+loop image by itself when no such sensor runs. `updi` runs in every image.
+The job runs in the background: `info` and `start` answer at once and `status` reports progress.
+Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
+
+```json
+{"cmd":"prog_flash","op":"info","proto":"c2","clk":3,"data":4}
+{"cmd":"prog_flash","op":"start","proto":"c2","clk":3,"data":4,"mem":"flash","addr":0,"len":8192,
+ "page":512,"erase":"chip","expect_id":"0x30","run":true}
+{"cmd":"prog_flash","op":"status"}
+{"cmd":"prog_flash","op":"abort"}
+```
+
+| Field | Meaning |
+|---|---|
+| `op` | `info` (enter programming mode and read the chip's ID, nothing written), `start`, `status`, `abort` |
+| `proto` | `updi`, `pic`, `c2`, `tpi`, `pdi`, `sbw` |
+| `clk`, `data` | LA pins (1..14); `updi` takes `data` only; `sbw`: TEST and RST/NMI |
+| `reset` | `pic` and `tpi`: `"nrst"` (default, the pod's reset pin) or an LA pin, driven open-drain |
+| `mem` | `flash` (default), `eeprom`, `config` (PIC configuration words, AVR fuses, C2 lock byte), `user` (AVR user row, PIC user ID) |
+| `addr` | start address in that memory, in bytes (PIC: 2 bytes per word) |
+| `len` | bytes of the staged upload to write (`start` only) |
+| `page` | the chip's write page or row in bytes (`start` only; the SDK takes it from its device table) |
+| `erase` | `chip` (also unlocks a locked chip), `page` (default: only the pages written) or `none` |
+| `expect_id` | hex bytes the chip's ID must start with; the pod stops before erasing anything when it does not |
+| `baud` | `updi` only: the link rate after entry (default 115200) |
+| `cp_addr` | `pic` only: the byte address (as `addr` counts) of the configuration word that holds the code-protect bit, so a protected chip reports `locked`; 0 or absent: no lock check. The bit itself is in `flags` |
+| chip fields | Firmware 4.0.6 and later (feature `prog_named`): the chip's protocol options as named fields, set by the SDK from its device table; see below. Unknown values, a field of another protocol and a mix with `flags` are refused |
+| `flags` | the same options as one packed integer, as firmware 4.0.5 and older read them; still accepted for one release, not together with a named field |
+| `run` | `true` (default): let the chip start its program at the end |
+
+Write one memory region per `start`; the SDK splits a `.hex` or `.elf` file. Every page written is
+read back and compared.
+
+Chip fields (firmware 4.0.6 and later; each one replaces the `flags` bit given in brackets):
+
+| `proto` | Field | Meaning |
+|---|---|---|
+| `updi` | `flash_base` | the chip's flash in the UPDI data space: 0x8000 tinyAVR 0/1/2, 0x4000 megaAVR 0, 0x800000 AVR DA/DB/DD (`flags` was this number); absent: from the chip's SIB |
+| `pic` | `cmd_set` | `"6bit"` (default) or `"8bit"` (bit 0) |
+| `pic` | `pc` | `"word"` (default) or `"byte"`, the PIC18 Q program counter in bytes (bit 1); needs `"8bit"` |
+| `pic` | `ee_erase`, `cp_high`, `q10`, `id_split`, `key_flip` | booleans for bits 2, 3, 4, 5 and 6, described below; `q10` needs `pc` `"byte"` |
+| `pic` | `cp_bit` | the code-protect bit number, 0..15 (bits 8..11) |
+| `tpi` | `write_words`, `page_erase` | 1, 2 or 4 words per flash write; the chip has a page erase |
+| `c2` | `fpdat`, `no_setup` | the FPDAT register address (0 = by device ID); skip the per-device setup writes |
+
+`pic` `flags` (before firmware 4.0.6; bit values in `stm32h563/src/prog_pic.h`):
+bit 0 8-bit command set (PIC16F18xxx, PIC18 Q), bit 1 PIC18 Q (byte PC), bit 2 chip erase also
+clears the data EEPROM (6-bit set), bit 3 code-protect bit is 1 when protected, bits 8..11 the
+code-protect bit number, bit 4 PIC18 Q10 (bulk erase without a region payload, 16-bit config
+words, 80 ms erase), bit 5 6-bit chip with separate revision (0x8005) and device ID (0x8006) words
+(default: both packed in 0x8006, device ID in `id[0..1]`, revision in `id[2..3]`), bit 6 entry key in
+the other command set's order. PIC18 Q user ID is 16-bit words and the Q43/Q84 config is bytes
+(Q10: words). Chip erase on PIC18 Q also clears the EEPROM. Bulk erase needs VDD above the chip's
+brown-out level (about 2.7 to 2.85 V on most; PIC18 Q10 about 1.9 V): at 1.8 V the erase can be
+ignored.
+
+`info` and `start` reply `{"started":true,"op":"start","proto":"c2"}`. `status` (and `abort`) reply:
+
+```json
+{"running":false,"op":"start","proto":"c2","phase":"done","done":16,"total":16,"id":"3001",
+ "ms":2140,"protos":["updi","pic","c2","tpi","pdi","sbw"],"result":"ok"}
+```
+
+`phase` is `enter`, `erase`, `write`, `leave` or `done` (after a failure: the step it failed in);
+`done`/`total` count pages. `id` is the chip's ID bytes in hex, in the order the chip sends them.
+`result` is `null` while running, then `ok` or: `no answer (wiring, power or I/O voltage)`,
+`wrong chip (the ID is not expect_id)`, `locked (erase the chip to unlock it)`, `verify failed`
+(with `at_addr`), `timeout (the chip stayed busy)`, `protocol error (an answer the protocol does not
+allow)`, `memory, address, length or page size not valid here`, `could not read the staged image`,
+`not supported (this chip, memory or protocol)`, `aborted`.
+
+Errors at `info`/`start`: `missing or unknown proto`, `nothing staged: load_bin with "psram":true
+first`, `len is more than the staged upload`, `BP0047` (`pod_busy`, also while a job runs), `BP0005`
+(the engine is in use by a DAP, SPI or I2C session), `BP0049` (a UART session is open, `updi`),
+`BP0031` (a pin conflict), `this pod has no reset pin: wire the chip's reset to an LA pin and pass reset`,
+`reset must be another pin than clk and data`.
+
 ## ESP32 targets (flash over the UART ROM bootloader)
 
 `esp_flash` writes an image into an ESP32-family target's flash through the chip's own ROM
@@ -3274,7 +3474,9 @@ session is open), `BP0031` (a pin conflict), `this pod has no reset pin: wire EN
 The pod is an I2C master on any two LA pins (firmware with gateware v55 and later): read and write
 registers of a chip on the DUT's board, or scan the bus. The pins are open drain, so the bus needs
 pull-ups. SWD, SPI and I2C sessions exclude each other: they share one engine in the FPGA. Every
-command and reply fits one cloud frame.
+command and reply fits one cloud frame. From gateware v65 that engine is not in the emulation image:
+`i2c_start` switches to the loop image first when no I2C, SPI or UART sensor runs, and fails with
+`BP0059` while one does ([the emulation image](#the-emulation-image)).
 
 ### `i2c_start` — claim two pins as an I2C master
 
@@ -3373,7 +3575,17 @@ While the emulation image runs, the closed DAC loop (`dac_control_loop`, `dac_lo
 `dac_loop_probe`) and deep DAC replay (`load_bin` with `psram`, a deep `replay`) are not
 available; they fail with `BP0059` (`fpga_image_sensors_first`, args `feature` and `image`: stop
 the sensors, then switch to that image). Captures, the UART
-proxy, SWD, GPIO, the SPI master, `generate` and shallow `replay` work in every image. The pod does
+proxy, GPIO, `generate` and shallow `replay` work in every image.
+
+From gateware v65 the emulation image has no bus masters either: SWD (`dap_start`: flashing and
+debugging the DUT), JTAG, the [SPI master](#spi-master-flash-an-spi-device), the
+[I2C master](#i2c-master) (and the GPIO expanders it drives) and the two-wire pin programmers
+(`prog_flash` pic, c2, tpi, pdi and sbw) need the loop or deep image. While I2C, SPI or UART sensors run,
+`dap_start`, `spi_start` and `i2c_start` fail with `BP0059` (`feature` `"SWD"`, `"the SPI master"` or
+`"the I2C master"`). Flash the DUT first, then start the sensors: that order needs one image swap.
+With the emulation image loaded and no such sensor running, those commands switch to the loop
+image themselves before they answer (about 0.1 s; 2 to 3 seconds before firmware 4.0.6), so older clients keep working. Up to
+gateware v64 every image had the bus masters. The pod does
 not swap back by itself: after `sensor_stop` the emulation image stays loaded until
 [`fpga_image`](#fpga_image--switch-the-running-gateware-image) switches it, and `fpga_image` to
 another image is refused while I2C, SPI or UART sensors run. Analog sensors work in every image
@@ -3908,18 +4120,50 @@ deep-replay image it answers `BP0058` (`fpga_image_required`, image `loop`).
 The iCE40 has three images: `0` or `"loop"` (the closed-loop DAC), `1` or `"deep"` (deep DAC
 replay from PSRAM) and, from gateware v54, `2` or `"emulation"` (the
 [emulated sensors](#emulated-sensors): I2C and SPI targets, the sensor FIFO, UART2). Each lives in
-its own W25Q slot (`gw0`, `gw1`, `gw2`). The switch reflashes the iCE40's configuration from the
-slot and reconfigures it, which takes 2 to 3 seconds. The pod then announces its new capabilities
+its own W25Q slot (`gw0`, `gw1`, `gw2`). From firmware 4.0.6 the switch loads the image straight
+from its slot into the iCE40 (SPI slave configuration: the STM32 starts a read of the slot and
+clocks the flash's output into the iCE40) and writes nothing to the configuration flash; it takes
+about 80 ms in the pod, about 0.1 s for a client. When that load fails twice (the iCE40 does not
+report CDONE, or the bits read back do not match the slot's SHA-256) the switch falls back to the
+older way: it writes the image to the iCE40's configuration flash and reconfigures it from there
+(2 to 3 seconds, as every switch did up to firmware 4.0.5). The configuration flash then holds the
+loop image for good: it is written only on a gateware update (and once, on the first start of
+4.0.6, when an older firmware left another image there), so **after a restart or a power cycle the
+pod runs the loop image**. Older firmware kept the last image switched to. The pod then announces its new capabilities
 to the cloud, and puts an external output stage back on its park level when DAC limits are set.
 `sensor_start` loads the emulation image by itself; nothing switches back by itself.
 
+Asking for the image that already runs does nothing (firmware 4.0.6+): no reflash, no reload, the
+DAC and anything else the gateware runs keep going, and the reply says `"switched":false`. The pod
+still loads it when the iCE40 does not answer, `status.psram_ok` is `false`, or the running
+gateware version is not the one the firmware carries (so `benchpod install-blobs` can reload a
+stale image). `"force":true` reloads it anyway.
+
 ```json
 {"cmd":"fpga_image","image":"emulation"}
+{"cmd":"fpga_image","image":"loop","force":true}
 {"cmd":"fpga_image"}
 ```
 
-Reply: `{"image":2,"name":"emulation","version":54,"features":4}`; without `image` it reports the
-running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation.
+Reply: `{"image":2,"name":"emulation","version":54,"features":4,"switched":true,"fpga_switch":{"switches":3,"skipped":5,"failed":0,"slave_loads":3,"slave_fails":0,"reflashes":0,"erases":0,"last_ms":81}}`;
+without `image` it reports the running one (no `switched`). `fpga_switch` is the counter block from
+[`status`](#status) (firmware 4.0.6+). `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation,
+8 the JTAG master (v61+), 16 the SWIM master (v62 to v64, deep image only), 32 the bus masters
+(v65+: SWD, the SPI master and the I2C master; loop and deep images). From gateware v65 the loop
+image reports 41 (0x29), the deep image 42 (0x2A) and the emulation image 4.
+
+Images and what each has, from gateware v65:
+
+| Image | Has | Lacks |
+|---|---|---|
+| loop | closed-loop DAC, SWD, JTAG, SPI and I2C master | deep replay, emulated sensors |
+| deep | deep DAC replay, SWD, JTAG, SPI and I2C master | closed loop, emulated sensors |
+| emulation | emulated I2C, SPI and UART sensors | closed loop, deep replay, SWD, JTAG, SPI and I2C master |
+
+Captures, the UART proxy, GPIO, `generate`, shallow `replay` and the analog sensors work in every
+image. `dap_start`, `spi_start`, `i2c_start` and `prog_flash` `"op":"info"` leave the emulation image
+for the loop image by themselves when no I2C, SPI or UART sensor runs (see
+[the emulation image](#the-emulation-image)).
 
 Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `BP0017` (the emulation image needs
 gateware v54), `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
@@ -3937,7 +4181,7 @@ back. A failure points at the iCE40 to PSRAM write path, not at the analog ADC.
 {"cmd":"psram_ping","count":16}
 ```
 
-`count` is 4..256 (default 16). Reply: `{"pass":true,"count":16,"first_bad":-1}`.
+`count` is 4..128 (default 16); larger values are capped at 128. Reply: `{"pass":true,"count":16,"first_bad":-1}`.
 
 <a id="psram_recover--reboot-to-recover-the-psram"></a>
 ### `psram_recover` — reboot to recover the PSRAM
@@ -3950,7 +4194,8 @@ longer matches a gateware slot, so reboots do not wear it.
 **The iCE40 recovers by itself.** When the pod is idle the firmware pings the iCE40 every 30 s.
 One that answered since boot and stops answering (an ESD hit can hang or unconfigure it) is reloaded
 from its config flash (no write) after 10 s, at most 6 times an hour; the DAC outputs are parked as
-at boot. It never resets the STM32 for this, since that would also power-cycle the DUT. The device
+at boot. That reload starts the loop image; from firmware 4.0.6 the pod then loads the image it was
+switched to again from its slot. It never resets the STM32 for this, since that would also power-cycle the DUT. The device
 log says what it did. Over the cloud the reply may not arrive before the reboot: treat "no reply, the pod
 reconnects" as success and check `status.psram_ok` again.
 
@@ -4096,7 +4341,7 @@ them, so the clock sits next to a ground pin:
 
 A digital board and a module from different sides of that change do not work together: the DAC
 would get scrambled data. Nothing is damaged (both lines come from the digital board), and from
-the next firmware release on the pod refuses every command that drives the DAC with `BP0080` and
+firmware 4.0.0 on the pod refuses every command that drives the DAC with `BP0080` and
 sends the DAC nothing at all. Everything else (ADC, LA, relays, I2C) keeps working.
 `status.module.dac_pinout_ok` is `false` on such a pair. The module's revision comes from its
 EEPROM header: a module that was never programmed (`eeprom` `"blank"`), or whose header does not
@@ -4124,7 +4369,7 @@ because the firmware blocks the DAC frames themselves.
 | `present` | boolean | A module is plugged in now (`MOD_PRESENT#`, read live). |
 | `analog` | boolean | The module was found at boot and is the pod's analog front end. |
 | `power`, `bridge_power` | boolean | The module's 5 V rail and the USB-A bridge port rail are on. See [`module_power`](#module_power--module-and-bridge-port-power). |
-| `dac_pinout_ok` | boolean | `false` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0080`). Next firmware release. |
+| `dac_pinout_ok` | boolean | `false` when the digital board and the module use different [DAC pinouts on the flat cable](#dac-pinout-on-the-flat-cable): the DAC is off (`BP0080`). Firmware 4.0.0 and later. |
 | `eeprom` | string | The EEPROM header: `"ok"`, `"blank"` (never written), `"bad magic"`, `"bad crc"`, `"bad length"`, or `"none"` (no EEPROM answered, or no module at boot). |
 | `type`, `rev`, `serial` | string | With `eeprom` `"ok"`: the module type (`"analog"`), its hardware revision and serial number. |
 | `layout` | integer | The header's layout version (1). |
@@ -4502,7 +4747,7 @@ the last begin: `none`, `ok`, `format`, `unknown-key`, `signature`, `target` or 
 
 | Command | Fields | What it does |
 |---|---|---|
-| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). |
+| `ota_begin` | `size`, `sha256` (64 hex), optional `target` (`gw0`, `gw1`, `gw2`, `esp`, `bridge`, `xip`, `xip_prog`, `ca`, `tls`; none = firmware), `version`, `sig` (base64url signed manifest) | Starts a session. The signature is checked here against the [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) (the `ca` and `tls` targets are configuration and are not signed; `bridge`, the Wi-Fi bridge's firmware, always needs a good signature because the bridge checks it again, and so does `esp` from firmware 3.10.7). From firmware 4.0.0 every code image (firmware, gateware, `esp`) needs a good signature on every transport, and a signed firmware below the rollback floor is refused (same section). `xip` is code the pod runs straight from its W25Q (blob `blob-xip.bin`, made by the same build as the firmware): it is listed by `blob_status` and accepted only on boards that can run it, and only the image the running firmware was built with (another one is refused with `ota_begin`'s `error` "this xip image was not built with this firmware"). `xip_prog` is the second such image (the `prog_flash` protocols, `blob-xip_prog.bin`) under the same rules (signing target 10). |
 | `ota_data` | `offset`, `data` (base64url) | Writes one chunk at a byte offset. |
 | `ota_end` | none | Checks the SHA-256 (and, for the firmware, that the image fits this MCU's flash and can enforce the policy); `state` becomes `verified` or `error`. |
 | `ota_status` | none | The session, from any transport (T0). |
@@ -4539,7 +4784,7 @@ Reads the cached slot headers (no bus access).
   {"name":"esp","state":"outdated","present":true,"size":1048576,"version":3,"sha256":"<hex>"}]}}
 ```
 
-It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` (that code: its `state` is `ok` only for the image built with the running firmware); the company CA is read with `cloud_ca`.
+It lists the release slots: `gw0`, `gw1`, `gw2`, `esp`, `bridge` (the Wi-Fi bridge's firmware, which the pod keeps ready and relays when a bridge is plugged in and runs an older version) and, on boards that can run code from the W25Q, `xip` and `xip_prog` (that code, two images: their `state` is `ok` only for the image built with the running firmware). From this firmware on, every board lists `xip` and `xip_prog`, also pods with the ESP32-C3: they use the W25Q space where older firmware kept a copy of the C3's image (`esp` now goes straight into the C3); the company CA is read with `cloud_ca`.
 
 `state` compares the slot with what this firmware was built with: `ok` (exactly that blob),
 `outdated` or `missing` (an installer should send it), or `unknown` (this build expects nothing in
@@ -4551,11 +4796,62 @@ updated from firmware that kept a copy in the W25Q, that copy is reported until 
 update. `present` is false, and `state` `missing`, when the last write into the C3 failed, or when
 the C3 does not start and the pod has no copy to reinstall it from.
 
+### `usb_hid` — HID interfaces and input reports
+
+Firmware 4.0.3 and later (feature `usb_hid`). With [`usb_host`](#usb_host--usb-host-mode) on and a
+board mounted, this lists the board's HID interfaces (the first two of a composite device) with
+their report descriptors, and catches the input reports it sends: a keyboard's keys, a mouse, a
+gamepad, a custom HID device. The pod keeps the device's default (report) protocol and does not
+send anything to it; the reports come from its interrupt IN endpoint.
+
+A capture catches the reports. `capture` true starts it on all HID interfaces at once: every report
+goes into one ring of 64 (heap memory, freed when the capture ends), tagged with its interface and the
+milliseconds since the capture started, whether or not a `read` is running. `read` drains the ring.
+`capture` false stops it and frees the ring. The capture also ends when the board detaches (a board
+that resets and enumerates again needs a new `capture` true) and when host mode ends.
+
+```json
+{"cmd": "usb_hid"}
+{"status": "ok", "data": {"attached": true, "interfaces": [{"instance": 0, "interface": 0,
+  "protocol": "keyboard", "descriptor_len": 63, "descriptor_offset": 0, "truncated": false,
+  "descriptor": "05010906a101050719e029e715002501750195088102..."}]}}
+{"cmd": "usb_hid", "capture": true}
+{"status": "ok", "data": {"capturing": true, "buffered": 0, "dropped": 0}}
+{"cmd": "usb_hid", "read": true, "count": 8, "timeout_ms": 5000}
+{"status": "ok", "data": {"reports": [{"ms": 812, "instance": 0, "data": "0000040000000000"},
+  {"ms": 830, "instance": 1, "data": "00010000"}, {"ms": 920, "instance": 0, "data": "0000000000000000"}],
+  "count": 3, "dropped": 0, "capturing": true}}
+{"cmd": "usb_hid", "capture": false}
+{"status": "ok", "data": {"capturing": false, "buffered": 0, "dropped": 0}}
+```
+
+| Argument | Description |
+|---|---|
+| `capture` | `true` starts the capture (nothing happens when it already runs), `false` stops it and frees the ring (works in every state). |
+| `read` | `true` returns reports from the ring. Without `capture` or `read` the command lists the interfaces. |
+| `count` | With `read`: return at most this many reports, 1 to 32 (default 1). |
+| `timeout_ms` | With `read`: when the ring holds no report (of the asked instance), wait up to this long for one, 1 to 10000 (default 2000). A ring that holds a report answers at once. The reply holds what is there, possibly none. |
+| `instance` | With `read`: only the reports of this HID interface (0 or 1); the other reports stay in the ring. With the list: only this interface. By default every one. |
+| `offset` | With the list: where each report descriptor starts, in bytes (default 0). The descriptors share one reply; a long one is cut (`truncated` true) and read on with `offset`. |
+
+| Field | Description |
+|---|---|
+| `interfaces[]` | `instance` (the number to pass back), `interface` (the USB interface number), `protocol` (`keyboard`, `mouse` or `none`), `descriptor_len` (0 when the pod could not read it), `descriptor` (hex from `descriptor_offset`) and `truncated`. |
+| `reports[]` | `ms` (since the capture started), `instance` and `data` (hex of the report as sent; with several report IDs the first byte is the ID). Reports are cut at 64 bytes. |
+| `capturing` | Whether the capture runs. A `read` that comes back with `capturing` false found it ended (the board detached or host mode ended). |
+| `buffered`, `dropped` | In the reply of `capture`: the reports waiting in the ring, and the reports that arrived while the ring was full, since the capture started (a full ring drops the newest, so keys pressed while nobody reads are not lost until 64 are waiting). In the reply of `read`, `dropped` is the same running count. |
+
+A `read` while no capture runs starts one and leaves it running (the way it behaved before the
+capture existed, but now the reports between two reads are kept); stop it with `capture` false. The
+whole command is refused (plain error) when host mode is off, no HID interface is mounted, or a
+`usb_flash` or `usb_check` is running; `usb_flash` and `usb_check` are in turn refused while a capture
+runs. The pod keeps `usb_host` on only for its own timeout, so renew it for a long capture.
+
 ### `usb_flash` — flash a board over USB
 
-**Development builds only** (`make USB_HOST=1`, not in releases yet). The pod flashes a board on its
-USB host port (`usb_host`) from a file uploaded with `load_bin` and `"psram": true`, the way a
-computer would:
+Firmware 4.0.3 and later (feature `usb_flash`). The pod flashes a board on its USB host port
+([`usb_host`](#usb_host--usb-host-mode)) from a file uploaded with `load_bin` and `"psram": true`,
+the way a computer would:
 
 - `uf2`: UF2 bootloaders (Raspberry Pi Pico and Pico 2, Adafruit and Seeed boards, tinyuf2) take
   the UF2 file's blocks on the drive they show.
@@ -4566,58 +4862,199 @@ computer would:
   the sectors the image covers and writes it at `address`.
 - `teensy`: the Teensy loader (Teensy 3.x, 4.0, 4.1, MicroMod; press the button or use the 1200
   baud touch to start it). Blocks of 0xFF are skipped.
+- `avr`: the Arduino AVR bootloaders over the board's USB serial port. The pod finds the one the
+  board runs: Caterina (Leonardo, Micro, Pro Micro, Feather 32u4; a board running its sketch gets
+  the 1200 baud touch first), optiboot and the older Nano bootloader (Uno, Nano, Pro Mini, after a
+  DTR reset at 115200 then 57600 baud), and the Mega 2560 bootloader. Every page is read back and
+  compared.
+- `samd`: the Arduino SAMD bootloader (Zero, MKR, Nano 33 IoT, and the Adafruit and Seeed SAMD
+  bootloaders, which answer the same way), after the 1200 baud touch. The pod reads the flash size
+  from the chip, erases from `address` to the end, writes, reads back and compares, then resets the
+  board. `address` is where the sketch starts: `0x2000` on a SAMD21, `0x4000` on a SAMD51. The
+  bootloader below it is refused.
+- `esp`: an ESP32 chip's ROM loader over the board's USB: its own USB serial port (C3, C6, S3, H2)
+  or the USB-serial chip of a dev kit (CP210x, CH34x, FTDI). The pod resets the chip into its
+  loader with DTR and RTS as esptool does, writes the image at `address` (0 for a merged image) and
+  checks its MD5 on the chip. A dev kit's chip runs at 460800 baud for the write.
+- `picoboot`: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350) in BOOTSEL (USB ID 2E8A:0003 or
+  2E8A:000F), through the vendor PICOBOOT interface next to its UF2 drive. The pod takes exclusive
+  access, leaves XIP mode, erases the 4 KB sectors the image covers, writes 256-byte pages, reads
+  every page back and compares it with the file, then reboots the board into the new program. Unlike
+  `uf2`, a page that did not stick fails the flash (`a page read back different from what was
+  written`). Any other board is refused (BP0084).
 
-The image for `dfu` and `teensy` is a binary with its start `address` (the SDK converts `.hex` and
-`.dfu` files). The flash runs in the background; poll `usb_flash` for its state.
+Serial ports: CDC ACM (a board's own USB), and the FTDI, CP210x and CH34x USB-serial chips.
+
+The image for `dfu`, `teensy`, `avr`, `samd`, `esp` and `picoboot` is a binary with its start `address` (the SDK
+converts `.hex` and `.dfu` files). The flash runs in the background; poll `usb_flash` for its
+state.
 
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_a", "timeout_s": 120}
 {"cmd": "usb_flash", "mode": "uf2", "len": 204800}
-{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440}
+{"cmd": "usb_flash", "mode": "file", "name": "FIRMWARE.BIN", "len": 61440, "check_fail_txt": true}
 {"cmd": "usb_flash", "mode": "dfu", "address": "0x08000000", "len": 131072}
 {"cmd": "usb_flash", "mode": "teensy", "address": 0, "len": 262144}
+{"cmd": "usb_flash", "mode": "avr", "len": 10240}
+{"cmd": "usb_flash", "mode": "samd", "address": "0x2000", "len": 51200}
+{"cmd": "usb_flash", "mode": "esp", "address": 0, "len": 1048576}
+{"cmd": "usb_flash", "mode": "picoboot", "address": "0x10000000", "len": 262144}
 {"cmd": "usb_flash"}
 {"status": "ok", "data": {"running": false, "have_result": true, "mode": "file", "name": "FIRMWARE.BIN",
-  "len": 61440, "address": 0, "phase": "done", "done": 120, "total": 120, "result": "ok", "ok": true,
-  "ms": 1840}}
+  "len": 61440, "address": 0, "protocol": "", "phase": "done", "done": 120, "total": 120, "result": "ok",
+  "ok": true, "ms": 1840, "note": ""}}
 {"cmd": "usb_flash", "abort": true}
 ```
 
 | Argument | Description |
 |---|---|
-| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12 or FAT16 file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. Without `mode` the command reads the state. |
-| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). A number or a `0x` string. |
+| `mode` | `uf2`: the file is a UF2 file; its 512-byte blocks are checked and written to the drive in order. `file`: any file (`.bin`, `.hex`), written to the drive's FAT12, FAT16, FAT32 or exFAT file system as `name`. `dfu`: a binary for a USB DFU or STM32 DfuSe loader. `teensy`: a binary for the Teensy loader. `avr`, `samd`, `esp`: a binary for the board's bootloader on its USB serial port. `picoboot`: a binary for an RP2040 or RP2350 in BOOTSEL. Without `mode` the command reads the state. |
+| `address` | `dfu` with a DfuSe loader: the flash address the image starts at (`"0x08000000"` for an STM32's flash). `teensy`: the loader address of the image (0 for a whole image). `avr`: the byte address (0 for a sketch). `samd`: the flash address (`0x2000` on a SAMD21). `esp`: the flash offset (0 for a merged image, `0x10000` for an application). `picoboot`: the flash address (default `0x10000000`, the start of flash), a multiple of 4096 inside the 16 MB window. A number or a `0x` string. |
 | `block` | `teensy`: the loader's block size, 1024 (default) or 512 (Teensy LC). |
-| `leave` | `dfu`, `teensy`: `false` keeps the board in its loader at the end; by default it starts the new firmware. |
+| `leave` | `dfu`, `teensy`, `avr`, `samd`, `esp`, `picoboot`: `false` keeps the board in its loader at the end (`picoboot`: in BOOTSEL, with its drive writable again); by default it starts the new firmware. Some bootloaders (optiboot, Caterina) start the sketch on their own after a few seconds anyway. |
 | `name` | With `mode` `file`: the file name, an 8.3 name such as `FIRMWARE.BIN`. A file of the same name is replaced. |
 | `len` | Bytes of the uploaded file to write. |
+| `check_fail_txt` | `file`: after the copy, wait up to 10 s for the drive to come back (a DAPLink loader re-enumerates), read `FAIL.TXT` from its root directory and, when it is there, end with the result `the loader reported a failure` and its first line in `note`. If the drive does not come back, the result stays `ok` and `note` says FAIL.TXT was not checked. Off by default. |
+| `verify` | `uf2`: after the last block, if the drive is still (or again) the loader, compare each block of the file with the drive's `CURRENT.UF2` (the loader's flash contents; Raspberry Pi RP2040 and RP2350 loaders). Only works when the loader stays in BOOTSEL after the write, as with a UF2 file that keeps it there. If the board left its loader (the normal case) the result stays `ok` and `note` says `verify skipped: the board left its bootloader`. A difference ends with `the drive's flash contents differ from the file` and the block in `note`. Off by default. |
+| `time` | `file`: seconds since 1970 (UTC, 2020 to 2099) for the dates and times of the new file's directory entry. The pod has no clock, so the client sends its own; left out, the entry says 2026-01-01 00:00:00. |
 | `abort` | `true` stops a running flash. |
 
 | Field | Description |
 |---|---|
 | `running` | A flash is in progress. While it runs, captures, DAC playback, uploads and updates are refused with BP0048. |
-| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done`. `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. |
-| `done`, `total` | Sectors (`uf2`, `file`) or blocks (`dfu`, `teensy`) written, of all. |
-| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12/FAT16 file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error, the board is not a Teensy in its loader, ...). |
+| `protocol` | `avr`: the bootloader found, `avr109`, `stk500v1` or `stk500v2`. `samd`: `sam-ba`. `esp`: the chip, such as `ESP32-S3`. Empty otherwise. |
+| `phase` | `uf2` and `file`: `start`, `uf2`, `directory`, `free space`, `data`, `fat`, `entry`, `done` (FAT32 adds `new directory block`, `old file`, `fsinfo`; exFAT adds `new directory block`, `bitmap`, `fat`, `old file`, `entry`; the read-back adds `wait for drive`, `find file`, `read file`, `verify`). `dfu` and `teensy`: `start`, `descriptors`, `layout`, `erase`, `address`, `write`, `leave`, `done`. `picoboot`: `start`, `descriptors`, `erase`, `write`, `verify`, `leave`, `done`. `avr` and `samd`: `start`, `touch`, `reattach`, `reset`, `sync`, `info`, `erase`, `write`, `verify`, `leave`, `done`. `esp`: `reset`, then the ESP32 flasher's phases (`sync`, `data`, `md5`, ...). |
+| `note` | What the read-back found: `FAIL.TXT`'s first line, `verified N blocks`, `verify skipped: ...`, or empty. |
+| `done`, `total` | Sectors (`uf2`, `file`), blocks (`dfu`, `teensy`, `esp`), steps (`picoboot`: sectors erased, then pages written, then pages read back) or bytes (`avr`, `samd`: written, then verified) of all. |
+| `result`, `ok` | The outcome once it ended: `ok`, `aborted`, or what went wrong (the drive did not take a sector, the file is not a UF2 file, no FAT12, FAT16, FAT32 or exFAT file system, no room for the file, the board has no DFU interface, the image does not fit the loader's flash layout, the loader reported an error (for `picoboot` with its status code), the board is not a Teensy in its loader, the board is not an RP2040 or RP2350 in BOOTSEL, a page read back different from what was written, no bootloader answered on the serial port, what the board holds is not the image, the image would overwrite the bootloader, ...). |
 
-The pod keeps `usb_host` on while a flash runs. The flash logic runs from the pod's W25Q (`xip`),
-so it needs the `xip` blob of the running firmware. Refusals: BP0084 (`usb_flash_refused`, arg
-`why`: host mode off, no drive mounted or device attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
+The pod keeps `usb_host` on while a flash runs. The flash logic of every mode but `esp` runs from
+the pod's W25Q (`xip`), so it needs the `xip` blob of the running firmware; `esp` uses the same
+flasher as `esp_flash`, and is refused while another ESP32 flash runs. Refusals: BP0084 (`usb_flash_refused`, arg
+`why`: host mode off, no drive mounted, device or serial port attached, nothing staged, a bad mode, name or length), BP0083 (the W25Q
 code), BP0048 (the storage bus is busy).
+
+### `usb_serial` — USB serial port state
+
+Firmware 4.0.3 and later (feature `uart_usb`). The pod, hosting the board
+([`usb_host`](#usb_host--usb-host-mode)), can open the board's USB serial port like a UART: a CDC ACM
+port (the board's own USB: ESP32-S3 and C3, Pico, nRF52840, ...), or the FTDI, CP210x or CH34x chip
+of a dev kit. A test reads the boot log over the cable the board was flashed through. It is opened
+with [`uart_proxy_start`](#uart_proxy_start--transparent-uart-bridge) and `"port":"usb"`, and the
+bytes flow over that connection. `usb_serial` only reports the state (read only):
+
+```json
+{"cmd": "usb_serial"}
+{"status": "ok", "data": {"open": true, "baud": 115200, "frame": "8N1", "dtr": true, "rts": true,
+  "bridge": "cdc", "rx_buffered": 0, "rx_dropped": 0, "tx_total": 0, "rx_total": 0, "port_present": true}}
+```
+
+`open` is true while a `uart_proxy_start` with `"port":"usb"` session runs. `bridge` is `cdc` (the
+board's own USB) or the chip (`ftdi`, `cp210x`, `ch34x`, `pl2303`). `rx_buffered` is what waits in
+the 4 KB receive ring (heap memory, freed when the session ends). `rx_dropped` counts bytes lost
+because the ring was full, `rx_total` and `tx_total` all bytes received and sent since the open.
+`port_present` is true when the board has a serial port the pod can open (while open: while it is
+there). DTR and RTS read false when the console is closed.
+
+### `usb_check` — check the board's USB firmware
+
+Firmware 4.0.3 and later (feature `usb_check`). The pod hosts the board on its USB port
+([`usb_host`](#usb_host--usb-host-mode)) and, with the board's USB power (VBUS) wired to target-power
+eFuse 1 (the internal 5 V rail, `target_power` eFuse 1, switched on), it can measure what a computer
+cannot. A check runs in the background; poll `usb_check` for its state and result. Only one check
+runs at a time, and `usb_flash` is refused while one runs (and the other way round).
+
+```json
+{"cmd": "usb_check", "test": "enumerate", "count": 10, "off_ms": 500}
+{"cmd": "usb_check", "test": "power", "duration_ms": 3000}
+{"cmd": "usb_check", "test": "suspend", "settle_ms": 200, "duration_ms": 1000}
+{"cmd": "usb_check", "test": "reset", "count": 20}
+{"cmd": "usb_check", "test": "replug", "count": 10, "off_ms": [5, 20, 100, 500]}
+{"cmd": "usb_check"}
+{"cmd": "usb_check", "abort": true}
+```
+
+| Argument | Description |
+|---|---|
+| `test` | `enumerate`, `power`, `suspend`, `reset` or `replug` (below). Without `test` the command reads the state. |
+| `count` | `enumerate` (default 10) and `reset` (default 20): cycles, 1 to 200. `replug` (default 10): cycles per length, 1 to 100. |
+| `off_ms` | `enumerate`: how long eFuse 1 stays off, 50 to 10000, default 500. `replug`: a number or a list of up to 6 dropout lengths in ms, 1 to 5000, default `[5, 20, 100, 500]`. |
+| `timeout_ms` | `enumerate`, `reset`, `replug`: how long to wait for the board after each cycle, 500 to 30000, default 5000. |
+| `duration_ms` | `power` (default 3000) and `suspend` (default 1000): the measuring time, 200 to 60000. |
+| `settle_ms` | `suspend`: the wait after the bus is suspended before measuring, 20 to 5000, default 200. |
+| `abort` | `true` stops a running check. eFuse 1 and the bus are put back as they were. |
+
+The tests:
+
+- `enumerate`: power-cycles the board through eFuse 1 (off for `off_ms`) `count` times and times
+  power-on to its pull-up on the port (`connect_ms`), to its device descriptor (`descriptor_ms`)
+  and to mounted (`mount_ms`), each as `min`, `avg`, `max`. A cycle fails when the board never
+  shows its pull-up (`no_connect`), enumeration stalls (`stuck`) or it is not mounted within
+  `timeout_ms` (`timeout`). Times have about 2 ms resolution. If the board still sits on the bus
+  2.5 s after the rail went off, the check stops with the error `not_powered_by_efuse1`.
+- `power`: samples eFuse 1's current for `duration_ms` and compares the average (`avg_ua`) with the
+  configuration's `bMaxPower` (`limit_ma`). `verdict`: `ok`, `avg_over` (the average is above the
+  limit), `peak_over` (a sample is more than 25 % above it: USB allows a short inrush) or `no_limit`
+  (the configuration declares 0 mA). Pass is `ok`. The monitor's resolution is about 0.1 mA.
+- `suspend`: stops the SOFs so the board enters suspend, waits `settle_ms`, measures eFuse 1's
+  current for `duration_ms` and compares the average with the 2.5 mA a bus-powered device may draw
+  suspended (`limit_ua`; `current`: `ok`, `avg_over`, or `skipped` when the board's configuration
+  says it is self-powered). Then it resumes the bus and checks the board still answers a
+  GET_STATUS request. `suspend_ok` is false when the pod could not suspend the bus (`susprdy` is
+  the peripheral's report, `sof_stopped` whether the frame counter really stood still). `resume`
+  is `signaling` when resume signaling restarted the bus and `failed` when it did not; then the
+  pod resets the bus and `recovered_by_reset` says whether the board came back. Pass needs a
+  working suspend, a resume by signaling, a board that answers and the current within the limit.
+  However the test ends (pass, fail, `abort`), the pod puts the bus back first: it clears the
+  suspend and resume bits and checks that the frame counter counts again, and when the bus does
+  not come back, or the board still does not answer after a bus reset, it re-initializes the port
+  (host mode stops and starts again, like `usb_host` off and on) and says so: `port_reinit` true,
+  and `reinit_ok` whether the board enumerated and answered afterwards. When host mode ends during
+  the test, the role switch itself resets the port.
+- `reset`: issues `count` port resets to the mounted board and times each until it is mounted
+  again (`reenumerate_ms`). Failures are `timeout` and `stuck`. `identity_changed` counts boards
+  that came back with another vendor or product ID, which also fails the check.
+- `replug`: for each length in `off_ms`, switches eFuse 1 off for that long `count` times. Each
+  cycle ends `reenumerated` (the board dropped off the bus and enumerated again), `stayed` (it never
+  left the bus and still answers a GET_STATUS request: its capacitance carried it through) or
+  `failed` (not back within `timeout_ms`, stuck, or mounted for the host but not answering). Pass
+  needs no `failed`. Dropout lengths have about 2 ms of jitter.
+
+The reply (about 1 KB at most) is the same for every test:
+
+| Field | Description |
+|---|---|
+| `running`, `have_result` | A check is in progress; the last one has ended. Neither before the first check. |
+| `test`, `phase`, `done`, `total`, `ms` | The test, its phase (`power_off`, `power_on`, `gap`, `reset`, `sample`, `suspend`, `settle`, `measure`, `resume`, `check`, `recover`, `done`), progress (cycles, or ms for `power` and `suspend`) and the time so far. |
+| `pass`, `error` | When it ended: the verdict, and why it stopped early: `aborted`, `host_stopped`, `not_powered_by_efuse1`, `no_device`, `monitor_error`, `efuse_error`, `bus_busy`, `bus_timeout`. Empty when the check ran to its end. |
+| `result` | The numbers of the test (above), with the board's `vid` and `pid`. |
+
+Currents are in uA, the eFuse 1 monitor's reading (the board's own draw, not the pod's). Suspend
+uses the peripheral's own suspend and resume registers, which TinyUSB's host driver does not use;
+the bus is resumed at the end of every check. eFuse 1 is put back on if the check turned it off.
+
+Refusals: BP0087 (`usb_check_refused`, arg `why`: bad argument, host mode off, no board enumerated,
+a USB flash, another check or a power profile running), BP0088 (`usb_check_no_efuse_power`: eFuse 1
+is off, for every test but `reset`).
 
 ### `xip` — code that runs from the W25Q
 
-Some rarely used code (the USB flash protocols, coming) runs straight from the pod's W25Q flash
-instead of the MCU's own flash. It is the `xip` blob (`blob-xip.bin`), made by the same build as the
-firmware and installed with the other blobs; the pod runs only the one built with its firmware.
-While it runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
-are refused with BP0048 until it ends.
+Some rarely used code runs straight from the pod's W25Q flash instead of the MCU's own flash. There
+are two images, each a blob made by the same build as the firmware and installed with the other
+blobs (the pod runs only the ones built with its firmware): `xip` (`blob-xip.bin`), the USB flash
+protocols, and `xip_prog` (`blob-xip_prog.bin`), the `prog_flash` pin programmers. Only one runs at
+a time (a `usb_flash` or a `prog_flash` job holds its image until it ends; the other waits).
+While one runs, the pod's storage bus belongs to it: captures, DAC playback, uploads and updates
+are refused with BP0048 until it ends. Release builds copy the running image into one shared RAM
+region of the pod, so the two images together cost no more RAM than one.
 
 ```json
 {"cmd": "xip"}
-{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"}}}
+{"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "prog_image": {"size": 98, "slot": "ok"}}}
 {"cmd": "xip", "selftest": true}
 {"status": "ok", "data": {"supported": true, "mode": "mapped", "image": {"size": 124, "slot": "ok"},
+  "prog_image": {"size": 98, "slot": "ok"},
   "selftest": {"ok": true, "result": 2871906233, "expected": 2871906233, "begin_us": 412, "call_us": 38}}}
 ```
 
@@ -4627,7 +5064,8 @@ are refused with BP0048 until it ends.
 | `mode` | `mapped` (the CPU runs it in place), `ram` (development builds that copy it to RAM first) or `none`. |
 | `image.size` | Bytes of W25Q code this firmware was built with. |
 | `image.slot` | The `xip` blob slot against that image: `ok`, `outdated`, `missing` or `unknown` (as `blob_status`). |
-| `selftest` | With `"selftest": true`: runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
+| `prog_image` | The same for the `xip_prog` image (`size`, `slot`). |
+| `selftest` | With `"selftest": true` (and `"image": "prog"` for the `xip_prog` image; default the `xip` image): runs the image's self-test (constants read from the W25Q, a call back into the firmware). `ok` when `result` equals `expected`; `begin_us` is the time to check and map the image, `call_us` the run. |
 
 Refusals: BP0083 (`xip_unavailable`, arg `why`) when the board or the slot cannot run the image,
 BP0048 while something else holds the storage bus.
@@ -5287,7 +5725,9 @@ Firmware 3.9.3+. See `docs/design/lan-tls.md`.
 The pod also serves this API on TCP `8443` with TLS 1.2 (ECDHE, AES-GCM or ChaCha20-Poly1305). A
 full handshake takes the pod about 0.46 s with its EC key (about 1.1 s with an RSA 2048 one); it
 resumes sessions (session tickets and a 4-entry session cache, one hour), which takes about 20 ms, so
-clients that open a connection per command should keep the session. On
+clients that open a connection per command should keep the session. A session that was set up
+without a client certificate is not resumed (the client gets a full handshake and can send its
+certificate, see [LAN pairing](design/lan-pairing.md)). On
 the first boot of firmware with LAN TLS it generates an ECDSA P-256 key and a self-signed
 certificate for `benchpod-xxxxxx` and `benchpod-xxxxxx.local` (its mDNS name), valid to 9999 (the
 pod has no clock), and keeps both in its internal config flash. `sha256` is the SHA-256 of the

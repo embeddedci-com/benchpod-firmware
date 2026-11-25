@@ -123,25 +123,25 @@ jobs:
             exit 1
           fi
 
-      # USB host mode (USB_HOST=1, not in releases until it is hardware-tested): the host stack,
-      # the role switch and the usb_host command. Built here so it keeps compiling, warning-free.
-      - name: USB host build, no compiler warnings
+      # USB host mode is in every build now (USB_HOST=1, the default): keep the build without it
+      # compiling, warning-free.
+      - name: Build without USB host, no compiler warnings
         run: |
           set -o pipefail
-          make -C stm32h563 -j"$(nproc)" USB_HOST=1 2>&1 | tee build-usbhost.log
+          make -C stm32h563 -j"$(nproc)" USB_HOST=0 2>&1 | tee build-usbhost.log
           if grep 'warning:' build-usbhost.log | grep -v 'is not implemented and will always fail' > warnings-usbhost.txt; then
-            echo "::error title=Compiler warnings::$(wc -l < warnings-usbhost.txt) warning(s) in the USB_HOST=1 build"
+            echo "::error title=Compiler warnings::$(wc -l < warnings-usbhost.txt) warning(s) in the USB_HOST=0 build"
             cat warnings-usbhost.txt
             exit 1
           fi
 
-      # W25Q code test builds (XIP_RAM=1: the image copied to RAM; XIP_BODGE_PB6=1: memory-mapped
-      # with the W25Q chip-select on PB6), development only: keep them compiling, warning-free.
+      # W25Q code builds other than the default (XIP_RAM=1, the image copied to RAM): XIP_RAM=0 is
+      # the memory-mapped image (digital v3r4), XIP_BODGE_PB6=1 memory-mapped with the W25Q's
+      # chip-select on PB6. Keep them compiling, warning-free.
       - name: XIP test builds, no compiler warnings
         run: |
           set -o pipefail
-          # USB_HOST=1 XIP_RAM=1: the USB drive flash (usb_flash) runs its W25Q code from RAM.
-          for v in "XIP_RAM=1" "XIP_BODGE_PB6=1" "USB_HOST=1 XIP_RAM=1"; do
+          for v in "XIP_RAM=0" "XIP_BODGE_PB6=1" "USB_HOST=0 XIP_RAM=0"; do
             log="build-$(echo "$v" | tr ' =' '__').log"
             make -C stm32h563 -j"$(nproc)" $v 2>&1 | tee "$log"
             if grep 'warning:' "$log" | grep -v 'is not implemented and will always fail' > "$log.warnings"; then
@@ -228,7 +228,7 @@ jobs:
           $FWSIGN sign --key env:FW_SIGNING_KEY --target firmware --release "$REL" bench_pod_stm32.bin
           $FWSIGN sign-blobs --key env:FW_SIGNING_KEY --release "$REL" blobs-manifest.json
           $FWSIGN verify --pub "$RUNNER_TEMP/throwaway-signing.pub" --target firmware bench_pod_stm32.bin
-          for b in gw0 gw1 gw2; do
+          for b in gw0 gw1 gw2 xip xip_prog; do
             if [ -f blob-$b.bin ]; then $FWSIGN verify --pub "$RUNNER_TEMP/throwaway-signing.pub" --target $b blob-$b.bin; fi
           done
           # a release-trusted key must not accept it

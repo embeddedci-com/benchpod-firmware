@@ -122,12 +122,15 @@ static void test_reply(void)
     memset(&i, 0, sizeof(i));
     size_t n = usb_host_reply_json(&i, out, sizeof(out));
     CHECK(n > 0 && !strcmp(out, "{\"mode\":\"device\",\"port\":\"none\",\"remaining_s\":0,\"host_ms\":0,"
-                                "\"enumerations\":0,\"attached\":false}"));
+                                "\"enumerations\":0,\"attached\":false,\"enumeration\":\"none\","
+                                "\"connected\":false,\"line_speed\":\"none\"}"));
 
     /* Worst case: every number at its widest, full strings, a full interface list. */
     i.mode = USB_HOST_MODE_STOPPING; i.port = USB_HOST_PORT_USB_A;
     i.remaining_s = 4294967295u; i.host_ms = 4294967295u; i.enumerations = 65535;
     i.attached = i.seen = true; i.speed = 1;
+    i.enumeration = USB_HOST_ENUM_RUNNING;   /* the longest state name */
+    i.connected = true;
     i.vid = i.pid = 65535; i.bcd_usb = i.bcd_device = 0xFFFF;
     i.dev_class = i.dev_subclass = i.dev_protocol = i.ep0_size = i.num_configs = 255;
     i.descriptor_ms = i.mounted_ms = 4294967295u;
@@ -142,7 +145,7 @@ static void test_reply(void)
     }
     n = usb_host_reply_json(&i, out, sizeof(out));
     CHECK(n > 0);
-    /* send_ok_str wraps it: {"status":"ok","data":<payload>} plus the newline. */
+    /* send_ok_large wraps it: {"status":"ok","data":<payload>} plus the newline. */
     size_t wire = n + strlen("{\"status\":\"ok\",\"data\":}") + 1;
     CHECK(reply_budget_ok("usb_host (worst case)", wire, REPLY_LIMIT_CLOUD, REPLY_BUDGET_MARGIN));
     CHECK(strstr(out, "\"speed\":\"low\"") && strstr(out, "\"usb\":\"ff.ff\"") &&
@@ -150,6 +153,14 @@ static void test_reply(void)
 
     /* Too small a buffer: 0, never a cut reply. */
     CHECK(usb_host_reply_json(&i, out, 100) == 0);
+
+    /* The enumeration state: a device descriptor without a mount is stuck after USB_HOST_STUCK_MS. */
+    CHECK(usb_host_enum_state(false, false, false, 0) == USB_HOST_ENUM_NONE);
+    CHECK(usb_host_enum_state(true, false, true, 10) == USB_HOST_ENUM_RUNNING);
+    CHECK(usb_host_enum_state(true, false, true, USB_HOST_STUCK_MS) == USB_HOST_ENUM_STUCK);
+    CHECK(usb_host_enum_state(true, true, false, 99999) == USB_HOST_ENUM_DONE);
+    CHECK(usb_host_enum_state(true, false, false, 99999) == USB_HOST_ENUM_NONE);   /* detached */
+    CHECK(!strcmp(usb_host_enum_name(USB_HOST_ENUM_STUCK), "stuck"));
 
     CHECK(usb_host_port_from_name("usb_c") == USB_HOST_PORT_USB_C);
     CHECK(usb_host_port_from_name("usb_a") == USB_HOST_PORT_USB_A);

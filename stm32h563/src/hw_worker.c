@@ -14,8 +14,12 @@
 #include "command_handler_internal.h"   /* heavy_or_claimed */
 #include "esp_rom_flash.h"
 #include "esp_dut_flash.h"
+#include "prog_flash.h"
 #if defined(BENCHPOD_USB_HOST)
 #include "usb_flash.h"
+#include "usb_serial.h"
+#include "usb_check.h"
+#include "usb_hid.h"
 #endif
 #include "c3_update.h"
 #if defined(BENCHPOD_WIFI_BRIDGE)
@@ -395,7 +399,11 @@ static void ice40_idle_check(uint32_t now) {
         if (dac_limits_get()->enabled) (void)dac_limits_park_now();
         LOG_W("[hw] recovery: iCE40 reload %s, gateware v%u\n", alive ? "ok" : "FAILED",
               (unsigned)signal_engine_fpga_version());
-        if (alive) s_ping_fail_since = 0;
+        if (alive) {
+            s_ping_fail_since = 0;
+            /* The reload booted offset 0, the loop image: load the image the pod was on again. */
+            signal_engine_restore_wanted_image();
+        }
     } else if (recovery_exhausted(&s_rcv, now, fail_ms, no_resets)) {
         LOG_W("[hw] recovery: the iCE40 still does not answer and the reload limit is reached\n");
     }
@@ -429,9 +437,13 @@ static void worker_task(void *arg) {
         }
         c3_update_poll();         /* an esp update: start writing it into the C3 when due */
         esp_rom_flash_poll();     /* a C3 flash: one step, never a wait */
+        prog_flash_poll();        /* a chip flash over its programming pins (prog_flash): one step */
         esp_dut_flash_poll();     /* an ESP32 DUT flash (esp_flash): one step, never a wait */
 #if defined(BENCHPOD_USB_HOST)
         usb_flash_poll();         /* a USB drive flash (usb_flash): one step of a few sectors */
+        usb_serial_con_poll();    /* the USB serial console: bind it to a port that came back */
+        usb_hid_poll();           /* a HID capture ends with host mode */
+        usb_check_poll();         /* a USB check (usb_check): one step */
 #endif
 #if defined(BENCHPOD_WIFI_BRIDGE)
         wifi_bridge_ota_poll();   /* a Wi-Fi bridge update: one step, never a wait */

@@ -92,6 +92,7 @@ int analog_path_from_name(const char *n, analog_path_t *out) {
     if (strcmp(n, "3v3") == 0) *out = ANALOG_PATH_DAC_3V3;
     else if (strcmp(n, "5v") == 0) *out = ANALOG_PATH_DAC_5V;
     else if (strcmp(n, "12v") == 0) *out = ANALOG_PATH_DAC_12V;
+    else if (strcmp(n, "cal1") == 0) *out = ANALOG_PATH_CAL1;
     else if (strcmp(n, "ext") == 0) *out = ANALOG_PATH_ADC_EXT;
     else return -1;
     return 0;
@@ -99,7 +100,8 @@ int analog_path_from_name(const char *n, analog_path_t *out) {
 int dac_generate16(wave16_shape_t s, float f, double amp, double mid, uint32_t d, float hz) {
     (void)f; (void)d; (void)hz; g_gen_shape = s; g_gen_amp = amp; g_gen_mid = mid; g_gen16_calls++; return 0;
 }
-int dac_set_constant(uint8_t v, uint32_t div) { (void)v; (void)div; return 0; }
+static long g_held = -1;   /* the last dac_set_constant16 code */
+int dac_set_constant16(uint16_t c, uint32_t div) { (void)div; g_held = c; return 0; }
 void dac_stop(void) {}
 bool fpga_dac_arm_on_capture(void) { return false; }
 uint8_t signal_engine_fpga_version(void) { return 47; }
@@ -306,11 +308,17 @@ static void test_generate16(void) {
     CHECK(strncmp(g_reply, "err:the peaks", 13) == 0 && g_gen16_calls == 0 && g_route == -1,
           "out of range refused before routing: %s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"ext\",\"amplitude_v\":1.0,\"offset_v\":1.0}");
-    CHECK(strcmp(g_reply, "err:path must be 3v3|5v|12v with amplitude_v") == 0, "%s", g_reply);
+    CHECK(strcmp(g_reply, "err:path must be 3v3|5v|12v|cal1 with amplitude_v") == 0, "%s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"path\":\"3v3\",\"amplitude_v\":1.0}");
     CHECK(strcmp(g_reply, "err:offset_v is required with amplitude_v") == 0, "%s", g_reply);
     handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"triangle\",\"path\":\"3v3\",\"amplitude_v\":1.0,\"offset_v\":1.5}");
     CHECK(strcmp(g_reply, "err:unknown waveform") == 0, "%s", g_reply);
+
+    /* path cal1: the 5 V stage into the ADC loopback, volts with the 5 V calibration. */
+    g_gen16_calls = 0; g_route = -1;
+    handle_generate(0, "{\"cmd\":\"generate\",\"waveform\":\"sine\",\"freq_hz\":1000,\"path\":\"cal1\",\"amplitude_v\":0.5,\"offset_v\":2.5}");
+    CHECK(strcmp(g_reply, "ok:null") == 0 && g_gen16_calls == 1 && g_route == ANALOG_PATH_CAL1, "cal1 %s route %d", g_reply, g_route);
+    CHECK(fabs(g_gen_mid - (double)dac_code16_for_volts(1, 2.5f)) <= 1.0, "cal1 mid %.1f", g_gen_mid);
 
     /* route:false leaves the analog switching alone (a cal1 loopback). */
     g_route = -1;
@@ -323,9 +331,34 @@ static void test_generate16(void) {
     CHECK(strncmp(g_reply, "err:amplitude_v", 15) == 0 && g_gen16_calls == 0, "8-bit form refused: %s", g_reply);
 }
 
+/* dac_set: code16 is the 16-bit code and wins over value; value alone is the 8-bit form. */
+static void test_dac_set(void) {
+    g_held = -1;
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"code16\":40000}");
+    CHECK(g_held == 40000 && !strcmp(g_reply, "ok:null"), "code16: held %ld, %s", g_held, g_reply);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"code16\":51400,\"value\":200}");
+    CHECK(g_held == 51400, "code16 with value: held %ld", g_held);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"value\":128,\"divider\":240}");
+    CHECK(g_held == 128 << 8, "value: held %ld", g_held);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"value\":255}");
+    CHECK(g_held == 65280, "value 255: held %ld", g_held);
+    g_held = -1;
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"code16\":65536}");
+    CHECK(g_held == -1 && strstr(g_reply, "err:code16 out of range"), "code16 65536: %s", g_reply);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"code16\":-1}");
+    CHECK(g_held == -1 && strstr(g_reply, "err:code16"), "code16 -1: %s", g_reply);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"code16\":\"12x\"}");
+    CHECK(g_held == -1 && strstr(g_reply, "err:code16"), "code16 12x: %s", g_reply);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\",\"value\":256}");
+    CHECK(g_held == -1 && !strcmp(g_reply, "err:value out of range"), "value 256: %s", g_reply);
+    handle_dac_set(0, "{\"cmd\":\"dac_set\"}");
+    CHECK(g_held == -1 && strstr(g_reply, "err:missing code16"), "missing: %s", g_reply);
+}
+
 int main(void) {
     cal_data_select(0);
     test_generate16();
+    test_dac_set();
     test_load_bin_refusals();
     test_load_bin_ram();
     test_load_bin_psram_tunnel();

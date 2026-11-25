@@ -12,7 +12,16 @@
 
 #define CFG_TUSB_MCU             OPT_MCU_STM32H5
 #define CFG_TUSB_OS              OPT_OS_FREERTOS
+#if defined(BENCHPOD_USB_HOST_LOG)
+/* USB_HOST_LOG=1 development builds: the host stack's log (level 2) into a RAM ring
+   (usb_host_log.c, usb_host "log"); the device stack stays silent. */
+#define CFG_TUSB_DEBUG           2
+#define CFG_TUH_LOG_LEVEL        2
+#define CFG_TUD_LOG_LEVEL        3
+#define CFG_TUSB_DEBUG_PRINTF    usb_host_log_printf
+#else
 #define CFG_TUSB_DEBUG           0
+#endif
 #define CFG_TUSB_MEM_ALIGN       __attribute__((aligned(4)))
 
 #define BOARD_TUD_RHPORT         0
@@ -37,18 +46,34 @@
 #define CFG_TUD_NCM_IN_NTB_N         2
 
 
-/* Host (USB_HOST=1 builds only): one device straight on the port, no hub, no class drivers yet (the pod reads the
-   descriptors itself). The enumeration buffer holds a configuration descriptor: a longer
+/* Host (USB_HOST=1 builds only): one device straight on the port, no hub, mass storage and serial class drivers (the pod reads
+   the other descriptors itself). The enumeration buffer holds a configuration descriptor: a longer
    one still enumerates, only the interface list in usb_host is cut. */
 #if defined(BENCHPOD_USB_HOST)
 #define BOARD_TUH_RHPORT         0
 #define CFG_TUH_ENABLED          1
 #define CFG_TUH_MAX_SPEED        OPT_MODE_FULL_SPEED
-#define CFG_TUH_ENUMERATION_BUFSIZE 512
+/* The whole configuration descriptor is read into this: a longer one never enumerates (usbh.c),
+   which usb_host reports as "enumeration":"stuck". 1024 covers composite boards (CDC+MSC+HID, audio). */
+#define CFG_TUH_ENUMERATION_BUFSIZE 1024
 #define CFG_TUH_DEVICE_MAX       1
 #define CFG_TUH_HUB              0
-#define CFG_TUH_ENDPOINT_MAX     4
+#define CFG_TUH_ENDPOINT_MAX     16  /* endpoint NUMBERS, not a count: usbh indexes by number (an Uno R3 uses EP 4) */
 #define CFG_TUH_MSC              1   /* a USB drive to flash (usb_msc.h, usb_flash.h) */
+#define CFG_TUH_HID              2   /* HID interfaces to read (usb_hid.h): the first two the board has */
+#define CFG_TUH_HID_EPIN_BUFSIZE  64
+#define CFG_TUH_HID_EPOUT_BUFSIZE 8  /* output reports go over the control pipe, not an OUT endpoint */
+#define CFG_TUH_HID_SET_PROTOCOL_ON_ENUM 0   /* keep the device's default (report) protocol */
+#define CFG_TUH_API_EDPT_XFER    1   /* bulk transfers on a vendor interface (usb_msc.h: PICOBOOT) */
+#define CFG_TUH_CDC              1   /* a USB serial port to flash over (usb_serial.h, usb_flash.h) */
+#define CFG_TUH_CDC_FTDI         1   /* boards with a USB-serial chip instead of native USB */
+#define CFG_TUH_CDC_CP210X       1
+#define CFG_TUH_CDC_CH34X        1
+#define CFG_TUH_CDC_RX_BUFSIZE   256
+#define CFG_TUH_CDC_TX_BUFSIZE   256
+/* 115200 8N1 when a serial port mounts (the CH34x driver takes it for its init too); the DTR/RTS
+   lines stay low (no reset) until a flash sets them. */
+#define CFG_TUH_CDC_LINE_CODING_ON_ENUM       { 115200, CDC_LINE_CODING_STOP_BITS_1, CDC_LINE_CODING_PARITY_NONE, 8 }
 #endif
 
 #endif /* TUSB_CONFIG_H */

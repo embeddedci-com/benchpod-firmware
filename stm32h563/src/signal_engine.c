@@ -160,6 +160,8 @@ static inline bool busy_read(void)
 #include "blob_store.h"
 #include "dac_link.h"      /* the flat cable's DAC pinout: no DAC frames on a mismatched pair */
 #include "module_link.h"
+#include "cloud_client.h"   /* caps resend after restoring an image */
+#include "ice40_switch.h"   /* skip a switch to the running image; switch counters */
 
 /* spi_cmd_write refused a DAC command: the boards disagree on the DAC pinout (dac_link.h). */
 #define SE_ERR_DAC_PINOUT (-20)
@@ -243,12 +245,20 @@ void SPI1_IRQHandler(void)            { HAL_SPI_IRQHandler(&hspi_ice); }
 /* ---- Sample-rate / divider arithmetic ------------------------------------ */
 
 /* DAC_SEQ_OVERHEAD_CLK, DAC_PSRAM_EXTRA_CLK and DAC_MIN_DIVIDER (the DAC8551 sequencer's per-sample
-   cost) live in la_rate.h, next to the host-tested replay divider math (dac_replay_plan). */
+   cost) live in la_rate.h, next to the host-tested replay divider math (dac_replay_plan).  The
+   overhead depends on the gateware (75 clk48 on v67+, 63 on v66, 51 before) and, from v68, on the
+   SCLK mode of the next start: dac_overhead() is the one the next start runs with. */
+/* v68: the DAC SCLK mode of the next DAC start (false = 16 MHz, the default; true = 24 MHz, only for an
+   explicit rate above the 16 MHz maximum).  Each start path sets it before it computes a divider;
+   dac_start_prep() sends it to the gateware with every start. */
+static bool s_dac_sclk24;
+static bool dac_fast_io(void) { return module_dac_io_5v(); }
+static uint32_t dac_overhead(void) { return dac_seq_overhead_clk_mode(s_fpga_version, s_dac_sclk24); }
 
 /* True DAC update rate (Hz) achieved by the sequencer for a given divider.  The
    DAC engine runs on DAC_CLK_HZ (48 MHz on gateware >= 13), not the 24 MHz HFOSC. */
 static float dac_effective_rate_hz(uint32_t divider) {
-    return (float)DAC_CLK_HZ / (float)(divider + DAC_SEQ_OVERHEAD_CLK);
+    return (float)DAC_CLK_HZ / (float)(divider + dac_overhead());
 }
 
 /* Pick the DAC sample-clock divider and per-period sample count so the played
@@ -278,16 +288,19 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
     }
 
     uint32_t divider;
+    /* v68: 16 MHz SCLK unless an explicit rate above its maximum asks for 24 MHz (la_rate.h). */
+    s_dac_sclk24 = dac_sclk24_for_rate(DAC_CLK_HZ, forced_sample_rate_hz, false, s_fpga_version,
+                                       dac_fast_io());
     if (forced_sample_rate_hz > 0.0f) {
         /* Effective rate = DAC_CLK/(divider+K) → divider = DAC_CLK/rate - K. */
-        float d = (float)DAC_CLK_HZ / forced_sample_rate_hz - (float)DAC_SEQ_OVERHEAD_CLK;
+        float d = (float)DAC_CLK_HZ / forced_sample_rate_hz - (float)dac_overhead();
         divider = (d < (float)DAC_MIN_DIVIDER) ? DAC_MIN_DIVIDER
                 : (d > 65535.0f) ? 65535u : (uint32_t)(d + 0.5f);
     } else {
         /* Smallest divider whose per-period count fits: period = eff_rate/freq ≤ MAX
            ⇒ divider ≥ DAC_CLK/(MAX*freq) - K.  Take the ceiling, floored at DAC_MIN_DIVIDER. */
         float dmin = (float)DAC_CLK_HZ / ((float)SIGNAL_MAX_SAMPLES * freq)
-                     - (float)DAC_SEQ_OVERHEAD_CLK;
+                     - (float)dac_overhead();
         divider = (dmin < (float)DAC_MIN_DIVIDER) ? DAC_MIN_DIVIDER
                 : (dmin >= 65535.0f) ? 65535u : (uint32_t)dmin + 1u;
     }
@@ -312,7 +325,8 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
 /* Convert a desired LA sample rate (Hz) into an FPGA clock divider (the only caller is the
    LA side of a capture).  sample_rate = FPGA_HFOSC_HZ / divider, so divider = HFOSC / rate.
    0 (or negative) → divider 2, the LA's max rate (12 MS/s).  Clamped to 2..65535.  The DAC
-   has its own conversion (dac_replay_plan in la_rate.c; it tops out near 873 kS/s from RAM, 857 kS/s from PSRAM). */
+   has its own conversion (dac_replay_plan in la_rate.c; it tops out near 716 kS/s from RAM, 706 kS/s from PSRAM
+   on gateware v66, 608 / 600 kS/s on v67+, 873 / 857 kS/s before). */
 static uint32_t divider_from_rate_hz(float sample_rate_hz) {
     if (sample_rate_hz <= 0.0f) return 2;
     uint32_t d = (uint32_t)((float)FPGA_HFOSC_HZ / sample_rate_hz + 0.5f);
@@ -327,7 +341,9 @@ static uint32_t s_dac_replay_rate_hz = 0;
 uint32_t signal_engine_dac_replay_rate_hz(void) { return s_dac_replay_rate_hz; }
 
 static uint32_t dac_replay_divider(float sample_rate_hz, bool from_psram) {
-    dac_rate_plan_t p = dac_replay_plan(DAC_CLK_HZ, sample_rate_hz, from_psram);
+    dac_rate_plan_t p = dac_replay_plan_ex(DAC_CLK_HZ, sample_rate_hz, from_psram, s_fpga_version,
+                                           dac_fast_io());
+    s_dac_sclk24 = p.sclk24;
     if (p.clamped)
         LOG_W("[sig] WARN: replay rate %lu S/s is %s the DAC's %s; playing at %lu S/s\n",
               (unsigned long)lroundf(sample_rate_hz), p.clamped == 1 ? "above" : "below",
@@ -439,6 +455,7 @@ static void log_dac_samples(uint32_t total) {
 static bool s_cotrig_pending;
 static int dac_quiesce(bool force);
 static int quad_stream_ctrl(void);
+static int dac_start_prep(void);
 #if defined(BENCHPOD_EMI_TEST)
 /* The table dac_generate16 last loaded and started, for dac_restart_generated; 0 = none (any
    other load replaced it). */
@@ -476,7 +493,7 @@ static int fpga_start_dac(uint32_t period, uint32_t divider) {
         (uint8_t)(period  & 0xFF), (uint8_t)((period  >> 8) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
     };
-    int rc = quad_stream_ctrl();
+    int rc = dac_start_prep();
     if (rc != 0) return rc;
     spi_cmd_write(CMD_START_DAC, args, sizeof(args));
     return 0;
@@ -525,7 +542,7 @@ static int fpga_start_dac_psram(uint32_t base, uint32_t count, uint32_t divider)
         (uint8_t)(count   & 0xFF), (uint8_t)((count   >> 8) & 0xFF), (uint8_t)((count   >> 16) & 0xFF),
         (uint8_t)(divider & 0xFF), (uint8_t)((divider >> 8) & 0xFF),
     };
-    int rc = quad_stream_ctrl();
+    int rc = dac_start_prep();
     if (rc != 0) return rc;
     spi_cmd_write(CMD_START_DAC_PSRAM, args, sizeof(args));
     return 0;
@@ -996,59 +1013,66 @@ void signal_engine_gateware_update(void) {
     uint8_t embedded = ice40_embedded_gw_version();
     int kind = signal_engine_image_kind();
     if (kind < 0) kind = 0;
-    /* The identity of the running kind's slot against the recorded image (cached, no bus access):
-       a new image of the same version is written too, not only a new version. */
-    blob_id_t kslot = (blob_id_t)ice40_image_slot((kind == 1 || kind == 2) ? kind : 0);
-    const blob_info_t *kin = blob_store_info(kslot);
-    gw_ident_match_t ident = gw_ident_match(ice40_ident(), blob_state(kslot) == BLOB_STATE_OK,
-                                            (uint16_t)kslot, kin->len, kin->sha256);
-    int img = -1;
-    gw_action_t act = boot_policy_gateware_action(running, embedded, kind, configured, ident, &img);
-    if (act == GW_ACT_NONE) return;
-    if (act == GW_ACT_COMPARE) {
-        /* No record yet (the first boot with this check): read-compare once, record when equal.
-           Only a differing image is written, so the flash is not rewritten on every pod. */
-        const int same = ice40_image_matches_slot(img);
-        sleep_ms(5);
-        signal_engine_refresh_version();   /* the compare reconfigured the iCE40 from its flash */
-        if (same == 1) {
-            LOG_I("[fpga] gateware v%u is image %d from slot %s: recorded\n", (unsigned)running, img,
-                  blob_name(kslot));
-            return;
-        }
-        if (same < 0) {
-            LOG_W("[fpga] could not compare the iCE40's image with slot %s: left as it is\n", blob_name(kslot));
-            return;
-        }
-        /* differs: write it below */
-    }
-    blob_id_t slot = (blob_id_t)ice40_image_slot(img);
-    if (blob_state(slot) != BLOB_STATE_OK) {
-        if (!configured)
-            LOG_W("[fpga] the iCE40 is not configured (blank config flash?) and slot %s does not "
-                  "hold its gateware (%s): install the gateware blobs\n",
-                  blob_name(slot), blob_state_str(blob_state(slot)));
-        else
-            LOG_W("[fpga] gateware v%u, this firmware is built for v%u, but slot %s does not hold it "
-                  "(%s): install the gateware blobs\n", (unsigned)running, (unsigned)embedded,
-                  blob_name(slot), blob_state_str(blob_state(slot)));
-        return;
-    }
-    if (!configured)
-        LOG_W("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
-    else if (running == embedded)
-        LOG_I("[fpga] gateware v%u, but slot %s holds another image of it (a new build): "
-              "reprogramming image %d...\n", (unsigned)running, blob_name(slot), img);
-    else
-        LOG_I("[fpga] gateware v%u, this firmware is built for v%u: reprogramming image %d...\n",
-              (unsigned)running, (unsigned)embedded, img);
-    if (ice40_reflash_image(img) == 0) {
+    /* Offset 0 (what the iCE40 powers up with) always holds the loop image from 4.0.6 on: compare
+       its record with slot gw0, whatever kind runs (boot_policy_gateware_plan). */
+    const blob_info_t *g0 = blob_store_info(BLOB_GW0);
+    gw_ident_match_t ident = gw_ident_match(ice40_ident(), blob_state(BLOB_GW0) == BLOB_STATE_OK,
+                                            (uint16_t)BLOB_GW0, g0->len, g0->sha256);
+    gw_plan_t plan = boot_policy_gateware_plan(running, embedded, kind, configured, ident);
+    if (plan.boot == GW_ACT_COMPARE) {
+        /* No record yet: read-compare once, record when equal. The compare reconfigures the iCE40
+           from offset 0, so plan.load brings back a deep or emulation image. */
+        const int same = ice40_image_matches_slot(0);
         sleep_ms(5);
         signal_engine_refresh_version();
-        psram_boot_selftest();
-        LOG_I("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
-    } else {
-        LOG_E("[fpga] gateware update failed, run flash-ice40 on the console\n");
+        if (same == 1) {
+            LOG_I("[fpga] the iCE40 boots gateware v%u, image 0 from slot gw0: recorded\n",
+                  (unsigned)signal_engine_fpga_version());
+            plan.boot = GW_ACT_NONE;
+        } else if (same < 0) {
+            LOG_W("[fpga] could not compare the iCE40's boot image with slot gw0: left as it is\n");
+            plan.boot = GW_ACT_NONE;
+        } else {
+            plan.boot = GW_ACT_WRITE;
+        }
+    }
+    if (plan.boot == GW_ACT_WRITE) {
+        if (blob_state(BLOB_GW0) != BLOB_STATE_OK) {
+            if (!configured)
+                LOG_W("[fpga] the iCE40 is not configured (blank config flash?) and slot gw0 does not "
+                      "hold its gateware (%s): install the gateware blobs\n", blob_state_str(blob_state(BLOB_GW0)));
+            else
+                LOG_W("[fpga] slot gw0 does not hold this firmware's gateware v%u (%s): install the "
+                      "gateware blobs\n", (unsigned)embedded, blob_state_str(blob_state(BLOB_GW0)));
+            return;
+        }
+        if (!configured)
+            LOG_W("[fpga] the iCE40 is not configured (blank config flash?): loading gateware image 0...\n");
+        else
+            LOG_I("[fpga] the iCE40's boot image is not slot gw0 (gateware v%u, this firmware is built "
+                  "for v%u): writing image 0...\n", (unsigned)running, (unsigned)embedded);
+        if (ice40_reflash_image(0) == 0) {
+            sleep_ms(5);
+            signal_engine_refresh_version();
+            psram_boot_selftest();
+            LOG_I("[fpga] now gateware v%u\n", (unsigned)signal_engine_fpga_version());
+        } else {
+            LOG_E("[fpga] gateware update failed, run flash-ice40 on the console\n");
+            return;
+        }
+    }
+    if (plan.load >= 0) {
+        blob_id_t slot = (blob_id_t)ice40_image_slot(plan.load);
+        if (blob_state(slot) != BLOB_STATE_OK) {
+            LOG_W("[fpga] image %d: slot %s does not hold this firmware's gateware v%u (%s): install "
+                  "the gateware blobs\n", plan.load, blob_name(slot), (unsigned)embedded,
+                  blob_state_str(blob_state(slot)));
+            return;
+        }
+        LOG_I("[fpga] loading image %d from slot %s (no flash write)\n", plan.load, blob_name(slot));
+        const int rc = fpga_warmboot_ex((uint8_t)plan.load, true, NULL);
+        LOG_I("[fpga] image %d: %s, gateware v%u\n", plan.load, rc == 0 ? "loaded" : "load failed",
+              (unsigned)signal_engine_fpga_version());
     }
 }
 
@@ -1141,6 +1165,17 @@ static int quad_stream_ctrl(void) {
     return 0;
 }
 
+/* Called before every DAC start: the stream control byte (quad_stream_ctrl) and, on gateware
+   >= DAC_SCLK_SWITCH_MIN_GW, the SCLK mode in s_dac_sclk24 (DAC_CTRL flags bit2, the mode in bit3),
+   which the gateware takes at this start.  Older gateware has one fixed SCLK. */
+static int dac_start_prep(void) {
+    int rc = quad_stream_ctrl();
+    if (rc != 0) return rc;
+    if (s_fpga_version >= DAC_SCLK_SWITCH_MIN_GW)
+        (void)fpga_dac_ctrl(s_dac_sclk24 ? 0x0Cu : 0x04u, 0u, 0u);
+    return 0;
+}
+
 int dac_quad_write(int ch, uint16_t code) {
     if (!dac_quad_present() || ch < DAC_QUAD_A || ch > DAC_QUAD_D) return -1;
     const char *why = dac_quad_low_check_hold(adc_low(), ch, code);   /* the ADC low range */
@@ -1162,7 +1197,7 @@ int dac_quad_write(int ch, uint16_t code) {
     return 0;
 }
 
-/* dac_set_constant on v3r2: one frame on the selected channel instead of a looped 1-sample
+/* dac_set_constant16 on v3r2: one frame on the selected channel instead of a looped 1-sample
    stream, so the DAC engine stays free.  A stream plays to that same channel: stop it first. */
 static int dac_quad_hold(uint16_t code) {
     if (dac_quiesce(false) != 0) return -1;
@@ -1226,25 +1261,6 @@ void dac_quad_boot(void) {
     }
 }
 
-int dac_set_constant(uint8_t value, uint32_t divider) {
-    /* Load a 1-byte waveform and start the sequencer with period=1.
-       The DAC sequencer will keep clocking that same byte to the DAC chip
-       continuously, giving a DC analog output for multimeter probing. */
-    if (dac_quad_present()) return dac_quad_hold((uint16_t)((unsigned)value << 8));
-    if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;
-    if (divider > 65535) divider = 65535;
-    /* DAC8551: one 16-bit sample (value in the high byte), 2 bytes. */
-    uint8_t one16[2] = { 0x00, value };
-    if (fpga_load_wave(one16, 2) != 0) return -1;
-    if (fpga_start_dac(1, divider) != 0) return -1;
-    dac_timed = false;
-    float dac_clk_hz = (float)DAC_CLK_HZ / (float)divider;
-    /* Integer Hz — newlib-nano printf has no %f (the old %.0f printed nothing). */
-    LOG_D("[sig] DAC held at 0x%02x (%u), DAC_CLK=%lu Hz (divider=%lu)\n",
-          value, value, (unsigned long)lroundf(dac_clk_hz), (unsigned long)divider);
-    return 0;
-}
-
 int dac_set_constant16(uint16_t code, uint32_t divider) {
     if (dac_quad_present()) return dac_quad_hold(code);
     if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;
@@ -1252,6 +1268,7 @@ int dac_set_constant16(uint16_t code, uint32_t divider) {
     /* One 16-bit sample, little-endian byte pair, the layout load/replay use. */
     uint8_t one16[2] = { (uint8_t)(code & 0xFFu), (uint8_t)(code >> 8) };
     if (fpga_load_wave(one16, 2) != 0) return -1;
+    s_dac_sclk24 = dac_fast_io();   /* a held level: no rate to meet, 16 MHz unless the board is fast */
     if (fpga_start_dac(1, divider) != 0) return -1;
     dac_timed = false;
     LOG_D("[sig] DAC held at 0x%04x (%u), divider=%lu\n", code, code, (unsigned long)divider);
@@ -1677,7 +1694,8 @@ int dac_control_loop_start(const uint8_t *curve, size_t curve_len,
         (uint8_t)vmax,     (uint8_t)(vmax     >> 8),
         (uint8_t)tick_div, (uint8_t)(tick_div >> 8),
     };
-    int qrc = quad_stream_ctrl();
+    s_dac_sclk24 = dac_fast_io();   /* the loop has no rate request: 16 MHz unless the board is fast */
+    int qrc = dac_start_prep();
     if (qrc != 0) return qrc;
     spi_cmd_write(CMD_START_DAC_LOOP, args, sizeof(args));
     dac_timed = false;
@@ -1812,13 +1830,11 @@ void signal_engine_caps(signal_engine_caps_t *out) {
     out->uart_frame      = g.uart_frame;
 }
 
-/* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay).
-   SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI pins are the
-   shared PSRAM bus, so the reconfig can't read the flash — confirmed: even a warmboot to
-   the running image fails while it cold-boots fine).  So we reprogram the config flash with
-   the selected image over the PROVEN ice40_flash_program + CRESET-reconfig path (~2 s), then
-   re-read version + features.  The gateware SB_WARMBOOT infra stays in the tree for a future
-   board where the config flash isn't on the runtime bus. */
+/* Switch the running gateware IMAGE (0 = closed-loop, 1 = deep-DAC-replay, 2 = emulation).
+   SB_WARMBOOT cannot reconfigure at runtime on this board (its config-SPI pins are the shared
+   PSRAM bus). Up to 4.0.5 a switch rewrote offset 0 of the config flash and CRESET the iCE40
+   (27 sector erases, ~2.4 s); from 4.0.6 it loads the image from its slot in SPI slave mode
+   (ice40_load_image, ~80 ms, no write) and keeps the flash write as the fallback. */
 /* Bring the gateware's PSRAM masters to a safe, IDLE boundary BEFORE an image swap grabs the
    shared bus.  ice40_reflash_image() acquires the bus (psram_reset_to_spi -> psram_bus_acquire,
    PG0/bus_own high) and RESETS the PSRAM to re-enter QPI.  The gw v26/v28 reset-gating keeps the
@@ -1856,25 +1872,92 @@ void signal_engine_quiesce_psram_masters(void) {
     }
 }
 
-int fpga_warmboot(uint8_t image) {
+/* The running image from a LIVE FPGA_FEATURES read: -1 when the iCE40 does not answer it (the
+   cached value could predate a reconfigure, so it never proves anything here). */
+static int fpga_warmboot_load(uint8_t image);
+/* The image the last switch loaded (RAM: a restart starts on loop, offset 0). */
+static int s_wanted_image = 0;
+static int running_image_live(void) {
+    if (s_fpga_version == 0 || !gw_caps()->capture_bases) return -1;
+    uint8_t f = 0;
+    if (spi_cmd_read(CMD_FPGA_FEATURES, NULL, 0, &f, 1) != 0) return -1;
+    s_fpga_features = f;
+    return signal_engine_image_kind();
+}
+
+int fpga_warmboot(uint8_t image) { return fpga_warmboot_ex(image, false, NULL); }
+
+int fpga_warmboot_ex(uint8_t image, bool force, bool *skipped) {
+    if (skipped) *skipped = false;
     if (image >= ICE40_IMAGE_COUNT) return -1;
+    /* Already on it: no erase, no reload, nothing the running gateware does is interrupted. */
+    const uint8_t embedded = ice40_embedded_gw_version();
+    if (!force && ice40_switch_plan((int)image, running_image_live(), ice40_is_configured() != 0,
+                                    signal_engine_psram_operable(),
+                                    embedded == 0 || s_fpga_version == embedded, false) == ICE40_SW_SKIP) {
+        ice40_switch_note_skip();
+        s_wanted_image = image;
+        if (skipped) *skipped = true;
+        LOG_D("[sig] image %u already runs: not reloaded\n", image);
+        return 0;
+    }
     if (!blob_store_present((blob_id_t)ice40_image_slot(image))) return -2;
+    ice40_switch_note_switch();
+    const uint64_t t0 = time_us_64();
+    int rc = fpga_warmboot_load(image);
+    ice40_switch_note_time_ms((uint32_t)((time_us_64() - t0) / 1000u));
+    if (rc != 0) ice40_switch_note_failed();
+    return rc;
+}
+
+int signal_engine_wanted_image(void) { return s_wanted_image; }
+
+/* After a reload from the config flash (recovery: hw_worker), the iCE40 runs the loop image that
+   offset 0 holds. Load the image the pod was switched to again (from its slot, no write). */
+void signal_engine_restore_wanted_image(void) {
+    if (s_wanted_image <= 0) return;
+    int kind = running_image_live();
+    if (kind == s_wanted_image) return;
+    LOG_W("[sig] the iCE40 was reloaded: loading image %d again\n", s_wanted_image);
+    if (fpga_warmboot((uint8_t)s_wanted_image) == 0) cloud_client_request_caps_resend();
+}
+
+/* Put the loop image back after a failed switch, so the pod keeps working: from its slot
+   (no write) or, failing that, written to the config flash. */
+static void recover_to_loop(void) {
+    if (ice40_load_image(0) == 0) ice40_switch_note_slave(true);
+    else { ice40_switch_note_slave(false); (void)ice40_reflash_image(0); }
+    s_wanted_image = 0;
+    sleep_ms(5);
+    if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) s_fpga_version = 0;
+    s_fpga_features = signal_engine_fpga_features();
+}
+
+static int fpga_warmboot_load(uint8_t image) {
     /* Quiesce the running gateware so the swap takes the bus at a safe (masters-idle) boundary —
        this is what makes the swap robust under load instead of wedging the PSRAM (see the helper). */
     signal_engine_quiesce_psram_masters();
-    if (ice40_reflash_image((int)image) != 0) {
-        /* A failed reflash leaves the iCE40 held in reset with no whole image in its config
-           flash.  Retry once; failing that, put the loop image back so the pod keeps working. */
-        LOG_E("[sig] image switch: reflash failed, retrying\n");
+    /* SPI slave load straight from the slot: no erase, no write (ice40_flash.h). Retried once.
+       Failing that, the old way: write the image to offset 0 of the config flash and let the iCE40
+       boot it (27 sector erases), also retried once. The next restart puts the loop image back at
+       offset 0 (signal_engine_gateware_update). */
+    int rc = -1;
+    for (int i = 0; i < 2 && rc != 0; i++) {
+        rc = ice40_load_image((int)image);
+        ice40_switch_note_slave(rc == 0);
+        if (rc != 0) LOG_W("[sig] image %u: slave load failed (%d)%s\n", image, rc, i ? "" : ", retrying");
+    }
+    if (rc != 0) {
+        LOG_W("[sig] image %u: writing it to the config flash instead\n", image);
         if (ice40_reflash_image((int)image) != 0) {
-            if (image != 0u) {
+            /* A failed reflash leaves the iCE40 held in reset with no whole image in its config
+               flash.  Retry once; failing that, put the loop image back so the pod keeps working. */
+            LOG_E("[sig] image switch: reflash failed, retrying\n");
+            if (ice40_reflash_image((int)image) != 0) {
                 LOG_E("[sig] image switch: retry failed, restoring image 0\n");
-                (void)ice40_reflash_image(0);
+                recover_to_loop();
+                return -3;
             }
-            sleep_ms(5);
-            if (fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version) != 0) s_fpga_version = 0;
-            s_fpga_features = signal_engine_fpga_features();
-            return -3;
         }
     }
     sleep_ms(5);
@@ -1896,16 +1979,13 @@ int fpga_warmboot(uint8_t image) {
     if (signal_engine_capture_selftest_at(BP_LOG_DEBUG, 16, &bad) == 0) {
         LOG_I("[sig] image %u: gateware v%u, features 0x%02x (PSRAM write OK)\n",
               image, s_fpga_version, s_fpga_features);
+        s_wanted_image = image;
         return 0;
     }
     LOG_W("[sig] image %u: iCE40->PSRAM write wedged after swap\n", image);
     if (image != 0) {
         LOG_W("[sig] recovering the bench to the loop image (image 0)\n");
-        if (ice40_reflash_image(0) == 0) {
-            sleep_ms(5);
-            fpga_ping(INIT_PING_ATTEMPTS, &s_fpga_version);
-            s_fpga_features = signal_engine_fpga_features();
-        }
+        recover_to_loop();
     }
     return -5;
 }
@@ -2162,8 +2242,10 @@ int measure_psram_start(const char *waveform, float freq, uint8_t amplitude,
        cap_div is floored at ADC_CAP_MIN_DIVIDER (>= 60), so dac_div stays >= DAC_MIN_DIVIDER. */
     uint32_t cap_div = adc_divider_from_rate_hz(fs);
     uint32_t two_cap = 2u * cap_div;
-    uint32_t dac_div = (two_cap >= DAC_SEQ_OVERHEAD_CLK + DAC_MIN_DIVIDER)
-                           ? (two_cap - DAC_SEQ_OVERHEAD_CLK) : DAC_MIN_DIVIDER;
+    s_dac_sclk24 = dac_fast_io();   /* measure's rates (<= the ADC's 400 kS/s) are 16 MHz rates */
+    uint32_t dac_k   = dac_overhead();
+    uint32_t dac_div = (two_cap >= dac_k + DAC_MIN_DIVIDER)
+                           ? (two_cap - dac_k) : DAC_MIN_DIVIDER;
 
     if (fill_wave16(waveform, period, amplitude, offset) != 0) {
         LOG_W("[sig] ERROR: measure unknown waveform \"%s\"\n", waveform);
@@ -2816,9 +2898,11 @@ int fpga_la_step(unsigned channel, uint32_t steps, uint32_t delay_us) {
 
 static bool spi_armed_local = false;   /* the same engine in SPI mode (below) */
 static bool i2c_armed_local = false;   /* the engine runs the I2C master (gw v55) */
+static bool jtag_armed_local = false;  /* the engine runs the JTAG master (gw v61) */
 
 int fpga_swd_arm(unsigned swclk, unsigned swdio) {
-    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    if (!gw_caps()->bus_masters) return -3;   /* v65 emulation image: no engine (require_bus_masters) */
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int clk_idx = la_wire_index(swclk);
     int dio_idx = la_wire_index(swdio);
     if (clk_idx < 0 || dio_idx < 0 || clk_idx == dio_idx) return -1;
@@ -2846,10 +2930,11 @@ void fpga_swd_disarm(void) {
 bool fpga_swd_armed(void) { return swd_armed_local; }
 
 void fpga_swd_poll(void) {
-    if (!swd_armed_local) return;
+    if (!swd_armed_local && !jtag_armed_local) return;
     if (time_reached(swd_deadline)) {
         LOG_D("[swd] inactivity timeout — disarming\n");
         fpga_swd_disarm();
+        fpga_jtag_disarm();
     }
 }
 
@@ -2869,9 +2954,9 @@ static void fpga_swd_read_raw(uint8_t *reply, size_t count) {
     spi_cmd_read(CMD_SWD_READ, args, sizeof(args), reply, count);
 }
 
-size_t fpga_swd_feed(const uint8_t *in, size_t len,
-                     char *reply, size_t reply_cap, size_t *reply_len,
-                     bool *exit_to_json, bool *quit) {
+static size_t swd_feed(const uint8_t *in, size_t len,
+                       char *reply, size_t reply_cap, size_t *reply_len,
+                       bool *exit_to_json, bool *quit, bool exact) {
     *exit_to_json = false;
     *quit         = false;
     *reply_len    = 0;
@@ -2923,7 +3008,14 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 
         if (wlen > 0) {
             fpga_swd_feed_raw(wire, wlen);
-            if (cc > 0) {
+            if (cc > 0 && exact) {
+                /* SWD_READ sends reply byte 0 twice: read one more and drop the first, as
+                   fpga_swdq_read and fpga_spi_xfer do. */
+                uint8_t tmp[sizeof(wire) + 1];
+                fpga_swd_read_raw(tmp, cc + 1);
+                memcpy(reply + *reply_len, tmp + 1, cc);
+                *reply_len += cc;
+            } else if (cc > 0) {
                 fpga_swd_read_raw((uint8_t *)reply + *reply_len, cc);
                 *reply_len += cc;
             }
@@ -2932,6 +3024,18 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
     }
 
     return i;
+}
+
+size_t fpga_swd_feed(const uint8_t *in, size_t len,
+                     char *reply, size_t reply_cap, size_t *reply_len,
+                     bool *exit_to_json, bool *quit) {
+    return swd_feed(in, len, reply, reply_cap, reply_len, exit_to_json, quit, false);
+}
+
+size_t fpga_swd_feed_exact(const uint8_t *in, size_t len,
+                           char *reply, size_t reply_cap, size_t *reply_len,
+                           bool *exit_to_json, bool *quit) {
+    return swd_feed(in, len, reply, reply_cap, reply_len, exit_to_json, quit, true);
 }
 
 /* ---- SWD transfer queue (gateware >= v45) -------------------------------- */
@@ -3012,7 +3116,8 @@ uint32_t fpga_spi_hz_for_half(unsigned half) {
 int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                  unsigned half, unsigned mode) {
     if (!gw_caps()->spi_master) return -3;
-    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    if (!gw_caps()->bus_masters) return -3;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int w[4] = { la_wire_index(sck), la_wire_index(mosi), la_wire_index(miso), la_wire_index(cs) };
     for (int i = 0; i < 4; i++) {
         if (w[i] < 0) return -1;
@@ -3117,7 +3222,8 @@ uint32_t fpga_i2c_hz_for_half(unsigned half) {
 
 int fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half) {
     if (!gw_caps()->i2c_master) return -3;
-    if (swd_armed_local || spi_armed_local || i2c_armed_local) return -2;
+    if (!gw_caps()->bus_masters) return -3;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int ws = la_wire_index(sda), wc = la_wire_index(scl);
     if (ws < 0 || wc < 0 || ws == wc) return -1;
     if (half < I2C_HALF_MIN) half = I2C_HALF_MIN;
@@ -3168,6 +3274,94 @@ int fpga_i2c_run(const uint8_t *tok, size_t n, uint8_t *reply, size_t nreply, ui
     spi_cmd_read(CMD_SWD_READ, args, sizeof(args), reply, want);
     memmove(reply, reply + 1, nreply);
     return 0;
+}
+
+/* ===========================================================================
+ * JTAG master: the SWD engine's fourth job (gateware >= JTAG_MIN_GW, jtag_seq.v; loop and deep
+ * images only, FPGA_FEATURES bit 3).
+ *
+ * SPI_ARM with flags bit 3: TCK on the sck slot, TDI on mosi, TDO on miso, TMS on cs, all driven,
+ * TCK resting low.  SWD_FEED queues CMSIS-DAP DAP_JTAG_Sequence sequences as the host sends them
+ * (info byte + TDI bytes), SPI_STATUS bit 1 says when they are done, and SWD_READ returns the TDO
+ * bytes of the capturing ones.  In a capturing sequence's last byte of k < 8 bits the TDO bits are
+ * the top k bits: jtag_ll.c right-aligns them.  The inactivity backstop is the SWD one.
+ * ========================================================================== */
+
+static uint8_t jtag_args[6];   /* the SPI_ARM payload of the armed session */
+
+int fpga_jtag_arm(unsigned tck, unsigned tms, unsigned tdi, unsigned tdo, unsigned half) {
+    if (!gw_caps()->jtag) return -3;
+    if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
+    int w[4] = { la_wire_index(tck), la_wire_index(tdi), la_wire_index(tdo), la_wire_index(tms) };
+    for (int i = 0; i < 4; i++) {
+        if (w[i] < 0) return -1;
+        for (int j = 0; j < i; j++) if (w[i] == w[j]) return -1;
+    }
+    if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
+    if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
+    /* [sck=TCK][mosi=TDI][miso=TDO][cs=TMS][half][flags: bit3 JTAG] */
+    uint8_t args[6] = { (uint8_t)w[0], (uint8_t)w[1], (uint8_t)w[2], (uint8_t)w[3], (uint8_t)half, 0x08u };
+    spi_cmd_write(CMD_SPI_ARM, args, sizeof(args));
+    memcpy(jtag_args, args, sizeof(jtag_args));
+    jtag_armed_local = true;
+    swd_deadline     = make_timeout_time_ms(SWD_INACTIVITY_MS);
+    LOG_D("[jtag] armed  TCK=LA%u TMS=LA%u TDI=LA%u TDO=LA%u %lu Hz\n",
+          tck, tms, tdi, tdo, (unsigned long)fpga_spi_hz_for_half(half));
+    return 0;
+}
+
+/* A new TCK rate on the armed engine: SPI_ARM again with the same channels.  That re-arm sets
+   TMS and TDI high with TCK low; the TAP state does not move without a TCK edge, so the DAP layer
+   calls this between sequences only (DAP_SWJ_Clock). */
+int fpga_jtag_set_half(unsigned half) {
+    if (!jtag_armed_local) return -1;
+    if (half < SPI_HALF_MIN) half = SPI_HALF_MIN;
+    if (half > SPI_HALF_MAX) half = SPI_HALF_MAX;
+    if (jtag_args[4] == half) return 0;
+    jtag_args[4] = (uint8_t)half;
+    spi_cmd_write(CMD_SPI_ARM, jtag_args, sizeof(jtag_args));
+    return 0;
+}
+
+void fpga_jtag_disarm(void) {
+    if (!jtag_armed_local) return;
+    spi_cmd_write(CMD_SWD_DISARM, NULL, 0);
+    jtag_armed_local = false;
+    LOG_D("[jtag] disarmed\n");
+}
+
+bool fpga_jtag_armed(void) { return jtag_armed_local; }
+
+int fpga_jtag_run(const uint8_t *q, size_t n, uint8_t *reply, size_t nreply) {
+    if (!jtag_armed_local || !q || n == 0 || n > JTAG_QUEUE_MAX || nreply > JTAG_QUEUE_MAX) return -1;
+    swd_deadline = make_timeout_time_ms(SWD_INACTIVITY_MS);
+    uint8_t hdr[3] = { CMD_SWD_FEED, (uint8_t)(n & 0xFF), (uint8_t)((n >> 8) & 0xFF) };
+    cs_select();
+    spi_write_blocking(SPI_PORT, hdr, sizeof(hdr));
+    spi_write_blocking(SPI_PORT, q, n);
+    cs_deselect();
+
+    absolute_time_t deadline = make_timeout_time_us(SPI_IDLE_TIMEOUT_US);
+    for (;;) {
+        uint8_t st = 0xFF;
+        spi_cmd_read(CMD_SPI_STATUS, NULL, 0, &st, 1);
+        if (st & 0xFC) return -4;                 /* MISO stuck high: the iCE40 is not answering */
+        if (!(st & SPI_STATUS_ARMED)) { jtag_armed_local = false; return -3; }
+        if (!(st & SPI_STATUS_BUSY)) break;
+        if (time_reached(deadline)) return -2;
+    }
+    if (nreply == 0 || !reply) return 0;
+    /* SWD_READ repeats reply byte 0: ask for one more, read the lead byte apart and drop it
+       (as emu_read does), so no bounce buffer is needed. */
+    size_t want = nreply + 1;
+    uint8_t rhdr[3] = { CMD_SWD_READ, (uint8_t)(want & 0xFF), (uint8_t)((want >> 8) & 0xFF) };
+    uint8_t lead;
+    cs_select();
+    int rc = spi_write_blocking(SPI_PORT, rhdr, sizeof(rhdr));
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, &lead, 1);
+    if (rc == 0) rc = spi_read_blocking(SPI_PORT, 0x00, reply, nreply);
+    cs_deselect();
+    return rc == 0 ? 0 : -4;
 }
 
 /* After a stuck or lost transfer: arm again, which releases both lines and clears the flags. */

@@ -41,7 +41,7 @@ Published as `<asset>.sig` next to `bench_pod_stm32.bin`, `blob-gw0.bin`, `blob-
 |---|---|---|
 | 0 | 4 | magic `BPSG` |
 | 4 | 2 | format = 1 |
-| 6 | 1 | target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge, 7 gw2, 8 a bridge identity (never an update), 9 xip (same numbering as `ota_target_t`) |
+| 6 | 1 | target: 0 firmware, 1 gw0, 2 gw1, 3 esp, 6 bridge, 7 gw2, 8 a bridge identity (never an update), 9 xip, 10 xip_prog (same numbering as `ota_target_t`) |
 | 7 | 1 | flags (0) |
 | 8 | 4 | image size in bytes |
 | 12 | 32 | SHA-256 of the image |

@@ -64,10 +64,10 @@ int  ice40_is_configured(void);
    next ice40_flash_program releases it. */
 void ice40_hold_off_bus(void);
 
-/* Runtime gateware IMAGE SWITCH: reprogram the config flash with image n (0=closed-loop,
-   1=deep-DAC-replay, 2=sensor emulation) and reconfigure, from W25Q blob slot gw0/gw1/gw2.
-   Defined in console.c.
-   ~2 s.  Returns 0 ok, -1 fail. */
+/* Write image n (0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation) from W25Q blob slot
+   gw0/gw1/gw2 to the config flash's offset 0 and reconfigure (~2.4 s, 27 sector erases): gateware
+   updates of offset 0 and the image switch's fallback (ice40_load_image is the switch).
+   Defined in console.c.  Returns 0 ok, -1 fail. */
 int  ice40_reflash_image(int n);
 /* Read-compare the image the iCE40 boots from with gateware slot n, and record its identity when
    they are equal (no write). 1 equal (recorded), 0 differs, <0 unknown (empty slot, read failed).
@@ -79,5 +79,20 @@ int  ice40_image_slot(int n);
 #define ICE40_IMAGE_COUNT 3
 /* The GATEWARE_VERSION of the images this firmware embeds (0 = unknown at build time). */
 uint8_t ice40_embedded_gw_version(void);
+
+/* Configure the iCE40 in SPI SLAVE mode straight from `len` bytes of the W25Q at `addr` (a
+   gateware slot's data): no erase, no write, about 50 ms at 25 MHz. The STM32 hashes the bits it
+   clocks out and compares them with sha256 (NULL: no check). 0 ok (CDONE high), -1 the flash
+   did not answer, -2 CDONE stayed low, -3 checksum. On failure the iCE40 is held in reset (off
+   the bus). The caller puts the PSRAM in SPI before and back in QPI after, as for
+   ice40_flash_boot (ice40_load_image does both). */
+int  ice40_slave_load(uint32_t addr, uint32_t len, const uint8_t sha256[32]);
+/* Development: make the next n slave loads start 64 bytes early, so they fail (CDONE low) and
+   the switch falls back to writing the flash. */
+void ice40_slave_test_fail(uint32_t n);
+/* Load gateware image n (0 loop, 1 deep, 2 emulation) from its slot in slave mode, with the PSRAM
+   and register-mirror handling every reconfiguration needs. Never writes the flash. Defined in
+   console.c. 0 ok, <0 as ice40_slave_load (-4: the slot is empty). */
+int  ice40_load_image(int n);
 
 #endif /* ICE40_FLASH_H */

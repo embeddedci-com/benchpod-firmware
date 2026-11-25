@@ -29,6 +29,7 @@
 #include "ota.h"         /* firmware OTA (PSRAM-staged) */
 #include "cmd_table.h"     /* the command table: tier, gate flags and handler per verb */
 #include "pod_policy.h"
+#include "FreeRTOS.h"     /* pvPortMalloc: send_ok_large */
 #include "lease_gate.h"
 #include "lease_local.h"
 #include "la_pins.h"     /* LA pin ownership table */
@@ -39,8 +40,12 @@
 #include "dac_quad.h"      /* the ADC low range keeps the +-12 V output within +-5 V */
 #include "i2c_bus.h"       /* adc_range_get */
 #include "esp_rom_flash.h"   /* a C3 flash counts as heavy (esp_rom_flash_busy) */
+#include "prog_flash.h"      /* and a flash over a chip's programming pins (prog_flash_busy) */
 #include "esp_dut_flash.h"   /* so does an ESP32 DUT flash (esp_dut_flash_busy) */
 #include "xip_session.h"   /* a W25Q code session holds the bus */
+#if defined(BENCHPOD_USB_HOST)
+#include "usb_flash.h"
+#endif
 #include "status_led.h"
 
 #include <stdio.h>
@@ -88,6 +93,23 @@ void send_ok_str(int conn_id, const char *payload_json) {
     if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         at_close_connection(conn_id);   /* reclaim slot if client already left */
     }
+}
+
+/* send_ok_str for payloads larger than its stack buffer (usb_host's device report, usb_flash's
+   state with a long result): the wrapper goes around the payload in a heap buffer. Payloads up to
+   BP_CLOUD_REPLY_MAX - 64 also fit the cloud's captured reply. */
+void send_ok_large(int conn_id, const char *payload_json) {
+    static const char head[] = "{\"status\":\"ok\",\"data\":";
+    size_t n = strlen(payload_json);
+    size_t total = sizeof(head) - 1u + n + 2u;
+    char *resp = pvPortMalloc(total + 1u);
+    if (!resp) { send_error(conn_id, "out of memory for the reply"); return; }
+    memcpy(resp, head, sizeof(head) - 1u);
+    memcpy(resp + sizeof(head) - 1u, payload_json, n);
+    memcpy(resp + total - 2u, "}\n", 3u);
+    LOG_D("[cmd] -> ok  data=%s\n", payload_json);
+    if (at_send_data(conn_id, (const uint8_t *)resp, total) != 0) at_close_connection(conn_id);
+    vPortFree(resp);
 }
 
 /* Big enough for the longest message a caller can build (LA_PINS_ERR_MAX) even if bp_emit_jstr
@@ -211,7 +233,11 @@ bool heavy_in_flight(void) {
     /* A C3 flash reads its image from the W25Q block by block with the gateware's PSRAM masters
        stopped, so it holds off captures, uploads and updates like they hold off each other. */
     return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING ||
-           esp_rom_flash_busy() || esp_dut_flash_busy() || xip_session_active();
+           esp_rom_flash_busy() || esp_dut_flash_busy() || prog_flash_busy() || xip_session_active()
+#if defined(BENCHPOD_USB_HOST)
+           || usb_flash_busy()   /* the esp mode reads the staged image without an XIP session */
+#endif
+           ;
 }
 
 bool capture_or_upload_busy(void) {
@@ -228,9 +254,18 @@ const char *bus_busy_reason(void) {
     if (esp_rom_flash_busy())
         return bp_tag_storage_bus_busy("busy: the ESP32-C3 is being flashed (about 2 minutes); try again "
                                        "when it ends", "the Wi-Fi chip is being flashed");
+    /* before the session test: a prog_flash job holds an XIP session for its whole run */
+    if (prog_flash_busy())
+        return bp_tag_storage_bus_busy("busy: a chip is being flashed over its programming pins (prog_flash); "
+                                       "try again when it ends", "a target is being flashed (prog_flash)");
     if (xip_session_active())
         return bp_tag_storage_bus_busy("busy: the pod is running code from its W25Q (a flash over USB); try "
                                        "again when it ends", "a flash over USB is running");
+#if defined(BENCHPOD_USB_HOST)
+    if (usb_flash_busy())
+        return bp_tag_storage_bus_busy("busy: a board on the USB host port is being flashed (usb_flash); "
+                                       "try again when it ends", "a flash over USB is running");
+#endif
     if (esp_dut_flash_busy())
         return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
                                        "it ends", "a target is being flashed (esp_flash)");

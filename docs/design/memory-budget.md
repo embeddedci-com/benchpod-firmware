@@ -50,6 +50,44 @@ The 896 KB code limit is fixed by the linker script and by the start of the non-
 (`main.c icache_init`, a linker `ASSERT` keeps the two together). Large data (DAC waveforms,
 captures, the EMI run log, staged OTA images, gateware blobs) lives in the 8 MB PSRAM or the W25Q.
 
+## Code that runs from the W25Q (XIP): two images, one RAM region
+
+Rarely used code is linked into images that live in W25Q blob slots instead of internal flash
+(`src/xip_image.h`, `src/xip_session.h`). There are two, each with its own table, expected hash
+(patched into internal flash by `tools/xip_finish.py`) and blob slot:
+
+| Image | Section | Slot (W25Q) | Code | Size (release = dev build) | Of the 20 KB region |
+|---|---|---|---|---|---|
+| usb | `.xip` | `xip` (0x200000) | the USB flash protocols (`xip_mod_*.c`) | 17,684 B | 86.4% |
+| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`) and the dispatch (`xip_prog_mod.c`) | 15,916 B | 77.7% |
+
+- **XIP_RAM=1 (the release default, every board shipped so far):** both images are linked at the
+  same 20 KB RAM region (`0x2009B000`, taken from the FreeRTOS heap), an overlay. A session names
+  its image and `xip_session_begin(img)` copies that image's slot into the region after checking
+  its length and SHA-256. Only one session runs at a time (a `usb_flash` or a `prog_flash` job
+  holds its image until it ends), so the second image costs no RAM; each image only has to fit
+  the 20 KB. The prog image has 9 KB of room, the usb image 2.8 KB.
+- **XIP_RAM=0 (memory-mapped, digital v3r4):** each image at its own W25Q address (usb
+  `0x90201000`, prog `0x90241000`), no copy. The linker script keeps three regions for this: `XIP`,
+  `XIP_PROG`, and the RAM build's sed swaps both for the same RAM region.
+- Moving the protocols out of internal flash saved about 10 KB of code in both builds, and no static RAM:
+
+| Build | Internal flash before | after | Static RAM before | after |
+|---|---|---|---|---|
+| release (`make RELEASE=1`) | 896,884 B (97.75%) | 886,708 B (96.64%) | 630,152 B | 630,152 B |
+| dev (`make`) | 910,412 B (99.23%) | 900,228 B (98.12%) | 634,472 B | 634,472 B |
+
+  (Measured 2026-11-23 on the branch that adds the second image, on top of the `reset` pin
+  change of PR 239. The expected-hash records of the two images are in internal flash and are
+  also the blobs' manifest entries, so the image bookkeeping takes no RAM.) The EMC test build
+  (`EMI_TEST=1`) overflows its RAM by 24 B before and after this change.
+- What stays in internal flash: the protocol metadata (`prog_flash.c`: name, uart, uses_nrst,
+  mems), `prog_job.c`, `prog_wire.c` (its functions are the callbacks the job stores in
+  `prog_wire_ops_t`, and internal code may not hold pointers to XIP functions) and the command.
+- Rules for XIP code are in `xip_image.h` and checked after every link by
+  `tools/check_xip_refs.py`: internal code reaches an image only through its table, an image
+  hands out no pointer to its own functions, XIP objects have no `.data`/`.bss`.
+
 ## RAM: 640 KB, 99.1% assigned at link time
 
 Static RAM is 649,296 B (99.07%) in the release build and 653,424 B (99.70%) in the dev build

@@ -103,7 +103,8 @@ int adc_range_selftest(adc_range_test_pt_t pts[ADC_RANGE_TEST_POINTS], uint32_t 
     memcpy(pts, g_test, sizeof(g_test));
     return 0;
 }
-int dac_set_constant16(uint16_t code, uint32_t div) { (void)code; (void)div; return 0; }
+static long g_held = -1;   /* the last dac_set_constant16 code */
+int dac_set_constant16(uint16_t code, uint32_t div) { (void)div; g_held = code; return 0; }
 int dac_quad_current_out(uint16_t code) { (void)code; return 0; }
 static uint16_t g_adc_count = 65522;
 int adc_capture_psram(uint16_t *out, size_t n, float rate) { (void)rate; for (size_t i = 0; i < n; i++) out[i] = g_adc_count; return 0; }
@@ -351,7 +352,31 @@ static void test_current_in_by_revision(void) {
     g_adc_count = 65522;
 }
 
+/* dac_out path cal1: the 5 V stage into the ADC loopback, the level with the 5 V calibration. */
+static void test_dac_out_cal1(void) {
+    g_held = -1;
+    handle_dac_out(0, "{\"cmd\":\"dac_out\",\"path\":\"cal1\",\"v\":2.5}");
+    CHECK(g_path == ANALOG_PATH_CAL1, "cal1 routed: %d", (int)g_path);
+    CHECK(g_held == (long)dac_code16_for_volts(1, 2.5f), "cal1 uses the 5v calibration: code %ld", g_held);
+    CHECK(strstr(g_reply, "\"path\":\"cal1\"") && strstr(g_reply, "\"mv\":25") && strstr(g_reply, "\"code16\":"),
+          "cal1 reply: %s", g_reply);
+
+    g_held = -1;
+    handle_dac_out(0, "{\"cmd\":\"dac_out\",\"path\":\"dac_5v\",\"v\":2.5}");
+    CHECK(g_path == ANALOG_PATH_DAC_5V && strstr(g_reply, "\"path\":\"dac_5v\""), "5v unchanged: %s", g_reply);
+    CHECK(g_held == (long)dac_code16_for_volts(1, 2.5f), "5v code %ld", g_held);
+
+    /* route only: no level written */
+    g_held = -1;
+    handle_dac_out(0, "{\"cmd\":\"dac_out\",\"path\":\"cal1\"}");
+    CHECK(g_path == ANALOG_PATH_CAL1 && g_held == -1, "cal1 route only: %s", g_reply);
+
+    handle_dac_out(0, "{\"cmd\":\"dac_out\",\"path\":\"cal2\",\"v\":1}");
+    CHECK(strcmp(g_reply, "err:path must be 3v3|5v|12v|cal1|off") == 0, "refusal text: %s", g_reply);
+}
+
 int main(void) {
+    test_dac_out_cal1();
     test_current_in_by_revision();
     test_reply_with_every_part();
     test_low_range_calibrate();

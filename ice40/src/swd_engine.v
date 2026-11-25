@@ -38,9 +38,12 @@
 // Bit timing (modes 0 and 3 both change data on the falling edge and sample on the
 // rising one; they differ only in the idle level, `cpol`): SCK low + next MOSI bit for
 // `half` clk, SCK high for `half` clk, then MISO is taken.  MISO goes through the same
-// 2-flop synchroniser as SWDIO, so the value used at the end of the high phase is the
-// pin as it was 2 clk earlier.  With half >= 2 that is at or after the rising edge the
-// target saw, a full half period after its data changed.  half 0 or 1 would sample
+// one-flop synchroniser as SWDIO, and (v64) la_bank registers every LA output in its pad, so
+// the pins move 1 clk after the engine's state does: the value used at the end of the high
+// phase is the pin 1 clk earlier.  At half = 2 that is the instant the SCK pin rose (1 clk after
+// the engine raised it), the same point relative to the pins as up to v63 (2-flop synchroniser,
+// combinational pads).  With half >= 2 that is at or after the rising edge the target saw, a
+// full half period after its data changed.  half 0 or 1 would sample
 // before the edge, so the firmware clamps half to 2..63 (6 MHz .. 190 kHz at 24 MHz).
 //
 // SWD transfer queue (v45, SWD_QFEED / SWD_QCONFIG / SWD_QSTATUS).  With SWD armed, a
@@ -53,7 +56,8 @@
 //   idle cycles driving 0
 // The host drives SWDIO on the falling edge; the target changes it on the rising edge, and the
 // engine samples it at the END of the low phase, just before the next rising edge (CMSIS-DAP's
-// SW_READ_BIT).  Through the 2-flop synchroniser that is the pin 2 clk earlier, still a whole
+// SW_READ_BIT).  Through the one-flop synchroniser that is the pin 1 clk earlier (the pins lag the
+// engine by 1 clk since v64, see above), still a whole
 // high phase after the target's edge, so half = 2 (6 MHz) keeps full margin.  A read stores its
 // 4 data bytes (LE) in the reply buffer.  An ACK other than OK, or a read parity error, stops the
 // queue after a turnaround (+ idle); SWD_QSTATUS reports the transfers completed, the ACK and
@@ -83,10 +87,17 @@
 // half.  Between tokens SCL rests low, except after STOP (bus idle).  A WRITE bit sent as 1
 // that reads 0 is a lost arbitration: the engine releases both lines, stops the queue and sets
 // q_flags bit 7.  SPI_STATUS busy covers I2C too.
+//
+// SWIM master (v62, SPI_ARM flags bit 4).  The engine's fifth job (swim_engine.v), on the same
+// queue and reply buffer.  The dio slot (mosi_ch = miso_ch) is the one SWIM wire, OPEN DRAIN
+// (pulled low or released, never driven high); the clk and CS slots are not driven.  The queue
+// holds tokens (entry, command and data frames, config, report), see swim_engine.v for the format.
 // ============================================================================
 
 module swd_engine #(
-    parameter REPLY_AW = 9    // 512-entry reply buffer (1 BRAM); also the queue depth
+    parameter REPLY_AW = 9,   // 512-entry reply buffer (1 BRAM); also the queue depth
+    parameter HAS_JTAG = 1,   // v61 JTAG master; 0 in the emulation image (no room)
+    parameter HAS_SWIM = 1    // v62 SWIM master; 0 in the emulation image (no room)
 )(
     input  wire        clk,
     input  wire        rst,
@@ -101,7 +112,8 @@ module swd_engine #(
     input  wire [3:0]  spi_miso_ch,
     input  wire [3:0]  spi_cs_ch,
     input  wire [6:0]  spi_half,          // clk per SCK half period, 2..127 (the firmware clamps)
-    input  wire [2:0]  spi_flags,         // {i2c, inv, cpol}: inv = SPI mode 1 or 2; i2c = I2C master
+    input  wire [4:0]  spi_flags,         // {swim, jtag, i2c, inv, cpol}: inv = SPI mode 1 or 2; i2c = I2C master;
+                                          // jtag = JTAG master (v61, jtag_seq.v); swim = SWIM master (v62, swim_engine.v)
     input  wire        spi_cs_stb,        // 1-cycle: SPI_CS
     input  wire        spi_cs_assert,     // 1 = drive CS low
     input  wire        disarm_stb,        // 1-cycle
@@ -157,6 +169,13 @@ module swd_engine #(
     reg        cpol_r;                    // internal idle level (cpol ^ inv)
     reg        inv_r;                     // SPI modes 1 and 2: SCK inverted
     reg        i2c_r;                     // I2C master (i2c_master.v)
+    reg        jtag_r;                    // JTAG master (jtag_seq.v)
+    reg        swim_r;                    // SWIM master (swim_engine.v)
+    wire       sw_take, sw_push, sw_busy, sw_low, sw_stop;
+    wire [7:0] sw_pdata, sw_flags;
+    wire [2:0] sw_nack3;
+    wire       jt_take, jt_push, jt_busy, jt_tck, jt_tms, jt_tdi;
+    wire [7:0] jt_pdata;
     wire       i2c_take, i2c_push, i2c_busy, i2c_arb, scl_rel, sda_rel;
     wire [7:0] i2c_pdata;
 
@@ -172,20 +191,25 @@ module swd_engine #(
 
     assign reply_count = {{(16-REPLY_AW){1'b0}}, wptr};
 
-    // SWDIO / MISO is a pad-driven async input; 2-flop synchronise it before sampling, same
-    // metastability idiom as spi_slave / i2c_target.  SWD bit-bang holds the line static for
-    // many clocks around a 'c'; the shifters account for the 2-cycle latency (see the header).
-    reg dio_s0, dio_s1, scl_s0, scl_s1;
+    // SWDIO / MISO / TDO / SDA / SCL are pad-driven async inputs, registered once before the
+    // engines use them.  Up to v63 this was a 2-flop synchroniser with combinational pads; v64
+    // registers every LA output in its SB_IO (la_bank), which puts the pins 1 clk behind the
+    // engine, so one flop here keeps every read point where it was relative to the pins (the SPI,
+    // SWD and JTAG masters keep 6 MHz at half = 2; see the header).  The flop's output has a whole
+    // clk minus the 14:1 channel mux and the engines' logic to settle, so metastability is not a
+    // practical concern at 24 MHz.  SWD bit-bang holds the line static for many clocks around a
+    // 'c'.
+    reg dio_s1, scl_s1;
     always @(posedge clk) begin
-        if (rst) begin dio_s0 <= 1'b0; dio_s1 <= 1'b0; scl_s0 <= 1'b0; scl_s1 <= 1'b0; end
-        else     begin dio_s0 <= dio_in; dio_s1 <= dio_s0; scl_s0 <= scl_in; scl_s1 <= scl_s0; end
+        if (rst) begin dio_s1 <= 1'b0; scl_s1 <= 1'b0; end
+        else     begin dio_s1 <= dio_in; scl_s1 <= scl_in; end
     end
 
     // ---- the sequencer: SPI bytes or SWD transfers from the queue (one job at a time) ----
     // One cycle = `half` clk low then `half` clk high.  Its index `idx` (and SWDIO) moves on at
     // the end of the high half, i.e. on the falling edge.
     //   SPI:  a unit is one byte, idx 0..7; MOSI = sh[0]; MISO is taken at the END of the high
-    //         half (the device changed it on the falling edge; the 2-flop synchroniser then sees
+    //         half (the device changed it on the falling edge; the input flop then sees
     //         the pin at the rising edge) and shifted in at the top as the byte shifts out.
     //   SWD:  a unit is one transfer (see the header), idx 0..end_idx; the target's bit is taken
     //         at the end of the LOW half.
@@ -200,15 +224,43 @@ module swd_engine #(
     reg        qready;                    // qptr != fptr, one edge late (t_rd is valid with it)
     reg        isrd, par, fail, perr, qstop;
     reg [2:0]  ack;
-    wire       run    = armed_r & ~i2c_r & (spi_r | qmode);
+    wire       run    = armed_r & ~i2c_r & ~jtag_r & ~swim_r & (spi_r | qmode);
     wire       i2c_on = armed_r & i2c_r;
+    wire       jtag_on = armed_r & jtag_r;
+    wire       swim_on = armed_r & swim_r;
     i2c_master i2c_i (
         .clk(clk), .rst(rst), .on(i2c_on), .arm(spi_arm_stb), .half(half_r),
         .sda_s(dio_s1), .scl_s(scl_s1), .t_rd(t_rd), .qready(qready),
         .take(i2c_take), .push(i2c_push), .pdata(i2c_pdata), .busy(i2c_busy), .arb(i2c_arb),
         .scl_rel(scl_rel), .sda_rel(sda_rel)
     );
-    wire       q_active = armed_r & ~spi_r & qmode;
+    generate if (HAS_JTAG) begin : g_jtag
+        jtag_seq jtag_i (
+            .clk(clk), .rst(rst), .on(jtag_on), .arm(spi_arm_stb), .half(half_r),
+            .tdo_s(dio_s1), .t_rd(t_rd), .qready(qready),
+            .take(jt_take), .push(jt_push), .pdata(jt_pdata), .busy(jt_busy),
+            .tck(jt_tck), .tms(jt_tms), .tdi(jt_tdi)
+        );
+    end else begin : g_no_jtag
+        assign {jt_take, jt_push, jt_busy, jt_tck, jt_tms, jt_tdi} = 6'd0;
+        assign jt_pdata = 8'd0;
+    end endgenerate
+    generate if (HAS_SWIM) begin : g_swim
+        swim_engine swim_i (
+            .clk(clk), .rst(rst), .on(swim_on), .arm(spi_arm_stb),
+            .dio_s(dio_s1), .t_rd(t_rd), .qready(qready),
+            .take(sw_take), .push(sw_push), .pdata(sw_pdata), .busy(sw_busy), .low(sw_low),
+            .stopped(sw_stop), .flags(sw_flags), .nack3(sw_nack3)
+        );
+    end else begin : g_no_swim
+        assign {sw_take, sw_push, sw_busy, sw_low, sw_stop} = 5'd0;
+        assign sw_pdata = 8'd0;
+        assign sw_flags = 8'd0;
+        assign sw_nack3 = 3'd0;
+    end endgenerate
+    wire       swim_flag = spi_flags[4] & (HAS_SWIM != 0);
+    wire       jtag_flag = spi_flags[3] & ~spi_flags[4] & (HAS_JTAG != 0);
+    wire       q_active = armed_r & ~spi_r & ~jtag_r & ~swim_r & qmode;
     wire       ack_ok = (ack == 3'b001);
     wire       spi_pending = (fptr != qptr);
 
@@ -234,6 +286,8 @@ module swd_engine #(
             cpol_r         <= 1'b1;
             inv_r          <= 1'b0;
             i2c_r          <= 1'b0;
+            jtag_r         <= 1'b0;
+            swim_r         <= 1'b0;
             end_idx        <= 7'd53;
             wptr           <= {REPLY_AW{1'b0}};
             fptr           <= {REPLY_AW{1'b0}};
@@ -249,6 +303,8 @@ module swd_engine #(
                 armed_r <= 1'b0;
                 spi_r   <= 1'b0;
                 i2c_r   <= 1'b0;
+                jtag_r  <= 1'b0;
+                swim_r  <= 1'b0;
                 qst     <= Q_IDLE;
             end else if (arm_stb) begin
                 // Initial line state: SWCLK low, SWDIO driven low.  Matches the
@@ -256,6 +312,8 @@ module swd_engine #(
                 armed_r        <= 1'b1;
                 spi_r          <= 1'b0;
                 i2c_r          <= 1'b0;
+                jtag_r         <= 1'b0;
+                swim_r         <= 1'b0;
                 inv_r          <= 1'b0;
                 clk_ch_r       <= arm_clk_ch;
                 dio_ch_r       <= arm_dio_ch;
@@ -272,8 +330,10 @@ module swd_engine #(
                 // SCK at its idle level, MOSI driven low, CS driven high (released).
                 // I2C: both lines released, SCL read back on the CS channel.
                 armed_r        <= 1'b1;
-                spi_r          <= ~spi_flags[2];
-                i2c_r          <= spi_flags[2];
+                spi_r          <= ~spi_flags[2] & ~jtag_flag & ~swim_flag;
+                i2c_r          <= spi_flags[2] & ~jtag_flag & ~swim_flag;
+                jtag_r         <= jtag_flag;
+                swim_r         <= swim_flag;
                 inv_r          <= spi_flags[1];
                 clk_ch_r       <= spi_sck_ch;
                 dio_ch_r       <= spi_mosi_ch;
@@ -300,6 +360,12 @@ module swd_engine #(
             // I2C master: it consumes queue bytes and appends replies (never with the sequencer)
             if (i2c_take) qptr <= qptr + 1'b1;
             if (i2c_push) begin rmem[wptr] <= i2c_pdata; wptr <= wptr + 1'b1; end
+            // JTAG master: likewise (only one of the two is ever on)
+            if (jt_take) qptr <= qptr + 1'b1;
+            if (jt_push) begin rmem[wptr] <= jt_pdata; wptr <= wptr + 1'b1; end
+            // SWIM master: likewise
+            if (sw_take) qptr <= qptr + 1'b1;
+            if (sw_push) begin rmem[wptr] <= sw_pdata; wptr <= wptr + 1'b1; end
 
             if (feed_begin) begin
                 wptr  <= {REPLY_AW{1'b0}};
@@ -313,7 +379,7 @@ module swd_engine #(
             end
 
             // ---- SWD bit-bang (remote_bitbang bytes) ----
-            if (feed_stb && armed_r && !spi_r && !i2c_r && !qmode) begin
+            if (feed_stb && armed_r && !spi_r && !i2c_r && !jtag_r && !swim_r && !qmode) begin
                 case (feed_byte)
                     "d": begin swclk_lvl <= 1'b0; swdio_out <= 1'b0; end
                     "e": begin swclk_lvl <= 1'b0; swdio_out <= 1'b1; end
@@ -330,7 +396,7 @@ module swd_engine #(
             end
 
             // ---- SPI data bytes / SWD transfers: into the queue ----
-            if (feed_stb && (run | i2c_on)) begin
+            if (feed_stb && (run | i2c_on | jtag_on | swim_on)) begin
                 tmem[fptr] <= feed_byte;
                 fptr       <= fptr + 1'b1;
             end
@@ -405,21 +471,24 @@ module swd_engine #(
     end
 
     assign armed        = armed_r;
-    assign spi_mode     = armed_r & (spi_r | i2c_r);   // SPI_STATUS bit 0: armed as SPI or I2C master
-    assign spi_busy     = (spi_mode & (spi_pending | (qst != Q_IDLE))) |
-                          (i2c_on & ((spi_pending & ~i2c_arb) | i2c_busy));
+    assign spi_mode     = armed_r & (spi_r | i2c_r | jtag_r | swim_r);   // SPI_STATUS bit 0: armed as SPI, I2C, JTAG or SWIM master
+    assign spi_busy     = (armed_r & (spi_r | i2c_r) & (spi_pending | (qst != Q_IDLE))) |
+                          (i2c_on & ((spi_pending & ~i2c_arb) | i2c_busy)) |
+                          (jtag_on & (spi_pending | jt_busy)) |
+                          (swim_on & (sw_busy | (spi_pending & ~sw_stop)));
     wire   q_busy       = q_active & ~qstop & ((qptr != fptr) | (qst != Q_IDLE));
     assign q_done       = qptr[7:0];
-    assign q_flags      = {i2c_arb, qptr[8], perr, ack, qstop, q_busy};
+    assign q_flags      = swim_r ? {|sw_flags[3:0], qptr[8], sw_flags[4], sw_nack3, sw_stop, (swim_on & (spi_pending | sw_busy) & ~sw_stop)}
+                                 : {i2c_arb, qptr[8], perr, ack, qstop, q_busy};
     assign clk_ch       = clk_ch_r;
-    assign clk_val      = ~i2c_r & (swclk_lvl ^ inv_r);
-    assign clk_oe       = ~i2c_r | ~scl_rel;
+    assign clk_val      = jtag_r ? jt_tck : (~i2c_r & (swclk_lvl ^ inv_r));
+    assign clk_oe       = ~swim_r & (~i2c_r | ~scl_rel);
     assign dio_ch       = dio_ch_r;
-    assign dio_val      = ~i2c_r & (q_active ? q_out : (spi_r ? sh[0] : swdio_out));
-    assign dio_oe       = i2c_r ? ~sda_rel : (q_active ? q_oe : (spi_r | swdio_oe));
+    assign dio_val      = jtag_r ? jt_tdi : (~i2c_r & ~swim_r & (q_active ? q_out : (spi_r ? sh[0] : swdio_out)));
+    assign dio_oe       = swim_r ? sw_low : i2c_r ? ~sda_rel : (q_active ? q_oe : (spi_r | jtag_r | swdio_oe));
     assign in_ch        = in_ch_r;
     assign cs_ch        = cs_ch_r;
-    assign cs_val       = cs_n;
-    assign cs_on        = armed_r & spi_r;
+    assign cs_val       = jtag_r ? jt_tms : cs_n;     // JTAG: the CS slot carries TMS
+    assign cs_on        = armed_r & (spi_r | jtag_r);
 
 endmodule

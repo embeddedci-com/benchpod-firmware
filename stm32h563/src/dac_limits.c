@@ -3,7 +3,7 @@
  *
  * Pure: no HAL. The checks read JSON with bp_json and convert codes with the baked-in DAC_CAL,
  * and the store is config_store.c, so the whole file runs in the host tests. Applying the park
- * level (route + dac_set_constant) is the caller's job (command_handler.c, main.c).
+ * level (route + dac_set_constant16) is the caller's job (command_handler.c, main.c).
  */
 #include "dac_limits.h"
 #include "dac_quad.h"
@@ -28,7 +28,7 @@ static const ab_store_t s_store = {
 static dac_limits_t s_active;
 
 /* Slack for comparing against the window: the page and server convert with the nominal path
-   range while this uses the calibration, and dac_out rounds to an 8-bit code. */
+   range while this uses the calibration, and dac_out rounds to the nearest 16-bit code. */
 #define DAC_LIMITS_TOL_V  0.005f
 
 /* No %f anywhere below: newlib-nano's printf has none, so volts are printed as whole mV.
@@ -66,10 +66,11 @@ int dac_limits_path_index(const char *name) {
     return -1;
 }
 
-/* Output range of a path from its calibration, volts (code 0 .. code 255). */
+/* Output range of a path from its calibration, volts (code16 0 .. 65535). DAC_CAL's slope is per
+   256 codes (cal_data.h: volts = a + b * code16 / 256). */
 static void path_range(int path, float *lo, float *hi) {
     float a = DAC_CAL[path].a, b = DAC_CAL[path].b;
-    float v0 = a, v1 = a + b * 255.0f;
+    float v0 = a, v1 = a + b * (65535.0f / 256.0f);
     *lo = v0 < v1 ? v0 : v1;
     *hi = v0 < v1 ? v1 : v0;
 }
@@ -81,14 +82,14 @@ float dac_limits_park_volts(void) {
     return s_active.inverted ? max_v() : min_v();
 }
 
-uint8_t dac_limits_park_code(void) {
-    float a = DAC_CAL[s_active.path].a, b = DAC_CAL[s_active.path].b;
-    float c = (dac_limits_park_volts() - a) / b;
+uint16_t dac_limits_park_code16(void) {
+    double a = DAC_CAL[s_active.path].a, b = DAC_CAL[s_active.path].b;
+    double c = ((double)dac_limits_park_volts() - a) / b * 256.0;
     /* Round INTO the window: down from the top when inverted, up from the bottom otherwise. */
-    long code = s_active.inverted ? (long)floorf(c) : (long)ceilf(c);
+    long code = s_active.inverted ? (long)floor(c) : (long)ceil(c);
     if (code < 0) code = 0;
-    if (code > 255) code = 255;
-    return (uint8_t)code;
+    if (code > 65535) code = 65535;
+    return (uint16_t)code;
 }
 
 const char *dac_limits_set(const dac_limits_t *in) {
@@ -150,7 +151,6 @@ const char *dac_limits_check_route(const char *path) {
     const char *p = canon(path);
     const char *own = s_path_names[s_active.path];
     if (!strcmp(p, own) || !strcmp(p, "ext") || !strcmp(p, "current_in")) return NULL;
-    if (!strcmp(p, "cal1") && s_active.path == 1) return NULL;      /* cal1 keeps the 5V mux */
     snprintf(s_msg, sizeof(s_msg),
              "refused: %s. Routing to %s disconnects it and leaves the module input near 0 V, "
              "which is full output. dac_stop parks it at %ld mV instead",
@@ -160,7 +160,10 @@ const char *dac_limits_check_route(const char *path) {
 
 const char *dac_limits_check_volts(const char *path, float volts) {
     if (!s_active.enabled) return NULL;
-    if (dac_limits_path_index(path) != (int)s_active.path) return NULL;   /* the route check covers it */
+    /* cal1 is the 5 V stage into the ADC loopback: its level is the 5 V path's (the DAC keeps it
+       when the path goes back to 5v). dac_limits_path_index stays as it is for other callers. */
+    int idx = !strcmp(canon(path), "cal1") ? 1 : dac_limits_path_index(path);
+    if (idx != (int)s_active.path) return NULL;   /* the route check covers it */
     if (volts < min_v() - DAC_LIMITS_TOL_V || volts > max_v() + DAC_LIMITS_TOL_V) {
         snprintf(s_msg, sizeof(s_msg), "refused: %s; %ld mV is outside them", describe(), lroundf(volts * 1000.0f));
         return s_msg;
@@ -200,7 +203,7 @@ static const char *check_loop(const char *json) {
     }
     double vmin, vmax;
     float a = DAC_CAL[s_active.path].a, b = DAC_CAL[s_active.path].b;
-    /* 16-bit loop code -> volts: the DAC8551 takes the 8-bit calibration's code in its high byte. */
+    /* 16-bit loop code -> volts: DAC_CAL's slope is per 256 codes (cal_data.h). */
     if (!num(json, "vmin", &vmin) || !num(json, "vmax", &vmax) ||
         a + b * (float)(vmin / 256.0) < min_v() - DAC_LIMITS_TOL_V ||
         a + b * (float)(vmax / 256.0) > max_v() + DAC_LIMITS_TOL_V) {

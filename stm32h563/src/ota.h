@@ -61,10 +61,12 @@ typedef enum {
     OTA_TARGET_BRIDGE_ID_UNUSED, /* signing target 8 is the bridge's identity: never an update */
     OTA_TARGET_XIP,     /* the code that runs from the W25Q (xip_image.h) -> W25Q slot "xip", only the
                            image this firmware was linked with, only where the slot is listed */
+    OTA_TARGET_XIP_PROG,/* the second W25Q image (the pin programmers) -> W25Q slot "xip_prog", under the
+                           same rules as OTA_TARGET_XIP. Signing target 10. */
 } ota_target_t;
 
-/* "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2", "xip" (NULL or "" = firmware; "bridge"
-   only with BENCHPOD_WIFI_BRIDGE, "xip" only where its slot is listed). -1 if unknown. */
+/* "firmware", "gw0", "gw1", "esp", "ca", "tls", "bridge", "gw2", "xip", "xip_prog" (NULL or "" = firmware; "bridge"
+   only with BENCHPOD_WIFI_BRIDGE, "xip" and "xip_prog" only where their slots are listed). -1 if unknown. */
 int         ota_target_from_name(const char *name);
 const char *ota_target_name(ota_target_t t);
 ota_target_t ota_target(void);

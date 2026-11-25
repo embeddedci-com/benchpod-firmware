@@ -13,10 +13,14 @@ const char *msc_flash_rc_str(int rc)
     case MSC_FLASH_E_SRC:     return "reading the uploaded file failed";
     case MSC_FLASH_E_NOT_UF2: return "the file is not a UF2 file";
     case MSC_FLASH_E_SECTOR:  return "the drive's sectors are not 512 bytes";
-    case MSC_FLASH_E_FS:      return "the drive has no FAT12 or FAT16 file system";
+    case MSC_FLASH_E_FS:      return "the drive has no FAT12, FAT16, FAT32 or exFAT file system";
     case MSC_FLASH_E_FULL:    return "the drive has no room for the file";
     case MSC_FLASH_E_ARGS:    return "bad mode, name or length";
     case MSC_FLASH_E_ABORTED: return "aborted";
+    case MSC_FLASH_E_EXFAT:   return "reading back from an exFAT drive is not supported";
+    case MSC_FLASH_E_VERIFY:  return "the drive's flash contents differ from the file";
+    case MSC_FLASH_E_NOFILE:  return "the drive has no CURRENT.UF2";
+    case MSC_FLASH_E_LOADER:  return "the loader reported a failure";
     default:                  return "?";
     }
 }
@@ -24,7 +28,9 @@ const char *msc_flash_rc_str(int rc)
 const char *msc_flash_phase_str(int phase)
 {
     static const char *const k[] = { "start", "uf2", "directory", "free space", "data", "fat",
-                                      "entry", "done" };
+                                      "entry", "done", "new directory block", "old file", "fsinfo",
+                                      "find file", "read file", "verify", "wait for drive",
+                                      "bitmap", "fat", "old file", "entry", "old file" };
     return (phase >= 0 && phase < (int)(sizeof(k) / sizeof(k[0]))) ? k[phase] : "?";
 }
 

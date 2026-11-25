@@ -147,15 +147,17 @@ module top (
     // v49: the frame control byte (OP_DAC_CTRL, the DAC8554 channel) rides along, so it changes
     // only at a start and is constant while the engine streams.
     wire [7:0]  dac_ctrl;                    // stream control byte (cmd_dispatch, clk)
+    wire        dac_sclk24;                  // v68: SCLK mode (cmd_dispatch, clk), rides the start
     wire        dac_wr_stb;                  // OP_DAC_CTRL: one static frame...
     wire [23:0] dac_wr_cfg;                  // ...{ctrl, code_hi, code_lo}
-    wire [36:0] dac_ctl_48;
+    wire [37:0] dac_ctl_48;
+    wire        dac_sclk24_48  = dac_ctl_48[37];
     wire [7:0]  dac_fctl_48    = dac_ctl_48[36:29];
     wire [12:0] dac_period_48  = dac_ctl_48[28:16];
     wire [15:0] dac_divider_48 = dac_ctl_48[15:0];
     wire        dac_start_48, dac_stop_48;
-    cdc_pulse_payload #(.W(37), .INIT({8'd0, 13'd0, 16'd2})) dac_start_cdc (
-        .src_clk(clk), .src_pulse(dac_start_eff), .src_data({dac_ctrl, dac_period, dac_divider}),
+    cdc_pulse_payload #(.W(38), .INIT({1'b0, 8'd0, 13'd0, 16'd2})) dac_start_cdc (
+        .src_clk(clk), .src_pulse(dac_start_eff), .src_data({dac_sclk24, dac_ctrl, dac_period, dac_divider}),
         .dst_clk(clk48), .dst_pulse(dac_start_48), .dst_data(dac_ctl_48));
     // The static frame: its clk48 copy is the engine's holding register until the next request.
     wire        dac_wr_48;
@@ -316,18 +318,26 @@ module top (
     // closed-loop engine below (dac_loop): in closed-loop mode the loop drives the
     // sample_buf read (as a curve LUT) and feeds `v` in via the strm port.
     wire [11:0] dac_wave_addr;               // dac8551's own BRAM read addr (replay path)
+    wire        dac_sync_e, dac_sclk_a, dac_sclk_b, dac_din_a, dac_din_b;   // engine -> dac_pads
     dac8551_engine dac_i (
         .clk(clk48), .rst(rst48), .start(dac_start_48), .stop(dac_stop_48),
         .period_samples(dac_period_48), .divider(dac_divider_48),
-        .ctrl(dac_fctl_48), .wr_req(dac_wr_48), .wr_frame(dac_wr_frame_48),
+        .ctrl(dac_fctl_48), .sclk24(dac_sclk24_48), .wr_req(dac_wr_48), .wr_frame(dac_wr_frame_48),
         .wave_addr(dac_wave_addr), .wave_data(wave_rdata),
         .psram_mode(psram_run_48 | dac_loop_mode48),
         .strm_data(dac_loop_mode48 ? loop_strm_data : rd_strm_data),
         .strm_valid(dac_loop_mode48 ? loop_strm_valid : rd_strm_valid),
         .strm_pop(dac_strm_pop),
-        .dac_sync(dac_sync), .dac_sclk(dac_sclk), .dac_din(dac_din),
+        .dac_sync(dac_sync_e), .sclk_a(dac_sclk_a), .sclk_b(dac_sclk_b),
+        .din_a(dac_din_a), .din_b(dac_din_b),
         .running(dac_running_48)
     );
+    // v66: SCLK / DIN through DDR pads (19.2 MHz SCLK, 2 halves high / 3 low), SYNC through its
+    // pad's register, all one clk48 after the engine (dac_pads.v, dac8551_engine SERIAL TIMING).
+    dac_pads dac_pads_i (
+        .clk48(clk48), .sync(dac_sync_e), .sclk_a(dac_sclk_a), .sclk_b(dac_sclk_b),
+        .din_a(dac_din_a), .din_b(dac_din_b),
+        .dac_sync(dac_sync), .dac_sclk(dac_sclk), .dac_din(dac_din));
     // curve/BRAM read addr: loop when armed, else the DAC replay sequencer.
     assign wave_raddr   = dac_loop_mode48 ? loop_raddr : dac_wave_addr;
     // the deep-replay reader is popped only when the loop is NOT driving the DAC.
@@ -463,10 +473,9 @@ module top (
 
     // ---- ADC engine (serial MCP33131, 24 MHz clk, free-running) ----
     // (adc_sample / adc_sample_stb forward-declared above for the closed-loop block)
-    wire        adc_sdo_pu;
+    // (v63: the SDO pad's SB_IO, with its pull-up, is inside adc_mcp33131: a DDR input register
+    //  samples SDO on the falling clk edge.)
     wire [15:0] adc_sample_sel;   // real ADC, or the self-test ramp
-    SB_IO #(.PIN_TYPE(6'b000001), .PULLUP(1'b1)) io_adc_sdo (
-        .PACKAGE_PIN(adc_sdo), .D_IN_0(adc_sdo_pu));
     wire adc_sample_stb_raw;
     // v52: restart the free-running engine on the t0 of a capture that includes the ADC, so its
     // sample i is converted at t0 + (i+1)*divider like the LA producer's (see adc_mcp33131).  An
@@ -479,7 +488,7 @@ module top (
     adc_mcp33131 adc_i (
         .clk(clk), .rst(rst), .en(1'b1), .divider(cap_divider), .restart(adc_restart),
         .adc_cnvst(adc_cnvst), .adc_sclk(adc_sclk),
-        .adc_sdi(adc_sdi), .adc_sdo(adc_sdo_pu),
+        .adc_sdi(adc_sdi), .adc_sdo(adc_sdo),
         .sample(adc_sample), .sample_stb(adc_sample_stb_raw)
     );
     // Self-test ramp (+0x0101/sample) so the whole capture->writer->PSRAM->readback
@@ -801,6 +810,51 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 68 = v67 + A SWITCHABLE DAC SCLK: OP_DAC_CTRL flags bit2 sets the mode from bit3
+    // (0 = 16 MHz, 3 halves high / 3 low, the v67 timing; 1 = 24 MHz, 2 / 2, the v65 widths), taken
+    // at the next DAC start through the start CDC.  Reset: 16 MHz.  The firmware uses 24 MHz only for
+    // rates above the 16 MHz maximum (608 kS/s from RAM, 600 from PSRAM), up to 873 / 857 kS/s.
+    // One DAC sample takes max(divider, 4) + 75 clk48 at 16 MHz, + 51 at 24 MHz.
+    // GATEWARE_VERSION 67 = v66 + A 16 MHz DAC SCLK, 3 halves high / 3 low (dac8551_engine): both
+    // phases 1.5 clk48 = 31.3 ns.  v66's one-clk48 phase measured 20.0-20.3 ns at the DAC connector
+    // whichever way round (2026-11-24, c2f662), barely over the DAC8554's 20 ns.  One DAC sample
+    // takes max(divider, 4) + 75 clk48: 608 kS/s at most from RAM, 600 kS/s from PSRAM.
+    // GATEWARE_VERSION 66 = v65 + A 19.2 MHz DAC SCLK (dac8551_engine, dac_pads): SCLK and DIN leave
+    // through DDR pads, two bits per 5 clk48 (SCLK high 3 halves = 31.3 ns, low 2 halves = 20.8 ns),
+    // SYNC through its pad register, all one clk48 later.  The 2026-11-24 bench measured v65's 24 MHz
+    // SCLK at 21.8 / 19.8 ns high / low on the DAC connector, under the DAC8554's 20 ns t3 at IOVDD
+    // 3.3 V.  Through the DDR pads one clk48 of SCLK high measured 0.5 ns SHORT (a 2-high / 3-low
+    // try read 20.3 / 31.8 ns), so the one-clk48 phase is the low one: about 30.7 / 21.3 ns.  One DAC sample
+    // takes max(divider, 4) + 63 clk48 (was + 51): 716 kS/s at most from RAM, 706 kS/s from PSRAM.
+    // The firmware's DAC_SEQ_OVERHEAD_CLK follows the gateware version.
+    // GATEWARE_VERSION 65 = v64 + THE EMULATION IMAGE SPLIT: the emulation image drops the bus-master
+    // engine (swd_engine: SWD, the SPI master, the I2C master), 98.5% -> ~84% LC, and the deep image
+    // drops SWIM (no firmware drives it yet), 88% -> ~76%.  FPGA_FEATURES bit 5 (0x20) is set on the
+    // images that carry the bus masters (loop, deep).  The firmware refuses SWD/SPI/I2C master commands
+    // on the emulation image while a digital sensor runs, and otherwise swaps to the loop image first.
+    // Bit 4 (SWIM) is now clear on every image.  No protocol change.
+    // GATEWARE_VERSION 64 = v63 + REGISTERED LA PADS (la_bank.v): each LA pad's output value and output
+    // enable are flops in its SB_IO (PIN_TYPE 6'b1101_01, rising clk edge) instead of combinational, so
+    // a channel changing hands can no longer put a few-ns pulse on the DUT's line (seen on v63 emu seeds
+    // 6 and 52 as a second pulse after every step on the bench's floating LA9).  Every LA output moves 1
+    // clk later; swd_engine's input synchroniser drops from 2 flops to 1, so the SPI/SWD/JTAG/I2C/SWIM
+    // masters read at the same point relative to the pins as before (6 MHz still at half = 2).
+    // tools/check_la_pads.py checks the pad type on every build.  tb_top_la_mux, tb_top_swdq.
+    // GATEWARE_VERSION 63 = v62 + a LATER ADC SDO SAMPLE (adc_mcp33131.v) for timing margin with more
+    // series resistance on the module cable: each bit is sampled on the falling clk edge in the middle
+    // of SCLK high (the SDO SB_IO's DDR input register, now in adc_mcp33131), 20.8 ns later than v62,
+    // and one idle clk after CNVST falls gives the MSB 41.7 ns more.  Start-to-strobe is 59 clk (58);
+    // sample periods (>= 60) and the v52 t0 alignment are unchanged.  tb_adc_timing.
+    // GATEWARE_VERSION 62 = v61 + a SWIM MASTER (the STM8's one-wire debug interface) as the SWD engine's
+    // fifth job (swim_engine.v; SPI_ARM flags bit 4): the dio slot is the open-drain SWIM wire, SWD_FEED
+    // carries tokens (entry + sync measurement, command and data frames with ACK/retry, receive, config,
+    // report), the reply buffer the sync length and the received bytes.  tb_swim.  Loop and deep images
+    // only in the deep image (FPGA_FEATURES bit 4): the emulation image has no room for it, and the loop image
+    // did not place with it (~4900 of 5280 LC).
+    // GATEWARE_VERSION 61 = v60 + a JTAG MASTER as the SWD engine's fourth job (jtag_seq.v; SPI_ARM
+    // flags bit 3): TCK/TDI/TDO/TMS on the SCK/MOSI/MISO/CS slots, and SWD_FEED carries CMSIS-DAP
+    // DAP_JTAG_Sequence sequences as is, with the TDO bytes in the reply buffer.  tb_jtag.
+    // Loop and deep images only (FPGA_FEATURES bit 3): the emulation image has no room for it.
     // GATEWARE_VERSION 60 = v59 + the 2026-11 audit's gateware items.  UART_CONFIG2 (0x7D): UART_CONFIG
     // with [ext][de_ch] in front, so DE's channel has its own byte and ext is room for the next UART
     // option (UART_CONFIG's flags byte had one bit left); UART_CONFIG stays.  tb_dispatch_args,
@@ -1267,13 +1321,13 @@ module top (
     // exclusive across the two images, which the firmware swaps by reflashing).  The firmware reads it to advertise capabilities
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
-    localparam [7:0] IMG_FEATURES = 8'h02;   // deep-DAC-PSRAM-replay
+    localparam [7:0] IMG_FEATURES = 8'h2A;   // deep-DAC-PSRAM-replay + JTAG master (v61) + bus masters (v65); SWIM out (v65)
 `elsif USE_EMULATION
-    localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54)
+    localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54); no bus masters (v65)
 `else
-    localparam [7:0] IMG_FEATURES = 8'h01;   // closed-loop DAC control
+    localparam [7:0] IMG_FEATURES = 8'h29;   // closed-loop DAC control + JTAG master (v61) + bus masters (v65)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd60), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd68), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
@@ -1285,7 +1339,7 @@ module top (
         .dac_period(dac_period), .dac_divider(dac_divider), .dac_running(dac_running),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
         .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
-        .dac_ctrl(dac_ctrl), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
+        .dac_ctrl(dac_ctrl), .dac_sclk24(dac_sclk24), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
         .dac_loop_mode(dac_loop_mode),
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),

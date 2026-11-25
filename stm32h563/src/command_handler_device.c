@@ -52,6 +52,7 @@
 
 #include "pico/time.h"
 #include "bp_log.h"
+#include "ice40_switch.h"   /* fpga_image: switch counters */
 
 /* JSON parsing is shared (see bp_json.h); same aliases as command_handler.c. */
 #define json_get_value      bp_json_get
@@ -337,20 +338,27 @@ void handle_nrst(int conn_id, const char *json) {
 
 /* {"cmd":"fpga_image","image":0|1|2|"loop"|"deep"|"emulation"} — switch the running iCE40
    gateware IMAGE (0 = closed-loop, 1 = deep-DAC-PSRAM-replay, 2 = sensor emulation, gateware v54+).
-   SB_WARMBOOT can't reconfigure at runtime on this board (its config-SPI pins ARE the shared
-   PSRAM bus), so fpga_warmboot() actually REFLASHES the selected image and does a CRESET
-   cold-reconfig (~2-3 s). Returns the new image's {image, name, version, features}; also asks the
+   fpga_warmboot() loads the image straight from its W25Q slot in SPI slave mode (about 80 ms, no
+   flash write; ice40_slave_load), falling back to writing it to the config flash (2-3 s) when
+   that fails. Returns the new image's {image, name, version, features}; also asks the
    net task to re-announce capabilities so the server's cached caps track the swap.
    {"cmd":"fpga_image"} alone reports the running image. Leaving the emulation image while I2C,
-   SPI or UART sensors run is refused (they need it): sensor_stop them first. */
+   SPI or UART sensors run is refused (they need it): sensor_stop them first.
+   Asking for the image that already runs does nothing ("switched":false, no flash write);
+   "force":true reloads it anyway. Every reply carries the switch counters since boot
+   (ice40_switch.h, also in status). */
 void handle_fpga_image(int conn_id, const char *json) {
     char s[16] = {0};
+    char payload[384];   /* worst case ~270: every counter at 2^32-1 */
+    bp_emit_t e;
     if (!json_get_value(json, "image", s, sizeof(s)) || !s[0]) {
         int kind = signal_engine_image_kind();
-        char payload[112];
-        snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
-                 kind, signal_engine_image_name(kind), signal_engine_fpga_version(),
-                 signal_engine_fpga_features());
+        bp_emit_init(&e, payload, sizeof(payload));
+        bp_emit(&e, "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u,",
+                kind, signal_engine_image_name(kind), signal_engine_fpga_version(),
+                signal_engine_fpga_features());
+        ice40_switch_emit(&e);
+        bp_emit_raw(&e, "}");
         send_ok_str(conn_id, payload);
         return;
     }
@@ -367,31 +375,72 @@ void handle_fpga_image(int conn_id, const char *json) {
             return;
         }
     }
-    if (!heavy_begin(conn_id)) return;
-    int rc = fpga_warmboot((uint8_t)img);
+    uint8_t ver = 0, feats = 0;
+    bool skipped = false;
+    if (!fpga_image_swap_ex(conn_id, img, json_flag(json, "force"), &skipped, &ver, &feats)) return;
+    bp_emit_init(&e, payload, sizeof(payload));
+    bp_emit(&e, "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u,\"switched\":%s,",
+            img, signal_engine_image_name(img), ver, feats, skipped ? "false" : "true");
+    ice40_switch_emit(&e);
+    bp_emit_raw(&e, "}");
+    send_ok_str(conn_id, payload);
+}
+
+bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out) {
+    return fpga_image_swap_ex(conn_id, img, false, NULL, ver_out, feats_out);
+}
+
+bool fpga_image_swap_ex(int conn_id, int img, bool force, bool *skipped_out,
+                        uint8_t *ver_out, uint8_t *feats_out) {
+    if (!heavy_begin(conn_id)) return false;
+    bool skipped = false;
+    int rc = fpga_warmboot_ex((uint8_t)img, force, &skipped);
+    if (skipped_out) *skipped_out = skipped;
     uint8_t ver = signal_engine_fpga_version();
     uint8_t feats = signal_engine_fpga_features();
     heavy_release(conn_id);
-    if (rc == -1) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return; }
+    if (rc == -1) { send_error(conn_id, "image must be 0 (loop), 1 (deep) or 2 (emulation)"); return false; }
     if (rc == -2) {
         char msg[128];
         snprintf(msg, sizeof(msg), "image %d is not installed on the pod (W25Q slot %s is empty): "
                  "install the gateware blobs", img, blob_name((blob_id_t)ice40_image_slot(img)));
         send_error(conn_id, msg);
-        return;
+        return false;
     }
-    if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return; }
-    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return; }
-    if (rc != 0)  { send_error(conn_id, "image switch failed"); return; }
+    if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return false; }
+    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return false; }
+    if (rc != 0)  { send_error(conn_id, "image switch failed"); return false; }
+    if (skipped) {   /* nothing changed: no caps resend, no DAC re-park */
+        if (ver_out) *ver_out = ver;
+        if (feats_out) *feats_out = feats;
+        return true;
+    }
     /* The live image (and thus dac_control_loop / dac_deep_replay / dac_replay_max_samples) just
        changed — re-announce so the cloud/webapp gate on the NEW image, not the connect-time one. */
     cloud_client_request_caps_resend();
     /* A reconfigure can glitch the DAC's SPI lines: put an output stage back on its park level. */
     if (dac_limits_get()->enabled) (void)dac_limits_park_now();
-    char payload[112];
-    snprintf(payload, sizeof(payload), "{\"image\":%d,\"name\":\"%s\",\"version\":%u,\"features\":%u}",
-             img, signal_engine_image_name(img), ver, feats);
-    send_ok_str(conn_id, payload);
+    if (ver_out) *ver_out = ver;
+    if (feats_out) *feats_out = feats;
+    return true;
+}
+
+/* Gateware v65 split the bus masters out of the emulation image (FPGA_FEATURE_BUS_MASTERS).
+   On that image with no emulated I2C/SPI/UART sensor running, swap to the loop image first
+   (about 80 ms, as the first sensor_start swaps the other way), so a client that never heard of the
+   split keeps working.  With a digital sensor running, refuse with BP0059: the swap would stop it. */
+bool require_bus_masters(int conn_id, const char *feature) {
+    if (gw_caps()->bus_masters) return true;
+    /* The cached FPGA_FEATURES could predate a reconfigure: read it once more before swapping. */
+    (void)signal_engine_fpga_features();
+    if (gw_caps()->bus_masters) return true;
+    char names[96];
+    if (sensor_mgr_digital_names(names, sizeof(names))) {
+        bp_err_fpga_image_sensors_first(conn_id, feature, "loop");
+        return false;
+    }
+    LOG_I("[image] %s needs the bus masters: leaving the emulation image for the loop image\n", feature);
+    return fpga_image_swap(conn_id, 0, NULL, NULL);
 }
 
 /* {"cmd":"psram_recover"} — one-click remote recovery for an inoperable PSRAM datapath: ack,
@@ -419,7 +468,9 @@ void handle_psram_ping(int conn_id, const char *json) {
     int n = 16;
     if (json_get_value(json, "count", v, sizeof(v))) n = atoi(v);
     if (n < 4)   n = 4;
-    if (n > 256) n = 256;
+    /* Gateware v68 fails the self-test above 128 words (the capture datapath itself is fine:
+       ADC/LA captures write far more). Cap it until the self-test logic is fixed. */
+    if (n > 128) n = 128;
     if (!heavy_begin(conn_id)) return;
     int bad = -1;
     int rc = signal_engine_capture_selftest_at(BP_LOG_DEBUG, n, &bad);   /* the reply has the result */

@@ -21,6 +21,13 @@ void blob_store_on_installed(blob_id_t id)
            (the firmware was installed before its gateware), or this is a new image of the same
            version for the kind that runs (its identity differs from the recorded one). */
         signal_engine_gateware_update();
+        /* A new deep or emulation image of the kind that runs: load it from its slot (no flash
+           write; gw0 is handled above, it is the image the iCE40 boots from). */
+        {
+            const int kind = id == BLOB_GW1 ? 1 : id == BLOB_GW2 ? 2 : 0;
+            if (kind != 0 && signal_engine_image_kind() == kind && blob_state(id) == BLOB_STATE_OK)
+                (void)fpga_warmboot_ex((uint8_t)kind, true, NULL);
+        }
         /* A blank iCE40 booted without gateware, so boot could not park the DAC8554 or switch the
            +-14 V supply on (analog v3r2).  Do it now that the gateware runs; once on, a later
            install must not park outputs that are in use. */

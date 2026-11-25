@@ -1,5 +1,5 @@
 /* xip_mod_ctrl_flash.c — flashing over USB control transfers: DFU/DfuSe and Teensy HalfKay
- * (ctrl_flash.h).
+ * and the RP2040/RP2350 PICOBOOT interface (ctrl_flash.h).
  *
  * Runs from the W25Q (xip_image.h): no static data, no callbacks; the ops in the context are
  * internal functions. Also built into the host tests.
@@ -113,8 +113,15 @@ static int dfu_descriptors(ctrl_flash_ctx_t *c)
         uint32_t dl = b[off], type = b[off + 1];
         if (dl < 2 || off + dl > total) break;
         if (type == 4 && dl >= 9) {
-            in_dfu = !found && b[off + 5] == 0xFE && b[off + 6] == 0x01 && b[off + 7] == 0x02 && b[off + 3] == 0;
-            if (in_dfu) { c->itf = b[off + 2]; c->i_string = b[off + 8]; found = true; }
+            /* The first DFU-mode interface (alternate setting 0) is the one; its functional
+               descriptor may follow its other alternate settings (STM32 ROMs: one per memory, the
+               functional descriptor after the last), so those keep in_dfu on. */
+            bool dfu = b[off + 5] == 0xFE && b[off + 6] == 0x01 && b[off + 7] == 0x02;
+            if (!found && dfu && b[off + 3] == 0) {
+                c->itf = b[off + 2]; c->i_string = b[off + 8]; found = true; in_dfu = true;
+            } else {
+                in_dfu = found && dfu && b[off + 2] == c->itf;
+            }
         } else if (type == 0x21 && in_dfu && dl >= 7) {
             xfer = rd16(b + off + 5);
             bcd = dl >= 9 ? rd16(b + off + 7) : 0x0100u;
@@ -358,6 +365,201 @@ static int halfkay_start(ctrl_flash_ctx_t *c)
     return CTRL_FLASH_RUNNING;
 }
 
+/* ---- PICOBOOT (RP2040, RP2350 in BOOTSEL) -------------------------------------------------- */
+
+#define PB_MAGIC        0x431FD10Bu
+#define PB_EXCLUSIVE    0x01
+#define PB_REBOOT       0x02   /* RP2040 */
+#define PB_ERASE        0x03
+#define PB_READ         0x84
+#define PB_WRITE        0x05
+#define PB_EXIT_XIP     0x06
+#define PB_REBOOT2      0x0A   /* RP2350 */
+#define PB_FLASH_BASE   0x10000000u
+#define PB_FLASH_MAX    0x01000000u   /* 16 MB */
+#define PB_SECTOR       4096u
+#define PB_PAGE         256u
+#define RP_VID 0x2E8Au
+#define RP2040_PID 0x0003u
+#define RP2350_PID 0x000Fu
+
+static void put32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+
+/* A failed command: ask the loader why (its status code), reset the interface (clears stalls). */
+static int pb_fail(ctrl_flash_ctx_t *c, int rc)
+{
+    if (c->ep_in) {
+        uint8_t st[16];
+        uint32_t got = 0;
+        if (rc == CTRL_FLASH_E_IO && ctrl(c, 0xC1, 0x42, 0, c->itf, st, 16, &got) == 0 && got >= 8 && st[4] != 0) {
+            c->dfu_status = st[4];
+            rc = CTRL_FLASH_E_STATUS;
+        }
+        (void)ctrl(c, 0x41, 0x41, 0, c->itf, NULL, 0, NULL);
+    }
+    return finish(c, rc);
+}
+
+/* One command: the 32-byte command block, its data stage (dlen bytes, IN when id has bit 7) and
+   the acknowledge (a zero-length packet the other way). 0 = ok, else CTRL_FLASH_E_IO. */
+static int pb_cmd(ctrl_flash_ctx_t *c, uint8_t id, uint8_t size, uint32_t a0, uint32_t a1, uint32_t a2,
+                  uint32_t a3, uint8_t *data, uint32_t dlen)
+{
+    uint8_t cmd[32], ack[64];
+    uint32_t got = 0;
+    const bool in = (id & 0x80u) != 0;
+    memset(cmd, 0, sizeof(cmd));
+    put32(cmd, PB_MAGIC);
+    put32(cmd + 4, ++c->pb_token);
+    cmd[8] = id; cmd[9] = size;
+    put32(cmd + 12, dlen);
+    put32(cmd + 16, a0); put32(cmd + 20, a1); put32(cmd + 24, a2); put32(cmd + 28, a3);
+    if (c->ops.bulk(c->ops.io, c->ep_out, cmd, 32, &got) != 0 || got != 32) return CTRL_FLASH_E_IO;
+    if (dlen) {
+        if (c->ops.bulk(c->ops.io, in ? c->ep_in : c->ep_out, data, dlen, &got) != 0 || got != dlen)
+            return CTRL_FLASH_E_IO;
+    }
+    if (in) return c->ops.bulk(c->ops.io, c->ep_out, ack, 0, &got) == 0 ? 0 : CTRL_FLASH_E_IO;
+    return (c->ops.bulk(c->ops.io, c->ep_in, ack, c->mps, &got) == 0 && got == 0) ? 0 : CTRL_FLASH_E_IO;
+}
+
+static int pb_descriptors(ctrl_flash_ctx_t *c)
+{
+    uint8_t *b = c->buf;
+    uint32_t got = 0;
+    if (ctrl(c, 0x80, 6, 0x0200, 0, b, 9, &got) != 0 || got < 9 || b[1] != 2) return CTRL_FLASH_E_IO;
+    uint32_t total = rd16(b + 2);
+    if (total > CTRL_FLASH_BUF) total = CTRL_FLASH_BUF;
+    if (total < 9u) return CTRL_FLASH_E_NO_PICOBOOT;
+    if (ctrl(c, 0x80, 6, 0x0200, 0, b, (uint16_t)total, &got) != 0 || got < 9) return CTRL_FLASH_E_IO;
+    if (got < total) total = got;
+    /* The first vendor-specific interface (alternate 0) with a bulk IN and a bulk OUT endpoint. */
+    bool cand = false, found = false;
+    uint8_t itf = 0, ein = 0, eout = 0, mps = 0;
+    for (uint32_t off = b[0]; off + 2 <= total;) {
+        uint32_t dl = b[off], type = b[off + 1];
+        if (dl < 2 || off + dl > total) break;
+        if (type == 4 && dl >= 9) {
+            if (found) break;
+            cand = b[off + 5] == 0xFF && b[off + 3] == 0;
+            if (cand) { itf = b[off + 2]; ein = eout = 0; }
+        } else if (type == 5 && dl >= 7 && cand && (b[off + 3] & 3u) == 2u) {
+            uint32_t m = rd16(b + off + 4) & 0x7FFu;
+            if (m < 8u || m > 64u) { cand = false; }
+            else {
+                if (b[off + 2] & 0x80u) ein = b[off + 2]; else eout = b[off + 2];
+                mps = (uint8_t)m;
+                if (ein && eout) found = true;
+            }
+        }
+        off += dl;
+    }
+    if (!found) return CTRL_FLASH_E_NO_PICOBOOT;
+    c->itf = itf; c->ep_in = ein; c->ep_out = eout; c->mps = mps;
+    return 0;
+}
+
+static int picoboot_start(ctrl_flash_ctx_t *c)
+{
+    if (c->ops.vid != RP_VID || (c->ops.pid != RP2040_PID && c->ops.pid != RP2350_PID))
+        return finish(c, CTRL_FLASH_E_NOT_RP2);
+    if (c->address == 0) c->address = PB_FLASH_BASE;
+    if (c->address < PB_FLASH_BASE || c->address - PB_FLASH_BASE >= PB_FLASH_MAX ||
+        c->len > PB_FLASH_MAX - (c->address - PB_FLASH_BASE) || (c->address & (PB_SECTOR - 1u)) != 0 ||
+        c->ops.bulk == NULL)
+        return finish(c, CTRL_FLASH_E_ARGS);
+    const uint32_t sectors = (c->len + PB_SECTOR - 1u) / PB_SECTOR, pages = (c->len + PB_PAGE - 1u) / PB_PAGE;
+    c->total = sectors + 2u * pages;
+    c->pb_step = 0;
+    c->phase = CTRL_PH_DESC;
+    return CTRL_FLASH_RUNNING;
+}
+
+static int picoboot_step(ctrl_flash_ctx_t *c)
+{
+    int rc;
+    switch (c->phase) {
+    case CTRL_PH_DESC:
+        switch (c->pb_step) {
+        case 0:
+            rc = pb_descriptors(c);
+            if (rc != 0) return finish(c, rc);
+            break;
+        case 1:   /* PICOBOOT_IF_RESET: a clean interface */
+            if (ctrl(c, 0x41, 0x41, 0, c->itf, NULL, 0, NULL) != 0) return pb_fail(c, CTRL_FLASH_E_IO);
+            break;
+        case 2:   /* exclusive access: the drive is read-only meanwhile */
+            rc = pb_cmd(c, PB_EXCLUSIVE, 1, 1, 0, 0, 0, NULL, 0);
+            if (rc != 0) return pb_fail(c, rc);
+            break;
+        default:  /* the flash must not be in XIP mode to be erased and written */
+            rc = pb_cmd(c, PB_EXIT_XIP, 0, 0, 0, 0, 0, NULL, 0);
+            if (rc != 0) return pb_fail(c, rc);
+            c->phase = CTRL_PH_ERASE;
+            c->erase_addr = c->address;
+            return CTRL_FLASH_RUNNING;
+        }
+        c->pb_step++;
+        return CTRL_FLASH_RUNNING;
+    case CTRL_PH_ERASE:
+        if (c->erase_addr >= c->address + c->len) {
+            c->phase = CTRL_PH_WRITE;
+            c->pos = 0;
+            return CTRL_FLASH_RUNNING;
+        }
+        rc = pb_cmd(c, PB_ERASE, 8, c->erase_addr, PB_SECTOR, 0, 0, NULL, 0);
+        if (rc != 0) return pb_fail(c, rc);
+        c->erase_addr += PB_SECTOR;
+        c->done++;
+        return CTRL_FLASH_RUNNING;
+    case CTRL_PH_WRITE: {
+        if (c->pos >= c->len) { c->phase = CTRL_PH_VERIFY; c->pos = 0; return CTRL_FLASH_RUNNING; }
+        uint32_t n = c->len - c->pos < PB_PAGE ? c->len - c->pos : PB_PAGE;
+        memset(c->buf, 0xFF, PB_PAGE);
+        if (c->ops.src(c->ops.io, c->pos, c->buf, n) != 0) return pb_fail(c, CTRL_FLASH_E_SRC);
+        rc = pb_cmd(c, PB_WRITE, 8, c->address + c->pos, PB_PAGE, 0, 0, c->buf, PB_PAGE);
+        if (rc != 0) return pb_fail(c, rc);
+        c->pos += PB_PAGE;
+        c->done++;
+        return CTRL_FLASH_RUNNING;
+    }
+    case CTRL_PH_VERIFY: {
+        if (c->pos >= c->len) {
+            c->phase = CTRL_PH_LEAVE;
+            return CTRL_FLASH_RUNNING;
+        }
+        uint32_t n = c->len - c->pos < PB_PAGE ? c->len - c->pos : PB_PAGE;
+        uint8_t *want = c->buf + PB_PAGE;
+        memset(want, 0xFF, PB_PAGE);
+        if (c->ops.src(c->ops.io, c->pos, want, n) != 0) return pb_fail(c, CTRL_FLASH_E_SRC);
+        rc = pb_cmd(c, PB_READ, 8, c->address + c->pos, PB_PAGE, 0, 0, c->buf, PB_PAGE);
+        if (rc != 0) return pb_fail(c, rc);
+        if (memcmp(c->buf, want, PB_PAGE) != 0) {
+            c->fail_addr = c->address + c->pos;
+            return pb_fail(c, CTRL_FLASH_E_VERIFY);
+        }
+        c->pos += PB_PAGE;
+        c->done++;
+        return CTRL_FLASH_RUNNING;
+    }
+    case CTRL_PH_LEAVE:
+        if (!c->leave) {   /* stay in BOOTSEL: the drive is writable again */
+            rc = pb_cmd(c, PB_EXCLUSIVE, 1, 0, 0, 0, 0, NULL, 0);
+            return rc != 0 ? pb_fail(c, rc) : finish(c, CTRL_FLASH_DONE);
+        }
+        /* A normal reboot into the flash image after 500 ms; the loader may drop off the bus
+           before it acknowledges, which is fine. */
+        if (c->ops.pid == RP2350_PID) (void)pb_cmd(c, PB_REBOOT2, 16, 0, 500, 0, 0, NULL, 0);
+        else (void)pb_cmd(c, PB_REBOOT, 12, 0, 0, 500, 0, NULL, 0);
+        return finish(c, CTRL_FLASH_DONE);
+    default:
+        return finish(c, CTRL_FLASH_E_ARGS);
+    }
+}
+
 /* ---- entry ---------------------------------------------------------------------------------- */
 
 int ctrl_flash_step(ctrl_flash_ctx_t *c)
@@ -371,9 +573,11 @@ int ctrl_flash_step(ctrl_flash_ctx_t *c)
         if (c->len == 0) return finish(c, CTRL_FLASH_E_ARGS);
         if (c->mode == CTRL_FLASH_HALFKAY) return halfkay_start(c);
         if (c->mode == CTRL_FLASH_DFU) return dfu_start(c);
+        if (c->mode == CTRL_FLASH_PICOBOOT) return picoboot_start(c);
         return finish(c, CTRL_FLASH_E_ARGS);
     }
     if (c->mode == CTRL_FLASH_HALFKAY) return halfkay_step(c);
+    if (c->mode == CTRL_FLASH_PICOBOOT) return picoboot_step(c);
     if (c->phase == CTRL_PH_LAYOUT) return dfu_layout_step(c);
     return dfu_step(c);
 }

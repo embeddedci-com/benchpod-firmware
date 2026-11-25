@@ -52,10 +52,14 @@ typedef struct {
     bool uart_half_duplex;     /* UART_HALFDUPLEX_MIN_GW     v57 */
     bool uart_de;              /* UART_DE_MIN_GW             v58 */
     bool uart_config2;         /* UART_CONFIG2_MIN_GW        v60 */
+    bool jtag_gw;              /* JTAG_MIN_GW                v61 (some image has it) */
     /* ---- the running image (FPGA_FEATURES bits, gateware v22+) ---- */
     bool img_control_loop;     /* FPGA_FEATURE_CONTROL_LOOP */
     bool img_deep_replay;      /* FPGA_FEATURE_DEEP_REPLAY */
     bool img_emulation;        /* FPGA_FEATURE_EMULATION */
+    bool jtag;                 /* JTAG_MIN_GW + FPGA_FEATURE_JTAG: the running image has the JTAG master */
+    bool bus_masters;          /* the running image has SWD, the SPI master and the I2C master: every image
+                                  up to v64, FPGA_FEATURE_BUS_MASTERS from BUS_MASTERS_SPLIT_MIN_GW v65 */
 } gw_caps_t;
 
 /* The capabilities of a gateware version and FPGA_FEATURES byte.  Pure (host tests). */

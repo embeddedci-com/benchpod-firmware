@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 13
+revision = 21
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -207,6 +207,21 @@ date = "2026-11-20"
 firmware = "4.0.2"
 gateware = 60
 date = "2026-11-20"
+
+[[releases]]
+firmware = "4.0.3"
+gateware = 60
+date = "2026-11-23"
+
+[[releases]]
+firmware = "4.0.4"
+gateware = 62
+date = "2026-11-23"
+
+[[releases]]
+firmware = "4.0.5"
+gateware = 68
+date = "2026-11-25"
 
 [features.gpio]
 rev = 1
@@ -893,7 +908,8 @@ rev = 10
 firmware = "4.0.0"
 docs = "API.md#usb_host--usb-host-mode"
 dated = "code"
-note = "Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."
+status = "retired"
+note = "Retired: replaced by usb_host_mode (rev 14), the first release that has it. Development builds only (make USB_HOST=1), never in a release: usb_host enabled true|false, port usb_a|usb_c, timeout_s; refusals BP0076 to BP0079 (merged from main as BP0031 to BP0034 and renumbered after the 4.0.0 codes)."
 
 [features.dac_pinout_guard]
 rev = 11
@@ -915,3 +931,100 @@ firmware = "4.0.1"
 docs = "API.md#lan_clients--paired-computers"
 dated = "code"
 note = "LAN pairing, on by default and on every pod updated from older firmware: a computer on Ethernet or Wi-Fi gets only ping, status, diag, cloud_status, identity_public and lan_tls (reads) until its TLS client certificate's public key (SHA-256 of the DER SubjectPublicKeyInfo) is on the pod's list; everything else is refused with BP0081 lan_not_paired (args cmd). lan_clients lists (12 a reply, offset), adds (add name, spki_sha256), removes (remove name or 8+ hex digits) and clears, changes over the USB link or the cloud only; BP0082 lan_clients_full (args max). lan_policy pairing true|false (USB, USB link or cloud). status has lan_pairing and lan_paired (null when the connection needs no pairing). Port 8443 asks every client for a certificate (optional). SCPI on the external LAN needs a paired TLS connection. Console: lan-pairing, lan-clients. Rolled back to 4.0.0, the pod keeps its certificate (a version 1 copy of the record is written as the newest) and forgets its paired computers."
+
+[features.usb_host_mode]
+rev = 14
+firmware = "4.0.3"
+docs = "API.md#usb_host--usb-host-mode"
+dated = "code"
+note = "USB host mode: the pod hosts the board's USB port at full speed for timeout_s (1 to 3600, default 60) and reports what enumerates: IDs, strings (47 characters, ASCII), speed, timing, the first configuration (up to 1024 bytes, 8 interfaces listed, all counted, truncated and malformed flags) and enumeration (none, running, done, stuck). Port usb_a (the USB-A host port, digital v3r4) or usb_c (the pod's own USB-C connector through a breakout, on pods without a USB-A host port; the pod supplies no VBUS there). Refused over the pod's own USB (BP0076); BP0077 no such port, BP0078 no crystal, BP0079 already on the other port."
+
+[features.usb_flash]
+rev = 14
+firmware = "4.0.3"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+dated = "code"
+note = "Flash a board on the USB host port from a file staged with load_bin psram: uf2 (UF2 bootloaders), file (drag-and-drop drives and USB sticks and SD cards, FAT12/FAT16/FAT32/exFAT), dfu (USB DFU and STM32 DfuSe), teensy (HalfKay), avr (Arduino AVR bootloaders: optiboot, the old Nano bootloader, Caterina after the 1200 baud touch, the Mega 2560's STK500v2), samd (SAM-BA with Arduino's X/Y commands, after the touch), esp (an ESP32's ROM loader over its own USB or a dev kit's FTDI, CP210x or CH34x chip, 460800 there). Runs in the background (poll usb_flash, abort); the flash logic runs from the xip blob. BP0084 refused (why), BP0083 xip, BP0048 storage bus busy."
+
+[features.usb_flash_readback]
+rev = 15
+firmware = "4.0.3"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+dated = "code"
+note = "usb_flash can read the drive back after a flash: check_fail_txt (file mode) waits for the loader's drive to come back and reports FAIL.TXT's first line as the failure reason; verify (uf2 mode) compares the loader's CURRENT.UF2 with the file when the board stays in its loader, and says so when it left. The reply has a note field."
+
+[features.uart_usb]
+rev = 15
+firmware = "4.0.3"
+docs = "API.md#uart_proxy_start--transparent-uart-bridge"
+dated = "code"
+note = "uart_proxy_start with port usb: the transparent UART bridge carries the serial port of the board the pod hosts (CDC ACM, or an FTDI, CP210x or CH34x chip) instead of the soft UART on the LA pins, so a test reads the boot log over the cable the board was flashed through. baud, dtr, rts, data_bits, parity and stop_bits apply; no LA pin, pull-up or I/O voltage is used. Same raw byte stream, +++ escape and close on socket close; the session ends with host mode. usb_serial reports the port's state (read only). BP0085 no serial port, BP0086 port busy (usb_flash or usb_check). A 4 KB receive ring lives while the session is open."
+
+[features.usb_check]
+rev = 15
+firmware = "4.0.3"
+docs = "API.md#usb_check--check-the-boards-usb-firmware"
+dated = "code"
+note = "Checks of the board's own USB firmware on the USB host port, with its VBUS on eFuse 1: enumerate (power-on to pull-up, descriptor and mounted, min/avg/max over count cycles), power (eFuse 1 current against bMaxPower), suspend (suspended current against 2.5 mA, resume, still answers), reset (port resets, re-enumeration time), replug (VBUS dropouts of 5 to 500 ms). Background job (poll usb_check, abort). BP0087 refused (why), BP0088 not powered from eFuse 1."
+
+[features.usb_hid]
+rev = 15
+firmware = "4.0.3"
+dated = "code"
+docs = "API.md#usb_hid--hid-interfaces-and-input-reports"
+note = "usb_hid (T0): the HID interfaces of the board on the USB host port (the first two) with their report descriptors in hex (offset pages through a long one). capture:true starts catching input reports on all of them into one ring (each report with its instance and the milliseconds since the start, the report bytes in hex), read:true drains it (count 1 to 32, timeout_ms up to 10000 to wait for a first report, optional instance filter, dropped counts a full ring), capture:false stops it. The capture also ends when the board detaches or host mode ends. A read without a capture starts one. Refused while a usb_flash or usb_check runs."
+
+[features.usb_flash_picoboot]
+rev = 15
+firmware = "4.0.3"
+dated = "code"
+docs = "API.md#usb_flash--flash-a-board-over-usb"
+note = "usb_flash mode picoboot: a Raspberry Pi Pico (RP2040) or Pico 2 (RP2350) in BOOTSEL through its PICOBOOT interface: exclusive access, exit XIP, erase the 4 KB sectors the image covers, write 256-byte pages at address (default 0x10000000), read every page back and compare, then reboot into the program (leave false stays in BOOTSEL). Any other board is refused with BP0084."
+
+[features.jtag]
+rev = 16
+firmware = "4.0.4"
+gateware = 61
+gw_const = "JTAG_MIN_GW"
+dated = "code"
+docs = "dap-over-tunnel.md#jtag"
+note = "dap_start with tck, tms, tdi and tdo (optional trst) makes the pod a CMSIS-DAP JTAG probe: DAP_JTAG_Sequence, DAP_JTAG_Configure, DAP_JTAG_IDCODE and JTAG-DP transfers; with SWD pins too, DAP_Connect switches. Loop and deep images only (not the emulation image): BP0058 / BP0059 there, BP0017 on older gateware."
+
+[features.prog_flash]
+rev = 17
+firmware = "4.0.4"
+board = "any"
+dated = "code"
+docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
+note = "prog_flash flashes a chip over its own programming pins: AVR UPDI, PIC ICSP (low-voltage entry), Silicon Labs C2, AVR TPI, XMEGA PDI. status lists the protocols this build has; a protocol that is not done yet answers not supported."
+
+[features.bus_masters_image]
+rev = 18
+firmware = "4.0.5"
+gateware = 65
+gw_const = "BUS_MASTERS_SPLIT_MIN_GW"
+dated = "code"
+docs = "API.md#fpga_image--switch-the-running-gateware-image"
+note = "Gateware v65 has no bus masters in the emulation image: SWD (flash and debug), JTAG, the SPI master, the I2C master (and the GPIO expanders on it) and the two-wire pin programmers need the loop or deep image. dap_start, spi_start, i2c_start and prog_flash info on the emulation image switch to the loop image first (2 to 3 s) when no I2C, SPI or UART sensor runs; with one running they answer BP0059. prog_flash start answers BP0058 (its data is staged for the deep image). FPGA_FEATURES bit 5 (0x20) marks the images that have them."
+
+[features.dap_id]
+rev = 19
+firmware = "4.0.5"
+dated = "code"
+docs = "dap-over-tunnel.md#target-id-read"
+note = "dap_start with \"op\":\"id\" reads the IDs of the chip on the wire and answers one JSON object, without switching the connection to CMSIS-DAP: over SWD the DPIDR, TARGETID (DP version 2), AP0 IDR, the Cortex CPUID and up to 8 words of target memory from a \"read\" list (null when a read faults); over JTAG the IDCODEs of the chain. No halt, no reset, no target writes. Same gates and pin claims as dap_start."
+
+[features.dac_out_cal1]
+rev = 20
+firmware = "next"
+board = "analog"
+dated = "code"
+docs = "API.md#dac_out--route-an-output-path-and-set-a-calibrated-voltage"
+note = "dac_out and generate take path cal1: the level is set on the 5 V stage routed into the ADC loopback (K1 energized, the 5 V output disconnected meanwhile), with the 5 V calibration, so adc_read source cal1 needs no relay switching in between. With DAC limits on an inverted stage, cal1 is refused like any route away from the limited output (it used to be allowed on the 5v path)."
+
+[features.prog_named]
+rev = 21
+firmware = "next"
+dated = "code"
+docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
+note = "prog_flash takes the chip's protocol options as named fields (updi flash_base; pic cmd_set, pc, ee_erase, cp_high, q10, id_split, key_flip, cp_bit; tpi write_words, page_erase; c2 fpdat, no_setup) instead of the packed flags integer, which is still accepted but not together with a named field."

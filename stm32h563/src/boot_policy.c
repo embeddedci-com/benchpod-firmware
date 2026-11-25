@@ -23,13 +23,6 @@ const char *boot_policy_off_str(uint32_t off) {
     }
 }
 
-int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_kind, int configured)
-{
-    if (!configured) return 0;
-    if (running == 0 || embedded == 0 || running == embedded) return -1;
-    return (running_kind == 1 || running_kind == 2) ? running_kind : 0;
-}
-
 /* CRC-32 (IEEE, reflected), bitwise: a 44-byte record, at boot and after a gateware write. */
 static uint32_t ident_crc(const void *data, size_t n)
 {
@@ -68,17 +61,23 @@ gw_ident_match_t gw_ident_match(const gw_ident_t *rec, int slot_ok, uint16_t slo
                ? GW_IDENT_SAME : GW_IDENT_DIFFERS;
 }
 
-gw_action_t boot_policy_gateware_action(uint8_t running, uint8_t embedded, int running_kind,
-                                        int configured, gw_ident_match_t ident, int *img)
+
+gw_plan_t boot_policy_gateware_plan(uint8_t running, uint8_t embedded, int running_kind,
+                                    int configured, gw_ident_match_t boot_ident)
 {
-    int v = boot_policy_gateware_image(running, embedded, running_kind, configured);
-    if (v >= 0) { *img = v; return GW_ACT_WRITE; }
-    /* Same version (or unknown): only a configured iCE40 that answers, on a known build. */
-    if (!configured || running == 0 || embedded == 0 || running != embedded) return GW_ACT_NONE;
-    int k = (running_kind == 1 || running_kind == 2) ? running_kind : 0;
-    switch (ident) {
-    case GW_IDENT_DIFFERS: *img = k; return GW_ACT_WRITE;
-    case GW_IDENT_UNKNOWN: *img = k; return GW_ACT_COMPARE;
-    default:               return GW_ACT_NONE;
+    gw_plan_t p = { GW_ACT_NONE, -1 };
+    if (!configured) { p.boot = GW_ACT_WRITE; return p; }   /* any gateware beats none */
+    if (running == 0 || embedded == 0) return p;
+    const int k = (running_kind == 1 || running_kind == 2) ? running_kind : 0;
+    switch (boot_ident) {
+    case GW_IDENT_DIFFERS: p.boot = GW_ACT_WRITE;   break;
+    case GW_IDENT_UNKNOWN: p.boot = GW_ACT_COMPARE; break;
+    default:               break;
     }
+    if (p.boot != GW_ACT_NONE) {
+        if (k != 0) p.load = k;
+    } else if (running != embedded) {
+        p.load = k;
+    }
+    return p;
 }

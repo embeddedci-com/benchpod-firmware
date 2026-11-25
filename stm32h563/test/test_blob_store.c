@@ -91,18 +91,30 @@ static void test_limits(void) {
     CHECK(blob_listed(BLOB_GW0) && blob_from_name("gw1") == BLOB_GW1, "the C3 setting hid a gateware slot");
     blob_store_set_esp_listed(true);
     CHECK(blob_listed(BLOB_ESP) && blob_from_name("esp") == BLOB_ESP, "esp not listed again");
-    /* xip shares the start of the old esp slot: listed only when asked and without the esp blob. */
+    /* xip uses the start of the old esp slot (no firmware keeps a C3 copy there any more): listed
+       when the board can run it, with or without the C3. */
     CHECK(!blob_listed(BLOB_XIP) && blob_from_name("xip") == -1, "xip listed by default");
     blob_store_set_xip_listed(true);
-    CHECK(!blob_listed(BLOB_XIP), "xip listed next to the esp blob");
+    CHECK(blob_listed(BLOB_XIP) && blob_listed(BLOB_ESP), "xip and esp not both listed on a pod with the C3");
     blob_store_set_esp_listed(false);
-    CHECK(blob_listed(BLOB_XIP) && blob_from_name("xip") == BLOB_XIP, "xip not listed without the esp blob");
+    CHECK(blob_listed(BLOB_XIP) && blob_from_name("xip") == BLOB_XIP, "xip not listed without the C3");
     CHECK(blob_slot_base(BLOB_XIP) == 0x200000u && blob_slot_capacity(BLOB_XIP) == 0x40000u - BLOB_HDR_SIZE,
           "xip slot: 256 KB at the start of the old esp slot");
     CHECK(blob_slot_base(BLOB_XIP) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_XIP) <= 0x5FF000u,
           "xip slot reaches the C3 record sector");
+    /* xip_prog: the next 256 KB, listed with xip */
+    CHECK(blob_listed(BLOB_XIP_PROG) && blob_from_name("xip_prog") == BLOB_XIP_PROG, "xip_prog not listed with xip");
+    CHECK(blob_slot_base(BLOB_XIP_PROG) == 0x240000u && blob_slot_capacity(BLOB_XIP_PROG) == 0x40000u - BLOB_HDR_SIZE,
+          "xip_prog slot: 256 KB after the xip slot");
+    CHECK(blob_slot_base(BLOB_XIP_PROG) >= blob_slot_base(BLOB_XIP) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_XIP) &&
+          blob_slot_base(BLOB_XIP_PROG) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_XIP_PROG) <= 0x5FF000u,
+          "xip_prog slot overlaps xip or reaches the C3 record sector");
     blob_store_set_xip_listed(false);
+    CHECK(!blob_listed(BLOB_XIP_PROG) && blob_from_name("xip_prog") == -1, "xip_prog listed without xip");
+    blob_store_set_xip_listed(true);
     blob_store_set_esp_listed(true);
+    CHECK(blob_listed(BLOB_XIP_PROG), "xip_prog not listed on a pod with the C3");
+    blob_store_set_xip_listed(false);
     CHECK(blob_slot_base(BLOB_PROXY) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_PROXY) <= blob_slot_base(BLOB_GW2) &&
           blob_slot_base(BLOB_GW2) + BLOB_HDR_SIZE + blob_slot_capacity(BLOB_GW2) <= blob_slot_base(BLOB_ESP),
           "gw2 overlaps the proxy or esp slot");

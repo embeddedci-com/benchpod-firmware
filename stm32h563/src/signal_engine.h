@@ -74,7 +74,8 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz);
 
 /* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
-   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (4 + 51) ~= 873 kS/s;
+   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (4 + 75) ~= 608 kS/s on
+   gateware v67+, 716 kS/s on v66, 48 MHz / (4 + 51) ~= 873 kS/s before;
    faster requests are clamped to it). Replay a captured trace at the rate it was captured at,
    so the playback time base matches the recording. */
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
@@ -86,7 +87,9 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
    the whole 8 MB region (up to FPGA_DAC_REPLAY_MAX_SAMPLES) — enough to replay a
    full stored ADC recording.  The caller must have staged the bytes into PSRAM and
    released the shared bus (psram_bus_release) so the iCE40 can read.  Pass 0 rate
-   for the max clock (48 MHz / (4 + 52) ~= 857 kS/s from PSRAM; faster requests are clamped). */
+   for the max clock (48 MHz / (4 + 76) = 600 kS/s from PSRAM on gateware v67+, 706 kS/s on v66,
+   857 kS/s before;
+   faster requests are clamped). */
 int dac_replay_psram(uint32_t count, float sample_rate_hz);
 
 /* The sample rate (S/s, rounded) the last dac_generate_arbitrary_rate / dac_replay_psram plays at:
@@ -182,6 +185,10 @@ uint16_t fpga_dac_loop_input(void);
 #define FPGA_FEATURE_CONTROL_LOOP  0x01u
 #define FPGA_FEATURE_DEEP_REPLAY   0x02u
 #define FPGA_FEATURE_EMULATION     0x04u   /* v54: the sensor-emulation image (I2C/SPI targets, UART2) */
+#define FPGA_FEATURE_JTAG          0x08u   /* v61: the JTAG master (loop and deep images, not emulation) */
+#define FPGA_FEATURE_SWIM          0x10u   /* v62-v64: the SWIM master (deep image only); no image since v65 */
+#define FPGA_FEATURE_BUS_MASTERS   0x20u   /* v65: SWD, the SPI master and the I2C master (loop and deep images;
+                                              up to v64 every image had them and the bit reads 0) */
 uint8_t  signal_engine_fpga_features(void);
 /* The last FPGA_FEATURES reading, without an SPI read (gw_caps.h). */
 uint8_t  signal_engine_fpga_features_cached(void);
@@ -203,12 +210,24 @@ const char *signal_engine_image_name(int kind);
 bool     signal_engine_has_control_loop(void);
 
 /* iCE40 image switch (0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation).  Despite the name
-   this is not an SB_WARMBOOT: it quiesces the PSRAM masters, then REFLASHES the iCE40 config flash
-   from W25Q slot gw0/gw1/gw2 (ice40_reflash_image, ~2 s) and reconfigures, then re-reads
+   this is not an SB_WARMBOOT: it quiesces the PSRAM masters, then loads the image from W25Q slot
+   gw0/gw1/gw2 in SPI slave mode (ice40_load_image, ~80 ms, no flash write; retried once, then
+   written to the config flash as before, ice40_reflash_image, ~2.4 s), then re-reads
    version/features and runs a 16-sample PSRAM-write selftest.  Returns 0 ok, -1 bad image number,
-   -2 the image's W25Q slot is empty (nothing changed), -3 reflash failed twice (falls back to
-   image 0), -5 the PSRAM-write selftest failed on the new image (falls back to image 0). */
+   -2 the image's W25Q slot is empty (nothing changed), -3 every load failed (falls back to
+   image 0), -5 the PSRAM-write selftest failed on the new image (falls back to image 0).
+   When the requested image already runs (CDONE high, a live FPGA_FEATURES read names it, the
+   PSRAM write path works) it returns 0 at once and touches nothing (ice40_switch_plan): no flash
+   write, no DAC stop. fpga_warmboot_ex(image, true, ...) reloads it anyway. *skipped (may be NULL)
+   says which happened. */
 int      fpga_warmboot(uint8_t image);
+int      fpga_warmboot_ex(uint8_t image, bool force, bool *skipped);
+/* The image the last switch loaded (0 after a restart: the iCE40 powers up with the loop image
+   at offset 0). */
+int      signal_engine_wanted_image(void);
+/* After a reload from the config flash (it lands on loop), load the wanted image again from its
+   slot; nothing when it is loop or already runs. Hw worker only. */
+void     signal_engine_restore_wanted_image(void);
 
 /* Bring every gateware PSRAM master (deep-replay reader / closed loop / capture writer) to a
    safe IDLE boundary before firmware grabs the shared quad bus for a runtime reflash or OTA.
@@ -217,10 +236,11 @@ int      fpga_warmboot(uint8_t image);
    on any runtime path that can race a live master (image swap, flash-ice40, OTA commit). */
 void     signal_engine_quiesce_psram_masters(void);
 
-/* DAC peak update rate — clk48/(4+51) ~= 873 kS/s since the DAC divider floor of 4
-   (DAC_MIN_DIVIDER, DAC8554 frame timing; it was clk48/54 ~= 889 kS/s with the DAC8551 floor of 3,
-   and clk48/53 ~= 906 kS/s before that) — used as the bus-load term for a resident deep-DAC
-   replay in the tri-capture bandwidth pre-check. */
+/* DAC peak update rate on gateware up to v65 — clk48/(4+51) ~= 873 kS/s since the DAC divider floor
+   of 4 (DAC_MIN_DIVIDER, DAC8554 frame timing; it was clk48/54 ~= 889 kS/s with the DAC8551 floor of
+   3, and clk48/53 ~= 906 kS/s before that) — used as the bus-load term for a resident deep-DAC
+   replay in the tri-capture bandwidth pre-check.  v66+ peaks at clk48/(4+63) ~= 716 kS/s; the
+   older, higher figure is kept here as the safe upper bound for any gateware. */
 #define DAC_MAX_RATE_HZ  873000u
 
 /* Latch the runtime PSRAM capture bases into the iCE40 (0x32) for dynamic tri-capture
@@ -490,21 +510,16 @@ int fpga_ping(int attempts, uint8_t *out_version);
    from the console after init. */
 int fpga_status_read(uint8_t *out_status);
 
-/* Force the DAC to output a single byte value continuously (loaded as a
-   1-sample waveform).  Useful for DC-level debugging with a multimeter on
-   the analog side.  divider selects the DAC clock rate (sample_rate =
-   FPGA_HFOSC_HZ / divider).  Use a large divider (e.g. 240 → 100 kHz) when
+/* Hold the DAC at one 16-bit code (loaded as a 1-sample waveform): dac_set, dac_out,
+   current_out, the dac_limits park and the DMM calibration.  divider selects the DAC clock rate
+   (sample_rate = FPGA_HFOSC_HZ / divider).  Use a large divider (e.g. 240 → 100 kHz) when
    debugging with a 24 MS/s logic analyzer that can't resolve 12 MHz cleanly.
    dac_stop() halts it. */
-int dac_set_constant(uint8_t value, uint32_t divider);
-
-/* The same hold with the full 16-bit DAC8551 code (dac_set_constant puts its byte in the high
-   half). Used by the 4-20 mA output, where an 8-bit step is 63 uA. */
 int dac_set_constant16(uint16_t code, uint32_t divider);
 
 /* Single-sample ADC capture.  Returns the byte the ADC pins are showing
    after one capture cycle (subject to ADC chip pipeline delay).  Useful
-   paired with dac_set_constant() to verify the analog DAC→ADC path with
+   paired with dac_set_constant16() to verify the analog DAC→ADC path with
    no waveform sequencing involved.
    Returns 0 on success, -1 on timeout. */
 int adc_probe_one(uint8_t *out_value);
@@ -570,6 +585,12 @@ void fpga_swd_poll(void);
 size_t fpga_swd_feed(const uint8_t *in, size_t len,
                      char *reply, size_t reply_cap, size_t *reply_len,
                      bool *exit_to_json, bool *quit);
+/* fpga_swd_feed, but reply[i] is exactly the i-th 'c' sample. fpga_swd_feed hands back
+   SWD_READ's raw reply, whose byte 0 is repeated (swd_ll's ack_lead absorbs it): every sample
+   one slot late. The pin programmers (prog_wire.c) need the exact samples. */
+size_t fpga_swd_feed_exact(const uint8_t *in, size_t len,
+                           char *reply, size_t reply_cap, size_t *reply_len,
+                           bool *exit_to_json, bool *quit);
 
 /* ---- SPI master over the FPGA (gateware >= SPI_MASTER_MIN_GW) ---------------
    The SWD engine's second job: SCK/MOSI/MISO/CS on four LA channels (1..14), so an SWD
@@ -579,7 +600,11 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 #define SPI_MASTER_MIN_GW   45u   /* v45: bytes go out bit 0 first (fpga_spi_xfer reverses) */
 #define SPI_MODES12_MIN_GW  55u   /* v55: SPI modes 1 and 2 (SPI_ARM flags bit 1 inverts SCK) */
 #define I2C_MASTER_MIN_GW   55u   /* v55: the I2C master (SPI_ARM flags bit 2, i2c_master.v) */
+#define JTAG_MIN_GW         61u   /* v61: the JTAG master (SPI_ARM flags bit 3, jtag_seq.v; FPGA_FEATURE_JTAG) */
+#define SWIM_MIN_GW         62u   /* v62: the SWIM master (SPI_ARM flags bit 4, swim_engine.v; FPGA_FEATURE_SWIM).
+                                     Constants only for now: the STM8 flash protocol follows. */
 #define SWD_QUEUE_MIN_GW    45u
+#define BUS_MASTERS_SPLIT_MIN_GW 65u  /* v65: the emulation image has no bus masters (FPGA_FEATURE_BUS_MASTERS) */
 
 /* ---- SWD transfer queue (gateware >= SWD_QUEUE_MIN_GW; the SWD engine must be armed) ----
    See swd_ll_batch() for the layer on top. */
@@ -640,6 +665,21 @@ bool fpga_i2c_armed(void);
    holds SCL low); -3 the engine is no longer armed (gateware reconfigured); -4 no FPGA answer. */
 int  fpga_i2c_run(const uint8_t *tok, size_t n, uint8_t *reply, size_t nreply, uint32_t timeout_us,
                   bool *arb_lost);
+
+/* ---- JTAG master over the FPGA (gateware >= JTAG_MIN_GW and FPGA_FEATURE_JTAG) ----------------
+   The SWD engine's fourth job: TCK/TMS/TDI out and TDO in on four LA channels (1..14); excludes
+   SWD, SPI and I2C.  TCK = 24 MHz / (2 * half), half SPI_HALF_MIN..MAX.  The queue holds
+   DAP_JTAG_Sequence sequences (see jtag_ll.h for the layer that splits and aligns them). */
+#define JTAG_QUEUE_MAX      512u    /* sequence bytes per run, and TDO reply bytes */
+/* 0 ok; -1 bad channel; -2 SWD, SPI, I2C or JTAG already armed; -3 not in this gateware/image. */
+int  fpga_jtag_arm(unsigned tck, unsigned tms, unsigned tdi, unsigned tdo, unsigned half);
+int  fpga_jtag_set_half(unsigned half);
+void fpga_jtag_disarm(void);
+bool fpga_jtag_armed(void);
+/* Run q[0..n) (whole sequences) and read the first nreply TDO bytes.  0 ok; -1 bad args / not
+   armed; -2 not done in time; -3 the engine is no longer armed (gateware reconfigured); -4 no
+   FPGA answer. */
+int  fpga_jtag_run(const uint8_t *q, size_t n, uint8_t *reply, size_t nreply);
 /* Arm again on the same pins (releases both lines, clears the arbitration flag). */
 int  fpga_i2c_recover(unsigned sda, unsigned scl, unsigned half);
 

@@ -7,16 +7,33 @@
 // back-to-back, rate-limited by `divider` (sample period in clk cycles).  Each
 // completed sample is presented on `sample` with a 1-cycle `sample_stb`.
 //
-// CLOCK = 24 MHz control clock (clk), NOT the 48 MHz capture clock.  Running the
-// engine here (SCLK = clk/2 = 12 MHz) is what makes the read work: at 24 MHz
-// SCLK the datasheet tDO (SDO valid after the SCLK edge, up to ~16 ns) did NOT
-// settle within the ~21 ns half-period, so SDO was sampled mid-transition and
-// read back as coupling (0x5555).  At 12 MHz SCLK it settles with margin.  SDO
-// also needs the iCE40 internal pull-up enabled at the top level (defines the
-// idle level so a real driven-low read isn't masked).  `sample`/`sample_stb` stay
-// in this single 24 MHz domain — the capture datapath runs on the same clk, so
-// there is no crossing (post single-clock collapse).
+// CLOCK = 24 MHz control clock (clk), NOT the 48 MHz capture clock.  SCLK = clk/2 =
+// 12 MHz.  At 24 MHz SCLK (the old 48 MHz engine) the round trip (SCLK out through the
+// pad and module cable, tDO, SDO back) did not fit the half-period, so SDO was sampled
+// mid-transition and read back as coupling (0x5555).  SDO also needs the iCE40 internal
+// pull-up (defines the idle level so a real driven-low read isn't masked); the pad's
+// SB_IO is in this module since v63.  `sample`/`sample_stb` stay in this single 24 MHz
+// domain: the capture datapath runs on the same clk, so there is no crossing.
+//
+// v63: SDO is sampled late, for margin with more series resistance on the module cable.
+// Datasheet DS20005947B: tDO (SDO valid after SCLK low) is 9.5 ns max at DVIO 3.3 V (16 ns
+// is the 1.7 V figure), tEN (MSB valid after CNVST low) 10 ns max.
+//   * Each bit is sampled on the FALLING clk edge in the middle of SCLK high, 1.5 clk
+//     (62.5 ns) after the clk edge that drove the SCLK fall that shifted it out.  Until v62
+//     it was the rising edge 1 clk (41.7 ns) after: the round trip (SCLK pad and cable out,
+//     tDO, SDO cable and pad back) gets 20.8 ns more.  Hold: the next bit only changes tDO
+//     after the next SCLK fall, which leaves the FPGA half a clk after the sample.
+//   * One idle clk after CNVST falls: the MSB is sampled 2.5 clk (104 ns) after the edge
+//     that dropped CNVST (41.7 ns until v62).
+//   The falling-edge sample is the SB_IO's DDR input register (D_IN_1), not a fabric negedge
+//   flop: the pad-to-register delay is fixed in the IO tile, the same on every PnR seed, so
+//   the margin does not depend on placement on this congested up5k.  It costs no logic cell
+//   (a negedge flop would take an LC and force its whole PLB to the falling edge), and the
+//   register to the fabric shift register is a timed half-period (20.8 ns) path.
+//   Cost: start-to-strobe is 59 clk (58 until v62), still under the firmware's 60-clk floor,
+//   so every sample period and the v52 t0 alignment (the CNVST rises) are unchanged.
 // Verified: a DAC swept into the ADC input tracks linearly with ~2 LSB noise.
+// tb_adc_timing checks the read against mcp33131_model with pad and cable delays.
 // ============================================================================
 module adc_mcp33131 (
     input  wire        clk,           // 24 MHz control clock
@@ -28,7 +45,7 @@ module adc_mcp33131 (
     output reg         adc_cnvst,
     output reg         adc_sclk,
     output wire        adc_sdi,
-    input  wire        adc_sdo,       // has the iCE40 pull-up (enabled in top_v2)
+    input  wire        adc_sdo,       // the PAD: its SB_IO (pull-up, DDR input register) is below
     // result
     output reg  [15:0] sample,
     output reg         sample_stb
@@ -37,12 +54,21 @@ module adc_mcp33131 (
     // (datasheet DS20005947B Fig 7-2 Note 1).
     assign adc_sdi = 1'b1;
 
+    // v63: the SDO pad, a registered input with the pull-up.  D_IN_1 is the pad as the IO
+    // register saw it on the last FALLING edge of clk (the mid-SCLK-high sample, see the
+    // header); the fabric shifts it in on the next rising edge.  PIN_TYPE 6'b000000: no
+    // output, registered (DDR) input.  Until v62 top_v2 had a combinational SB_IO
+    // (6'b000001) here and the fabric sampled the pad on the rising edge.
+    wire sdo_fall;
+    SB_IO #(.PIN_TYPE(6'b000000), .PULLUP(1'b1)) io_adc_sdo (
+        .PACKAGE_PIN(adc_sdo), .INPUT_CLK(clk), .D_IN_1(sdo_fall));
+
     // Conversion wait: the MCP33131D-10 (1 MSPS) has tCNV = 710 ns; 24 cycles at
-    // 24 MHz = 1.0 us gives ~40% margin.  Combined with the 16-bit read (32 cycles
-    // @ 12 MHz SCLK) this makes one conversion ~59 clk, so the sample-period floor
-    // below is 60 -> ~400 kS/s (was CONV_CYCLES=48 / floor 80 -> ~300 kS/s).
+    // 24 MHz = 1.0 us gives ~40% margin.  With the idle clk after CNVST falls (v63) and the
+    // 16-bit read (32 cycles @ 12 MHz SCLK) one conversion is 59 clk start to strobe, so the
+    // firmware's sample-period floor of 60 -> ~400 kS/s still holds.
     localparam [7:0] CONV_CYCLES = 8'd24;   // ~1.0 us at 24 MHz (> tCNV 710 ns)
-    localparam S_IDLE = 2'd0, S_CONV = 2'd1, S_READ = 2'd2;
+    localparam S_IDLE = 2'd0, S_CONV = 2'd1, S_READ = 2'd2, S_LEAD = 2'd3;
 
     reg [1:0]  st;
     reg [15:0] period_cnt;
@@ -106,7 +132,7 @@ module adc_mcp33131 (
                     cnt         <= 5'd0;
                     conv_done   <= 1'b0;
                     // Floor the sample period at the engine's own min duration
-                    // (~59 clk: 1 idle + 24 conv + 32 read + transitions) so a small
+                    // (59 clk: 1 idle + 24 conv + 1 lead + 32 read + transitions) so a small
                     // requested divider can't ask for a rate the FSM can't sustain.
                     // v40: no 60-clock floor here; the firmware floors the divider
                     // (adc_min_divider).  A shorter period cannot break the engine: the next
@@ -125,32 +151,35 @@ module adc_mcp33131 (
                     cnt       <= 5'd0;
                     bits_done <= 1'b0;
                     sclk_ph   <= 1'b0;
-                    st        <= S_READ;
+                    st        <= S_LEAD;
                 end else begin
                     cnt       <= cnt + 5'd1;
                     conv_done <= (cnt == CONV_CYCLES[4:0] - 5'd1);
                 end
             end
-            // Read 16 bits, MSB first. SDO changes on the SCLK falling edge; we
-            // sample one clk cycle (~42 ns > tDO at 12 MHz SCLK) after the previous
-            // falling edge, while SDO is stable.
+            // v63: one idle clk after CNVST falls, so the MSB (valid tEN after the fall) gets
+            // 2.5 clk to the first sample instead of 1.
+            S_LEAD: st <= S_READ;
+            // Read 16 bits, MSB first.  SDO changes tDO after each SCLK falling edge.  SCLK rises
+            // on the sclk_ph=0 edge; the SB_IO samples SDO half a clk later, in the middle of SCLK
+            // high (sdo_fall), and the sclk_ph=1 edge shifts it in as it drops SCLK.  The last
+            // bit goes straight into `sample` on that same edge.
             S_READ: begin
                 sclk_ph <= ~sclk_ph;
                 if (!sclk_ph) begin
                     adc_sclk  <= 1'b1;               // SCLK high next cycle
-                    shreg     <= {shreg[14:0], adc_sdo};
                     cnt       <= cnt + 5'd1;
                     bits_done <= (cnt == 5'd15);
                 end else begin
                     adc_sclk <= 1'b0;               // falling edge
+                    shreg    <= {shreg[14:0], sdo_fall};
                     if (bits_done) begin
-                        sample     <= shreg;
+                        sample     <= {shreg[14:0], sdo_fall};
                         sample_stb <= 1'b1;
                         st         <= S_IDLE;
                     end
                 end
             end
-            default: st <= S_IDLE;
             endcase
         end
     end

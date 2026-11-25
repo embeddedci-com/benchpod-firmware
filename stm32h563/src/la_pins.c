@@ -90,6 +90,11 @@ static const la_fn_attr_t s_fn[LA_FN__COUNT] = {
     [LA_FN_I2CM_SCL]    = { "i2cm_scl",    false, true,  PD_OPEN_DRAIN },
     [LA_FN_UART_HD]     = { "uart_hd",     false, true,  PD_IDLE_HIGH },   /* open drain + RX */
     [LA_FN_UART_DE]     = { "uart_de",     true,  false, NULL },
+    [LA_FN_JTAG_TCK]    = { "jtag_tck",    true,  false, NULL },
+    [LA_FN_JTAG_TMS]    = { "jtag_tms",    true,  false, NULL },
+    [LA_FN_JTAG_TDI]    = { "jtag_tdi",    true,  false, NULL },
+    [LA_FN_JTAG_TDO]    = { "jtag_tdo",    false, false, NULL },
+    [LA_FN_JTAG_TRST]   = { "jtag_trst",   true,  false, NULL },
 };
 
 static const la_fn_attr_t *fn_attr(la_fn_t fn) {

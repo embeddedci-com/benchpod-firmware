@@ -81,6 +81,9 @@ static inline bool conn_has_socket(int conn_id) {
 /* Reply helpers (defined in command_handler.c). */
 void send_error(int conn_id, const char *message);            /* {"status":"error","message":...} */
 void send_ok_str(int conn_id, const char *payload_json);      /* {"status":"ok","data":<payload>}  */
+/* The same for a payload that may not fit send_ok_str's 256-byte reply buffer (up to
+   BP_CLOUD_REPLY_MAX - 64): the reply is built on the heap. */
+void send_ok_large(int conn_id, const char *payload_json);
 
 /* A gateware gate (a gw_caps() field): true when the running gateware has it, else the handler
    refuses with gateware_too_old (BP0017: feature needs gateware v`min`) and returns. */
@@ -113,6 +116,18 @@ int  heavy_owner_conn(void);                  /* the conn holding the gate, or -
 
 /* An optional "sample_rate_hz" field; 0.0f (= auto) when absent or not positive. */
 float parse_sample_rate_hz(const char *json);
+
+/* Reflash and reconfigure the iCE40 with image img (0 loop, 1 deep, 2 emulation) under the heavy
+   gate, then re-announce the caps and re-park the DAC.  false = the error was sent.  ver_out /
+   feats_out (may be NULL) get the new image's version and FPGA_FEATURES. command_handler_device.c */
+bool fpga_image_swap(int conn_id, int img, uint8_t *ver_out, uint8_t *feats_out);
+/* The same with "force" (reload even when img already runs) and whether it was skipped. */
+bool fpga_image_swap_ex(int conn_id, int img, bool force, bool *skipped_out,
+                        uint8_t *ver_out, uint8_t *feats_out);
+/* SWD, the SPI master and the I2C master (and the two-wire pin programmers on that engine) need an
+   image with the bus masters (gateware v65: loop or deep).  On the emulation image: swaps to the
+   loop image when no emulated digital sensor runs, else BP0059.  false = the error was sent. */
+bool require_bus_masters(int conn_id, const char *feature);
 
 /* Every LA-bank operation needs the LA voltage chosen first; false = the error was sent. */
 bool require_la_voltage(int conn_id);
@@ -168,6 +183,10 @@ void handle_usb_cc(int conn_id, const char *json);
 void handle_usb_host(int conn_id, const char *json);
 /* Flash a board that shows up as a USB drive (command_handler_usb.c, USB_HOST=1 builds). */
 void handle_usb_flash(int conn_id, const char *json);
+/* The state of the board's USB serial port (command_handler_usb.c, USB_HOST=1 builds). */
+void handle_usb_serial(int conn_id, const char *json);
+void handle_usb_check(int conn_id, const char *json);
+void handle_usb_hid(int conn_id, const char *json);
 
 /* Digital v3r3's analog module link (command_handler_module.c, module_link.h). */
 void handle_module(int conn_id, const char *json);
@@ -326,6 +345,7 @@ void handle_spi_flash(int conn_id, const char *json);
 void handle_spi_stream(int conn_id, const char *json);
 /* ESP32 DUT flashing over its UART ROM loader (command_handler_esp.c). */
 void handle_esp_flash(int conn_id, const char *json);
+void handle_prog_flash(int conn_id, const char *json);
 /* The PSRAM bytes the last `load_bin` with "psram" staged: false when none. */
 bool command_handler_psram_stage(uint32_t *base, uint32_t *len);
 void handle_spi_status(int conn_id, const char *json);

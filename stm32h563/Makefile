@@ -37,8 +37,8 @@ AS      := $(PREFIX)gcc -x assembler-with-cpp
 CP      := $(PREFIX)objcopy
 SZ      := $(PREFIX)size
 NM      := $(PREFIX)nm
-HEX     := $(CP) -O ihex -R .xip
-BIN     := $(CP) -O binary -S -R .xip
+HEX     := $(CP) -O ihex -R .xip -R .xip_prog
+BIN     := $(CP) -O binary -S -R .xip -R .xip_prog
 
 #######################################
 # SDK / library paths
@@ -98,6 +98,9 @@ C_SOURCES := \
   src/xfer.c \
   src/dma_wait.c \
   src/dap.c \
+  src/dap_id.c \
+  src/dap_jtag.c \
+  src/jtag_ll.c \
   src/swd_ll.c \
   src/i2c_bus.c \
   src/la_pull.c \
@@ -176,6 +179,7 @@ C_SOURCES := \
   src/watchdog.c \
   src/boot_guard.c \
   src/boot_policy.c \
+  src/ice40_switch.c \
   src/sys_health.c \
   src/device_identity.c \
   src/config_store.c \
@@ -205,7 +209,7 @@ C_SOURCES := \
   src/cloud_ca.c \
   src/cloud_extras.c \
   src/lan_tls.c \
-  src/lan_tls_pem.c src/lan_clients.c \
+  src/lan_tls_pem.c src/lan_clients.c src/lan_tls_resume.c \
   src/altcp_bp_proxy.c \
   src/command_handler_policy.c \
   src/command_handler_lease.c \
@@ -219,10 +223,13 @@ C_SOURCES := \
   src/blob_manifest.c \
   src/xip_image.c \
   src/xip_mod_core.c \
+  src/xip_prog_mod.c \
   src/xip_mod_msc_flash.c \
   src/msc_flash_names.c \
   src/xip_mod_ctrl_flash.c \
   src/ctrl_flash_names.c \
+  src/xip_mod_ser_flash.c \
+  src/ser_flash_names.c \
   src/xip_session.c \
   src/spi_flash.c \
   src/spi_stream.c \
@@ -237,6 +244,17 @@ C_SOURCES := \
   src/c3_update.c \
   src/esp_rom_job.c \
   src/esp_dut_flash.c \
+  src/prog_flash.c \
+  src/prog_job.c \
+  src/prog_wire.c \
+  src/command_handler_prog.c \
+  src/prog_desc.c \
+  src/prog_updi.c \
+  src/prog_pic.c \
+  src/prog_c2.c \
+  src/prog_tpi.c \
+  src/prog_pdi.c \
+  src/prog_sbw.c \
   src/esp_part_table.c \
   src/dfu_boot.c \
   $(LAN8742)/lan8742.c \
@@ -349,16 +367,26 @@ C_SOURCES += src/wifi_bridge.c src/wifi_bridge_net.c src/wifi_bridge_ota.c \
              $(BRIDGE_CORE)/bwp.c $(BRIDGE_CORE)/hmac_sha256.c $(BRIDGE_CORE)/bwp_crypto.c $(BRIDGE_CORE)/bwp_id.c
 endif
 
-# W25Q code (src/xip_image.h, src/xip_session.h) test builds, development only (defines here,
-# before CFLAGS expands DEFS; the linker script switch is further down):
-#   XIP_RAM=1        link the image at a 16 KB RAM region (taken from the FreeRTOS heap) and copy it
-#                    there at session start: runs on any board, everything but memory-mapped mode.
+# W25Q code (src/xip_image.h, src/xip_session.h; defines here, before CFLAGS expands DEFS; the
+# linker script switch is further down):
+#   XIP_RAM=1        (the default, releases too) link the image at a 20 KB RAM region (taken from the
+#                    FreeRTOS heap) and copy it there at session start: runs on every board. The
+#                    pods shipped so far (before digital v3r4) cannot memory-map their W25Q.
+#                    XIP_RAM=0 builds the memory-mapped image (digital v3r4, or the PB6 bodge).
 #   XIP_BODGE_PB6=1  the W25Q's chip-select is PB6 (a wire from PB6 to the W25Q's /CS, PE3 left an
-#                    input): the real memory-mapped mode on a board before digital v3r4.
-ifeq ($(XIP_RAM),1)
-ifeq ($(RELEASE),1)
-$(error XIP_RAM=1 is a development build and cannot be combined with RELEASE=1)
+#                    input): the real memory-mapped mode on a board before digital v3r4 (with
+#                    XIP_RAM=0). Development only.
+# The EMC test build (EMI_TEST=1) has its own activity loop and no room for these: it keeps
+# building without USB host mode and with the memory-mapped image, as before (both can be set).
+ifeq ($(EMI_TEST),1)
+USB_HOST ?= 0
+XIP_RAM ?= 0
 endif
+XIP_RAM ?= 1
+ifeq ($(XIP_BODGE_PB6),1)
+XIP_RAM := 0
+endif
+ifeq ($(XIP_RAM),1)
 DEFS      += -DBENCHPOD_XIP_RAM=1
 endif
 ifeq ($(XIP_BODGE_PB6),1)
@@ -368,27 +396,39 @@ endif
 DEFS      += -DBENCHPOD_XIP_BODGE_PB6=1
 endif
 
-# USB host build: USB_HOST=1 adds USB host mode (usb_host.h, the usb_host command: the pod hosts
-# the DUT on its USB-C or USB-A port). Not hardware-tested yet, so development only: refused
-# together with RELEASE=1. Without it the usb_host command answers as an unknown command.
+# USB host mode (usb_host.h, the usb_host and usb_flash commands: the pod hosts the DUT on its
+# USB-A host port, or its own USB-C connector on pods without one). On by default, releases too
+# (hardware-tested 2026-11-22); USB_HOST=0 leaves it out (the commands then answer as unknown).
+USB_HOST ?= 1
 ifeq ($(USB_HOST),1)
-ifeq ($(RELEASE),1)
-$(error USB_HOST=1 is a development build and cannot be combined with RELEASE=1)
-endif
 DEFS      += -DBENCHPOD_USB_HOST=1
+# USB_HOST_LOG=1: TinyUSB's host log in a 3 KB RAM ring, read with usb_host "log" (development only).
+ifeq ($(USB_HOST_LOG),1)
+ifeq ($(RELEASE),1)
+$(error USB_HOST_LOG=1 is a development build and cannot be combined with RELEASE=1)
+endif
+DEFS      += -DBENCHPOD_USB_HOST_LOG=1
+C_SOURCES += src/usb_host_log.c
+endif
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
-             $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c
+             $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c \
+             src/usb_bus.c src/usb_check.c src/usb_check_core.c \
+             $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c src/usb_serial_con.c \
+             $(TUSB)/class/hid/hid_host.c src/usb_hid.c src/usb_hid_core.c
 endif
 
 # Dev builds that need static RAM take it from the FreeRTOS heap (259 KB in releases):
-# USB_HOST=1 4 KB (the host stack and its classes), XIP_RAM=1 16 KB (the RAM copy of the image).
+# USB_HOST=1 6 KB (the host stack and its classes, a 1 KB descriptor buffer, the HID class), XIP_RAM=1 20 KB (the RAM copy of the image).
 HEAP_KB := 259
 ifeq ($(USB_HOST),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 4)
+HEAP_KB := $(shell expr $(HEAP_KB) - 6)
 endif
 ifeq ($(XIP_RAM),1)
-HEAP_KB := $(shell expr $(HEAP_KB) - 16)
+HEAP_KB := $(shell expr $(HEAP_KB) - 20)
+endif
+ifeq ($(USB_HOST_LOG),1)
+HEAP_KB := $(shell expr $(HEAP_KB) - 3)
 endif
 ifneq ($(HEAP_KB),259)
 DEFS      += -DBENCHPOD_HEAP_KB=$(HEAP_KB)U
@@ -435,17 +475,28 @@ CFLAGS := $(MCU) $(DEFS) $(INCLUDES) $(OPT) -std=gnu11 \
           -Wall -Wextra -Wno-unused-parameter \
           -ffunction-sections -fdata-sections -fno-common -fstack-usage -MMD -MP
 
+# The W25Q image has 20 KB in the default (XIP_RAM=1) build: the drive writer, the largest module
+# (FAT12/16/32 and exFAT), is optimized for size: -Os saves 0.8 KB there, and at -O2 the compiler also
+# puts literal-pool addresses of flash data into it, which check_xip_refs.py refuses.
+$(BUILD_DIR)/xip_mod_msc_flash.o: CFLAGS += -Os
+# The pin programmers are linked into the second W25Q image (the .xip_prog section, by object name
+# in the linker script); PROG_XIP leaves out their host-test structs of function pointers, which
+# the image may not hold (xip_image.h).
+$(BUILD_DIR)/xip_prog_mod.o $(BUILD_DIR)/prog_updi.o $(BUILD_DIR)/prog_pic.o $(BUILD_DIR)/prog_c2.o \
+$(BUILD_DIR)/prog_tpi.o $(BUILD_DIR)/prog_pdi.o $(BUILD_DIR)/prog_sbw.o: CFLAGS += -DPROG_XIP=1
+
 ASFLAGS := $(MCU) $(OPT) -Wall -ffunction-sections -fdata-sections
 
 LDSCRIPT := config/STM32H563ZITX_FLASH.ld
 
-# XIP_RAM=1: the image at a 16 KB RAM region (the defines are set above, with USB_HOST).
+# XIP_RAM=1: both images (xip_image.h) at ONE 20 KB RAM region (an overlay), the top 20 KB of the 640 KB of RAM (the defines are set above, with USB_HOST).
 ifeq ($(XIP_RAM),1)
 XIP_RAM_LD := $(BUILD_DIR)/xip_ram.ld
 $(XIP_RAM_LD): $(LDSCRIPT) | $(BUILD_DIR)
-	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 624K|' \
-	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009C000,   LENGTH = 16K|' $< > $@
-	@grep -q 'LENGTH = 624K' $@ && grep -q '0x2009C000' $@ || { echo "xip_ram.ld: the linker script's RAM or XIP line changed"; rm -f $@; exit 1; }
+	@sed -e 's|^  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 640K|  RAM         (xrw)   : ORIGIN = 0x20000000,   LENGTH = 620K|' \
+	     -e 's|^  XIP         (rx)    : ORIGIN = 0x90201000,   LENGTH = 252K|  XIP         (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' \
+	     -e 's|^  XIP_PROG    (rx)    : ORIGIN = 0x90241000,   LENGTH = 252K|  XIP_PROG    (rwx)   : ORIGIN = 0x2009B000,   LENGTH = 20K|' $< > $@
+	@test "$$(grep -c '0x2009B000' $@)" = 2 && grep -q 'LENGTH = 620K' $@ || { echo "xip_ram.ld: the linker script's RAM, XIP or XIP_PROG line changed"; rm -f $@; exit 1; }
 $(BUILD_DIR)/$(TARGET).elf: $(XIP_RAM_LD)
 LDSCRIPT := $(XIP_RAM_LD)
 endif
@@ -614,6 +665,11 @@ $(BUILD_DIR)/altcp_tls_mbedtls_bp.o: CFLAGS += -DMBEDTLS_ALLOW_PRIVATE_ACCESS \
 # switch conversion turns it into an 801-entry pointer table (CSWTCH, 3.2 KB). A compare tree
 # at -Os is plenty for an error lookup: the file's code and tables go from 3.6 KB to 2.1 KB.
 $(BUILD_DIR)/error.o: CFLAGS += -Os -fno-tree-switch-conversion
+# The pin programmers (prog_flash) run at the chip's pace, not the CPU's: -Os keeps the five
+# protocols and their job within the flash budget (docs/design/memory-budget.md).
+$(BUILD_DIR)/prog_desc.o $(BUILD_DIR)/prog_flash.o $(BUILD_DIR)/prog_job.o $(BUILD_DIR)/prog_wire.o $(BUILD_DIR)/command_handler_prog.o \
+$(BUILD_DIR)/prog_updi.o $(BUILD_DIR)/prog_pic.o $(BUILD_DIR)/prog_c2.o $(BUILD_DIR)/prog_tpi.o \
+$(BUILD_DIR)/prog_pdi.o $(BUILD_DIR)/prog_sbw.o: CFLAGS += -Os
 
 # The EMI build's lab page (src/emi_http.h), built in from tools/emi/lab_page.html.
 $(BUILD_DIR)/gen/emi_page.c: tools/emi/lab_page.html tools/emi/embed_page.py
@@ -647,6 +703,7 @@ $(OBJECTS): $(DEFS_STAMP)
 
 $(BUILD_DIR)/$(TARGET).elf: $(OBJECTS)
 	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+	@OBJDUMP=$(PREFIX)objdump OBJCOPY=$(CP) SIZE=$(SZ) python3 tools/check_xip_refs.py --self-test || { rm -f $@; exit 1; }
 	@NM=$(PREFIX)nm OBJDUMP=$(PREFIX)objdump OBJCOPY=$(CP) SIZE=$(SZ) python3 tools/check_xip_refs.py $@ $(BUILD_DIR) || { rm -f $@; exit 1; }
 	@OBJCOPY=$(CP) python3 tools/xip_finish.py $@ $(BLOB_DIR) || { rm -f $@; exit 1; }
 	$(SZ) $@
@@ -712,7 +769,7 @@ help:
 	@echo "  flash          : SWD flash via OpenOCD (needs a probe; verifies)"
 	@echo "  flash-dfu      : USB-DFU write of the firmware (~0.5 MB); blobs go to the W25Q separately"
 	@echo "  fetch          : build/download the ESP32-C3 slave image (ESP_SLAVE_URL=<url> to download)"
-	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp}.bin + blobs-manifest.json for the W25Q blob slots"
+	@echo "  build/blobs/   : blob-{gw0,gw1,gw2,esp,xip,xip_prog}.bin + blobs-manifest.json for the W25Q blob slots"
 	@echo "  dev-key        : make (or show) this machine's firmware signing key; dev builds then sign"
 	@echo "                   build/*.bin.sig and trust it (RELEASE=1 builds trust only keys/release-N.pub)"
 	@echo "  EMI_TEST=1     : the EMC test build into build-emi/ (activity loop from boot; never released)"

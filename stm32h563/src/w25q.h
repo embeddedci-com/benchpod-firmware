@@ -51,4 +51,15 @@ int  w25q_erase_block(uint32_t addr);    /* 64 KB, addr aligned */
 /* Program `len` bytes at `addr`, split at page boundaries. The range must be erased. */
 int  w25q_program(uint32_t addr, const uint8_t *buf, uint32_t len);
 
+/* A read (0x03) kept open: begin sends the instruction and address and leaves /CS low; each
+   stream_read then clocks len more bytes out of the flash (data-only, single line; pauses
+   between calls only stop the clock); end raises /CS. stream_read with /CS high (w25q_cs_set)
+   just clocks SCLK. For the iCE40 SPI slave load (ice40_flash.c), which takes the bits on the
+   flash's DO line while the STM32 provides the clock. */
+int  w25q_stream_begin(uint32_t addr);
+int  w25q_stream_read(uint8_t *buf, uint32_t len);
+void w25q_stream_end(void);
+/* Drive the flash /CS (= the iCE40 SPI_SS) high (1) or low (0); it must already be an output. */
+void w25q_cs_set(int high);
+
 #endif /* W25Q_H */

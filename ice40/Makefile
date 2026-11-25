@@ -48,6 +48,8 @@ SRC = src/top_v2.v            \
       src/stepper_engine.v    \
       src/swd_engine.v        \
       src/i2c_master.v        \
+      src/jtag_seq.v          \
+      src/swim_engine.v       \
       src/i2c_emu.v           \
       src/emu_fifo.v          \
       src/spi_target.v        \
@@ -57,6 +59,7 @@ SRC = src/top_v2.v            \
       src/dsp_counter2.v      \
       src/lc_counter.v        \
       src/psram_pads.v        \
+      src/dac_pads.v          \
       src/cell_gearbox48.v
 DEFINES = -DVERSION_V2
 # The deep-replay image is the same top with this on top of DEFINES (the loop image adds nothing).
@@ -64,7 +67,11 @@ DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
 EMU_DEFINES = -DUSE_EMULATION
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
-PREPACK = --pre-pack clocks.py
+# PIN_CLKDIV=1 (opt-in, default off: builds are unchanged) also pins the clk divider flop and its
+# SB_GB (pin_clkdiv.py), which makes clk's lag behind clk48 constant.  Turn it on with a
+# GATEWARE_VERSION bump, then re-sweep seeds; see ../docs/design/ice40-seed-history.md.
+PIN_CLKDIV ?= 0
+PREPACK = --pre-pack clocks.py$(if $(filter 1,$(PIN_CLKDIV)), --pre-pack pin_clkdiv.py)
 # Pinned PnR seeds.  Every image has its own netlist and so its own pinned seed: placement, not
 # the 24 MHz `clk` target, is what moves from seed to seed, and the clk48 margin and the untimed
 # clk <-> clk48 crossings (MIN_CLK48_MHZ, MAX_X48_NS, MAX_X24_NS below) decide which seed is pinned.
@@ -232,7 +239,7 @@ define topbench
 	done
 endef
 
-.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest test clean help
+.PHONY: i2cemutest all images seed-sweep promote check-release release-images flash flash-ram prog sim uarttest cdctest dactest daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest swimtest i2cmastertest check-protocol releasetooltest test clean help
 
 all: $(OUT).bin
 
@@ -255,14 +262,17 @@ all: $(OUT).bin
 # netlist while every RTL bench passed (synth/sb_mac16_keep.v).  The control loop's multipliers
 # are still $mul in that step, so -dsp infers them exactly as before.  synth/check_dsp.py then
 # fails the build (and removes the netlist) unless every dsp_counter cell came through intact.
+# synth/check_la_pads.py (v64) likewise fails it unless every LA pad is a registered-output,
+# registered-enable SB_IO (la_bank.v: a combinational pad let a hand-over glitch reach the DUT).
 SYNTH_FLAGS = -abc9 -dsp -spram -top top
-SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py
+SYNTH_AUX   = synth/sb_mac16_keep.v synth/check_dsp.py synth/check_la_pads.py
 define synth
 	yosys -p "read_verilog -lib synth/sb_mac16_keep.v; read_verilog -Isrc $(DEFINES) $(1) $(or $(3),$(SRC)); \
 	  synth_ice40 $(SYNTH_FLAGS) -run :coarse; chtype -set SB_MAC16_KEEP t:SB_MAC16; \
 	  synth_ice40 $(SYNTH_FLAGS) -run coarse:map_ram; chtype -set SB_MAC16 t:SB_MAC16_KEEP; \
 	  synth_ice40 $(SYNTH_FLAGS) -run map_ram: -json $(2)"
 	python3 synth/check_dsp.py $(2) src || { rm -f $(2); exit 1; }
+	python3 synth/check_la_pads.py $(2) || { rm -f $(2); exit 1; }
 endef
 $(OUT).json: $(SRC) $(SYNTH_AUX)
 	$(call synth,,$@)
@@ -283,25 +293,23 @@ $(OUT).bin: $(OUT).asc
 # different netlist (USE_DEEP_REPLAY), so each needs its OWN placing+clk48 seed.
 # NOTE: keep these assignments free of trailing comments — the value is compared against the
 # seed actually used, and make would keep the trailing whitespace in it.
-# Loop image: seed 2 since v60 (clk48 55.86 MHz, clk 28.35 MHz, clk -> clk48 10.97 ns,
-# clk48 -> clk 6.33 ns; 4217 LC, 80%).  CI: 56.02 / 29.66 / 10.73 / 6.98.
-SEED_LOOP ?= 2
-# The next v60 seeds good in both toolchains, by their worst gate margin.
-SEED_LOOP_FALLBACK ?= 50 30 46 3 11
-# Deep image: seed 24 since v60 (clk48 59.26 MHz, clk 27.45 MHz, clk -> clk48 13.92 ns,
-# clk48 -> clk 5.62 ns; 3939 LC, 75%).  CI: 57.67 / 28.72 / 13.27 / 6.85.  Its clk -> clk48
-# margin to MAX_X48_NS is the smallest of the three images: re-sweep in both toolchains (the
-# ice40-seed-sweep workflow for CI's) when it moves.
-SEED_DEEP ?= 24
-# The next v60 seeds good in both toolchains, by their worst gate margin.
-SEED_DEEP_FALLBACK ?= 32 48 60 19 13
-# Emulation image (USE_EMULATION): seed 60 since v60 (clk48 61.41 MHz, clk 27.37 MHz,
-# clk -> clk48 11.17 ns, clk48 -> clk 6.66 ns; CI 56.06 / 28.36 / 11.78 / 8.17).  CI's toolchain
-# closes only 28 of 64 emu seeds.  It is the fullest image: 5155/5280 LC (97.6%),
-# 30/30 block RAM, 4/4 SPRAM.  Its binding clock is clk (24 MHz, MIN_CLK_MHZ), not clk48.
-SEED_EMU ?= 60
-# The next v60 seeds good in both toolchains, by their worst gate margin.
-SEED_EMU_FALLBACK ?= 12 7 41 59 40
+# v68 seeds (the switchable 16 / 24 MHz DAC SCLK): local sweep 1-64 (Yosys 0.65, nextpnr 0.10) and
+# CI sweep 1-64 (run 45548329211, Yosys 0.65+7).  Each pin is the seed with the best worst relative
+# margin over the four gates (clk48 >= 50 MHz, clk >= 25.5 MHz, clk -> clk48 <= 15 ns, clk48 -> clk
+# <= 15 ns) in BOTH toolchains.  Per-version notes: ../docs/design/ice40-seed-history.md.
+# Still run SDK e2e test_la_sample_rate_matches_the_host_clock on hardware before pinning a new seed.
+# Loop image: seed 60 (local 53 ok, CI 50 ok, 40 in both).  Local: clk48 54.57 MHz, clk 28.81 MHz,
+# clk -> clk48 10.84 ns, clk48 -> clk 8.71 ns.  CI: 55.31 / 29.14 / 10.08 / 8.27.  (v65: 12.)
+SEED_LOOP ?= 60
+SEED_LOOP_FALLBACK ?= 6 3 61 49
+# Deep image: seed 9 (local 48 ok, CI 41 ok, 30 in both).  Local: 57.06 / 27.65 / 13.99 / 5.47.
+# CI: 55.60 / 27.35 / 13.27 / 5.03.  (v65: 1.)
+SEED_DEEP ?= 9
+SEED_DEEP_FALLBACK ?= 38 61 44 19
+# Emulation image (USE_EMULATION): seed 15 (local 63 ok, CI 64 ok, 62 in both).  Local: 68.21 /
+# 28.40 / 10.73 / 6.12.  CI: 68.72 / 28.88 / 10.62 / 4.93.  (v65: 26.)
+SEED_EMU ?= 15
+SEED_EMU_FALLBACK ?= 29 64 28 16
 MULTI = $(OUT)_multi.bin
 # The GATEWARE_VERSION the images are built with, read from the source they are built from and
 # written next to each .bin (<image>.bin.gwversion). The firmware embeds it so a pod can tell
@@ -342,7 +350,7 @@ images: $(OUT)_loop.bin $(OUT)_deep.bin $(OUT)_emu.bin
 IMAGE ?= loop
 SWEEP ?= 1 24
 seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
-	MIN_CLK48_MHZ=$(MIN_CLK48_MHZ) MIN_CLK_MHZ=$(MIN_CLK_MHZ) MAX_X48_NS=$(MAX_X48_NS) MAX_X24_NS=$(MAX_X24_NS) \
+	PIN_CLKDIV=$(PIN_CLKDIV) MIN_CLK48_MHZ=$(MIN_CLK48_MHZ) MIN_CLK_MHZ=$(MIN_CLK_MHZ) MAX_X48_NS=$(MAX_X48_NS) MAX_X24_NS=$(MAX_X24_NS) \
 	  sh synth/seed_sweep.sh $(OUT)_$(IMAGE).json $(SWEEP)
 
 # ---- hardware-verified images for firmware releases (tools/ice40_release.py) ----
@@ -412,21 +420,27 @@ cdctest:
 # DAC8551 datasheet pin timing (t5-t9) and the clk/sample the firmware's rate model assumes.
 dactest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac.vvp \
-	         sim/tb_dac8551.v src/dac8551_engine.v
+	         sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac.vvp
+	iverilog -g2012 -DTB_SCLK24 -o /tmp/$(PROJECT)_dac24.vvp sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dac24.vvp
+	@rm -f /tmp/$(PROJECT)_dac24.vvp
 	@rm -f /tmp/$(PROJECT)_dac.vvp
 
 # DAC8554 support (v49): the stream control byte and the one-shot static frame (OP_DAC_CTRL).
 dac8554test:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac8554.vvp \
-	         sim/tb_dac8554.v src/dac8551_engine.v
+	         sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac8554.vvp
+	iverilog -g2012 -DTB_SCLK24 -o /tmp/$(PROJECT)_dac855424.vvp sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dac855424.vvp
+	@rm -f /tmp/$(PROJECT)_dac855424.vvp
 	@rm -f /tmp/$(PROJECT)_dac8554.vvp
 
 # Self-checking simulation of the DAC8551 waveform-loop terminal (sleft counter).
 daclooptest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dacloop.vvp \
-	         sim/tb_dac8551_loop.v src/dac8551_engine.v
+	         sim/tb_dac8551_loop.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacloop.vvp
 	@rm -f /tmp/$(PROJECT)_dacloop.vvp
 
@@ -453,7 +467,7 @@ dacpsramskewtest:
 # of the reader FIFO (reader -> dac8551_engine in psram_mode) to the DAC8551 frames.
 dacpsramreplaytest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_dacpsramrep.vvp \
-	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/psram_pads.v $(CELLS_SIM)
+	         sim/tb_dac_psram_replay.v src/dac_psram_reader.v src/cell_gearbox48.v src/dac8551_engine.v src/dac_pads.v src/psram_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dacpsramrep.vvp
 	@rm -f /tmp/$(PROJECT)_dacpsramrep.vvp
 
@@ -462,17 +476,17 @@ dacpsramreplaytest:
 # Self-checking simulation of the v2 MCP33131D-10 serial ADC capture engine.
 adctest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_adc.vvp \
-	         sim/tb_adc_mcp33131.v src/adc_mcp33131.v
+	         sim/tb_adc_mcp33131.v src/adc_mcp33131.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_adc.vvp
 	@rm -f /tmp/$(PROJECT)_adc.vvp
 
-# Timing + throughput sign-off of the PRODUCTION adc_mcp33131 at 48 MHz against the
-# analog-accurate mcp33131_model (real tDO + pad round-trip).  Proves the shipping
-# SCLK_DIV=2 config reads correctly, reports the achieved sample rate, and shows
-# SCLK_DIV=1 (24 MHz SCLK) as the failing edge.  See docs/adc-clock-analysis.md.
+# Timing + throughput sign-off of the PRODUCTION adc_mcp33131 (24 MHz clk, 12 MHz SCLK, its SDO
+# SB_IO from the cells model) against the analog-accurate mcp33131_model (tEN/tDO + pad and cable
+# round trip).  Measures setup and hold at the falling-edge sample (v63) from zero delay to a
+# 45.5 ns round trip, and shows a round trip over 1.5 clk as the failing edge.
 adctimingtest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_adct.vvp \
-	         sim/tb_adc_timing.v sim/mcp33131_model.v src/adc_mcp33131.v
+	         sim/tb_adc_timing.v sim/mcp33131_model.v src/adc_mcp33131.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_adct.vvp
 	@rm -f /tmp/$(PROJECT)_adct.vvp
 
@@ -517,7 +531,7 @@ looptest:
 # never {new high byte, old low byte} (v38; 176 of 1111 frames were torn before).
 loopframetest:
 	iverilog -g2012 -I src -o /tmp/$(PROJECT)_loopframe.vvp \
-	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v
+	         sim/tb_dac_loop_frames.v src/dac_loop.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_loopframe.vvp
 	@rm -f /tmp/$(PROJECT)_loopframe.vvp
 
@@ -626,8 +640,20 @@ swdqtest:
 # v55 I2C master (open drain, repeated START, NACK, clock stretching, arbitration) and SPI
 # modes 0-3, on swd_engine alone against behavioural targets.
 i2cmastertest:
-	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v
+	iverilog -g2012 -o /tmp/tb_i2c_master.vvp -I src sim/tb_i2c_master.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
 	vvp -n /tmp/tb_i2c_master.vvp | tee /dev/stderr | grep -q '^PASS'
+
+# v61 JTAG master: DAP_JTAG_Sequence sequences against a 2-TAP chain model (IDCODE, IR/BYPASS,
+# 64-cycle sequences, a queue that runs dry), at half periods 2, 3 and 13, on swd_engine alone.
+jtagtest:
+	iverilog -g2012 -o /tmp/tb_jtag.vvp -I src sim/tb_jtag.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
+	vvp -n /tmp/tb_jtag.vvp | tee /dev/stderr | grep -q '^PASS'
+
+# v62 SWIM master: entry + sync at two SWIM clock rates, SRST / ROTF / WOTF, NACK and retry, a chip
+# that never answers, a slow-rising line, high speed, on swd_engine alone against a behavioural STM8.
+swimtest:
+	iverilog -g2012 -o /tmp/tb_swim.vvp -I src sim/tb_swim.v src/swd_engine.v src/i2c_master.v src/jtag_seq.v src/swim_engine.v
+	vvp -n /tmp/tb_swim.vvp | tee /dev/stderr | grep -q '^PASS'
 
 # spram_ring16 (v45 wrap-bit pointers) against the v44 ring, cycle for cycle, at 8 words deep.
 ringtest:
@@ -656,7 +682,7 @@ releasetooltest:
 	python3 ../tools/test_ice40_release.py
 
 # Run every self-checking testbench, then smoke-build the v1 gateware.
-test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest check-protocol releasetooltest
+test: i2cemutest uarttest cdctest dactest dac8554test daclooptest dacpsramrdtest dacpsramskewtest dacpsramreplaytest adctest adctimingtest dualwrtest arbtest looptest loopframetest dsptest multiboot lapsramtest measuretest argtest steppertest topsmoketest topcapturetest topadct0test topboottest topspilinktest topdeeptest topmuxtest spitest swdqtest uart2test topemutest ringtest lachangetest toplachangetest jtagtest swimtest i2cmastertest check-protocol releasetooltest
 	@echo "All gateware testbenches passed."
 
 clean:
