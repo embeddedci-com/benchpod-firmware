@@ -28,6 +28,9 @@ on:
         description: Pin the clk divider flop and its SB_GB (make PIN_CLKDIV=1, ice40/pin_clkdiv.py)
         type: boolean
         default: false
+      nextpnr_extra:
+        description: Extra nextpnr flags for a trial (empty or --opt-timing)
+        default: ''
 
 permissions:
   contents: read
@@ -39,6 +42,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       first: ${{ steps.plan.outputs.first }}
       last: ${{ steps.plan.outputs.last }}
+      extra: ${{ steps.plan.outputs.extra }}
     steps:
       # The inputs reach the shell through env, never pasted into the script, and must be numbers.
       - name: Plan chunks
@@ -46,7 +50,9 @@ jobs:
         env:
           FIRST: ${{ inputs.first }}
           LAST: ${{ inputs.last }}
+          EXTRA: ${{ inputs.nextpnr_extra }}
         run: |
+          case "$EXTRA" in ''|--opt-timing) ;; *) echo "::error::nextpnr_extra must be empty or --opt-timing"; exit 1 ;; esac
           case "$FIRST$LAST" in *[!0-9]*) echo "::error::first and last must be numbers"; exit 1 ;; esac
           [ -n "$FIRST" ] && [ -n "$LAST" ] || { echo "::error::first and last must be numbers"; exit 1; }
           [ "${#FIRST}" -le 9 ] && [ "${#LAST}" -le 9 ] || { echo "::error::first and last are too large"; exit 1; }
@@ -73,7 +79,7 @@ jobs:
             printf "]}"
           }')
           echo "$matrix"
-          { echo "matrix=$matrix"; echo "first=$first"; echo "last=$last"; } >> "$GITHUB_OUTPUT"
+          { echo "matrix=$matrix"; echo "first=$first"; echo "last=$last"; echo "extra=$EXTRA"; } >> "$GITHUB_OUTPUT"
 
   sweep:
     needs: plan
@@ -98,6 +104,7 @@ jobs:
           FIRST: ${{ matrix.first }}
           LAST: ${{ matrix.last }}
           PIN_CLKDIV: ${{ inputs.pin_clkdiv && '1' || '0' }}
+          NEXTPNR_EXTRA: ${{ needs.plan.outputs.extra }}
         run: |
           RAW=1 sh ice40/synth/seed_sweep.sh bench_pod_fpga_vbench_pod_${{ matrix.image }}.json \
             "$FIRST" "$LAST" | tee raw.txt
