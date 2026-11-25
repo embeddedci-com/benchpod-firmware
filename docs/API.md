@@ -4154,7 +4154,7 @@ back. A failure points at the iCE40 to PSRAM write path, not at the analog ADC.
 {"cmd":"psram_ping","count":16}
 ```
 
-`count` is 4..256 (default 16). Reply: `{"pass":true,"count":16,"first_bad":-1}`.
+`count` is 4..128 (default 16); larger values are capped at 128. Reply: `{"pass":true,"count":16,"first_bad":-1}`.
 
 <a id="psram_recover--reboot-to-recover-the-psram"></a>
 ### `psram_recover` — reboot to recover the PSRAM

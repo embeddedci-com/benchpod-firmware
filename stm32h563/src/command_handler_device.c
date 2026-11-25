@@ -468,7 +468,9 @@ void handle_psram_ping(int conn_id, const char *json) {
     int n = 16;
     if (json_get_value(json, "count", v, sizeof(v))) n = atoi(v);
     if (n < 4)   n = 4;
-    if (n > 256) n = 256;
+    /* Gateware v68 fails the self-test above 128 words (the capture datapath itself is fine:
+       ADC/LA captures write far more). Cap it until the self-test logic is fixed. */
+    if (n > 128) n = 128;
     if (!heavy_begin(conn_id)) return;
     int bad = -1;
     int rc = signal_engine_capture_selftest_at(BP_LOG_DEBUG, n, &bad);   /* the reply has the result */
