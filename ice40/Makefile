@@ -66,7 +66,11 @@ DEEP_DEFINES = -DUSE_DEEP_REPLAY
 # v54: the emulation image (the emulated sensors; no control loop, no deep replay). src/image_config.vh.
 EMU_DEFINES = -DUSE_EMULATION
 # Per-clock timing constraints for the two v2 clock domains (clk48 / clk).
-PREPACK = --pre-pack clocks.py
+# PIN_CLKDIV=1 (opt-in, default off: builds are unchanged) also pins the clk divider flop and its
+# SB_GB (pin_clkdiv.py), which makes clk's lag behind clk48 constant.  Turn it on with a
+# GATEWARE_VERSION bump, then re-sweep seeds; see ../docs/design/ice40-seed-history.md.
+PIN_CLKDIV ?= 0
+PREPACK = --pre-pack clocks.py$(if $(filter 1,$(PIN_CLKDIV)), --pre-pack pin_clkdiv.py)
 # Pinned PnR seeds.  Every image has its own netlist and so its own pinned seed: placement, not
 # the 24 MHz `clk` target, is what moves from seed to seed, and the clk48 margin and the untimed
 # clk <-> clk48 crossings (MIN_CLK48_MHZ, MAX_X48_NS, MAX_X24_NS below) decide which seed is pinned.
@@ -354,7 +358,7 @@ images: $(OUT)_loop.bin $(OUT)_deep.bin $(OUT)_emu.bin
 IMAGE ?= loop
 SWEEP ?= 1 24
 seed-sweep: $(OUT)_$(IMAGE).json $(PCF)
-	MIN_CLK48_MHZ=$(MIN_CLK48_MHZ) MIN_CLK_MHZ=$(MIN_CLK_MHZ) MAX_X48_NS=$(MAX_X48_NS) MAX_X24_NS=$(MAX_X24_NS) \
+	PIN_CLKDIV=$(PIN_CLKDIV) MIN_CLK48_MHZ=$(MIN_CLK48_MHZ) MIN_CLK_MHZ=$(MIN_CLK_MHZ) MAX_X48_NS=$(MAX_X48_NS) MAX_X24_NS=$(MAX_X24_NS) \
 	  sh synth/seed_sweep.sh $(OUT)_$(IMAGE).json $(SWEEP)
 
 # ---- hardware-verified images for firmware releases (tools/ice40_release.py) ----

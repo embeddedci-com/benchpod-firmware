@@ -5,6 +5,9 @@
 #
 #   gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=32
 #
+# -f pin_clkdiv=true sweeps with the opt-in divider pin (PIN_CLKDIV=1, see
+# docs/design/ice40-seed-history.md); the default sweeps what the default build places.
+#
 # The seeds are split into chunks that run in parallel on separate runners (loop 4, deep 2, emu 4:
 # since the v65 emu split, loop seeds take the longest), each chunk with a rolling pool of jobs
 # (seed_sweep.sh).  The summary job merges the chunks into one table per image (step summary and the sweep-<image> artifact, the
@@ -21,6 +24,10 @@ on:
       last:
         description: Last seed
         default: '32'
+      pin_clkdiv:
+        description: Pin the clk divider flop and its SB_GB (make PIN_CLKDIV=1, ice40/pin_clkdiv.py)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -90,6 +97,7 @@ jobs:
         env:
           FIRST: ${{ matrix.first }}
           LAST: ${{ matrix.last }}
+          PIN_CLKDIV: ${{ inputs.pin_clkdiv && '1' || '0' }}
         run: |
           RAW=1 sh ice40/synth/seed_sweep.sh bench_pod_fpga_vbench_pod_${{ matrix.image }}.json \
             "$FIRST" "$LAST" | tee raw.txt
