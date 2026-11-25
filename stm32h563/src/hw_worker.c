@@ -63,6 +63,8 @@ static QueueHandle_t s_q;
 /* The Wi-Fi control asked for the ESP32-C3 reflash while a capture, upload or update owned the
    shared bus: it reads the W25Q for ~2 minutes, so it waits for the bus instead of cutting in. */
 static bool s_esp_flash_deferred;
+static uint32_t s_esp_flash_retry_at;   /* when a deferred C3 flash may try again (ms tick) */
+static uint8_t  s_esp_flash_tries;
 
 /* Scratch work item for producers (each producer runs on its own task; the queue
    copies by value, but the staging buffer must not be shared — use a local). */
@@ -282,9 +284,24 @@ bool hw_worker_cloud_pending(void) { return s_cloud_pending; }
    came back) still boots the C3, and the Wi-Fi control sees whether it comes up. */
 static void esp_flash_finished(int result) { esp_wifi_ctrl_flash_done(result >= 0); }
 
+/* The ROM-loader code runs from the usb image (xip blob slot): when that cannot run the C3 is not
+   touched, the reason is logged (esp_rom_flash.c) and goes to the Wi-Fi status; installing the xip
+   blob later re-arms the automatic flash (blob_hooks.c). A capture or another W25Q code job in the
+   way is retried once a second for about a minute. */
+#define ESP_FLASH_BUSY_TRIES 60u
+
 static void start_esp_flash(void)
 {
-    if (esp_rom_flash_start(esp_flash_finished) != 0) esp_wifi_ctrl_flash_done(false);
+    int rc = esp_rom_flash_start(esp_flash_finished);
+    if (rc == 0) { s_esp_flash_tries = 0; return; }
+    if (rc == ESP_FLASH_START_XIP_BUSY && s_esp_flash_tries++ < ESP_FLASH_BUSY_TRIES) {
+        s_esp_flash_deferred = true;
+        s_esp_flash_retry_at = HAL_GetTick() + 1000u;
+        return;
+    }
+    s_esp_flash_tries = 0;
+    if (rc == ESP_FLASH_START_NO_XIP) esp_wifi_ctrl_flash_refused("C3 flash needs xip blob: install-blobs");
+    esp_wifi_ctrl_flash_done(false);
 }
 
 static void handle_work(cmd_work_t *w) {
@@ -430,7 +447,8 @@ static void worker_task(void *arg) {
             net_reload_commit(HAL_GetTick());
         }
         apply_parked_teardowns(); /* closes/resets that did not fit in the queue */
-        if (s_esp_flash_deferred && !heavy_or_claimed()) {   /* the bus is free again */
+        if (s_esp_flash_deferred && !heavy_or_claimed() &&   /* the bus is free again */
+            (int32_t)(HAL_GetTick() - s_esp_flash_retry_at) >= 0) {
             s_esp_flash_deferred = false;
             LOG_I("[hw] running the deferred ESP32-C3 flash\n");
             start_esp_flash();

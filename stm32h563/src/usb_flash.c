@@ -1,6 +1,6 @@
 /* usb_flash.c — see usb_flash.h. USB_HOST=1 builds only. Internal flash: the job around the W25Q
-   code (msc_flash_step, ctrl_flash_step and ser_flash_step run from the image, through the XIP
-   session's table), and the esp mode around the internal ESP32 flasher. */
+   code (msc_flash_step, ctrl_flash_step, ser_flash_step and the ESP32 ROM loader's esp_rom_job_step
+   run from the image, through the XIP session's table). */
 #include "usb_flash.h"
 #include "usb_msc.h"
 #include "usb_flash_wait.h"
@@ -249,7 +249,7 @@ static int esp_poll(void)
         s_esp_io = (esp_rom_io_t){ esp_send, esp_rx_byte, now_ms, esp_read, NULL,
                                    usb_serial_is_bridge() ? esp_set_baud : NULL };
         esp_rom_opts_t o = { .baud = usb_serial_is_bridge() ? ESP_FAST_BAUD : 0, .flash_size = 0 };
-        esp_rom_job_prepare(&s_esp, esp_rom_run_work(), &s_esp_io, s.len, s.address, &o, false);
+        esp_rom_job_prepare(&s_esp, s.ctx, &s_esp_io, s.len, s.address, &o, false);
         esp_rom_run_begin(&s_esp);
         s.esp_pre = ESP_PRE_JOB;
         return 1;
@@ -416,7 +416,7 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
     if (p->len == 0 || p->len > staged) { *why = "len is 0 or more than the staged upload"; return -1; }
 
     memset(&s, 0, sizeof(s));
-    if (fam != FAM_ESP) {
+    {
         xip_err_t xe = xip_session_begin(XIP_IMG_USB);
         if (xe != XIP_OK) {
             /* The other image's session (prog_flash holds it for a whole job) counts as busy. */
@@ -427,7 +427,8 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
         }
         s.xip = true;
         size_t size = fam == FAM_CTRL ? sizeof(ctrl_flash_ctx_t)
-                    : fam == FAM_SER  ? sizeof(ser_flash_ctx_t) : sizeof(msc_flash_ctx_t);
+                    : fam == FAM_SER  ? sizeof(ser_flash_ctx_t)
+                    : fam == FAM_ESP  ? sizeof(esp_rom_work_t) : sizeof(msc_flash_ctx_t);
         s.ctx = pvPortMalloc(size);
         if (!s.ctx) { xip_session_end(); s.xip = false; *why = "out of memory"; return -1; }
         memset(s.ctx, 0, size);
@@ -454,7 +455,7 @@ int usb_flash_start(const usb_flash_params_t *p, const char **why)
         c->leave = p->leave;
         break;
     }
-    case FAM_ESP:
+    case FAM_ESP:   /* s.ctx holds the job's buffers (esp_rom_work_t) */
         memset(&s_esp, 0, sizeof(s_esp));
         s.esp_pre = ESP_PRE_RESET;
         s.vid = hi.vid;

@@ -243,7 +243,7 @@ C_SOURCES := \
   src/esp_rom_flash.c \
   src/c3_image.c \
   src/c3_update.c \
-  src/esp_rom_job.c \
+  src/xip_mod_esp_rom.c \
   src/esp_rom_names.c \
   src/esp_rom_run.c \
   src/esp_dut_flash.c \

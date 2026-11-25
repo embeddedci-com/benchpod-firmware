@@ -39,6 +39,7 @@ static struct {
 } s;
 
 static esp_rom_job_t s_job;
+static esp_rom_work_t *s_work;   /* the job's buffers; non-NULL = its XIP session is open (esp_rom_run.h) */
 static esp_rom_io_t  s_io;
 static uart_pins_t   s_uart_pins;   /* RX / TX and RX's pull-up, the same helpers as the UART proxy */
 
@@ -144,19 +145,29 @@ int esp_dut_flash_start(const esp_dut_params_t *p, char *err, uint32_t cap)
         snprintf(err, cap, "rx, tx, boot and en must be different pins"); return -1;
     }
 
+    /* The ROM-loader code runs from the usb image in the W25Q: open its session before anything is
+       claimed or driven, and close it on every refusal below and when the job ends (finish). */
+    int xe = esp_rom_run_open(&s_work);
+    if (xe != 0) {
+        esp_rom_run_why(xe, err, cap);
+        return -2;                       /* BP0083 (xip_unavailable): the same refusal as usb_flash */
+    }
+
     /* Claim everything before anything moves; on a refusal nothing stays claimed.  The UART pins
        go through the proxy's helpers (uart_pins_claim): the same checks, and RX held high while
        the ROM's TX is not driven yet (before EN is released), like the proxy does. */
     uint8_t gp[2] = { p->boot, p->en };
     size_t ngp = (p->en == ESP_DUT_EN_NRST) ? 1 : 2;
-    if (!uart_pins_claim(&s_uart_pins, p->rx, p->tx, 0, false, err, cap)) return -1;
+    if (!uart_pins_claim(&s_uart_pins, p->rx, p->tx, 0, false, err, cap)) { esp_rom_run_close(&s_work); return -1; }
     if (!la_pins_check_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, gp, ngp, 0, la_pull_mask_now(), err, cap)) {
         uart_pins_release(&s_uart_pins);
+        esp_rom_run_close(&s_work);
         return -1;
     }
     int rc = fpga_uart_config(p->rx, p->tx, START_BAUD, true);
     if (rc != 0) {
         uart_pins_release(&s_uart_pins);
+        esp_rom_run_close(&s_work);
         if (rc == -2) bp_note_uart_session_open(err, cap);
         else          snprintf(err, cap, "invalid uart pins");
         return -1;
@@ -195,6 +206,7 @@ static void finish(int result)
                esp_rom_chip_name(s_job.chip_magic), (unsigned long)s_job.resends,
                (unsigned long)s.ms);
     release_pins();
+    esp_rom_run_close(&s_work);
     s.st = ST_IDLE;
 }
 
@@ -214,11 +226,11 @@ void esp_dut_flash_poll(void)
         if (now - s.t_state < EN_SETTLE_MS) return;
         s_io = (esp_rom_io_t){ io_send, io_rx_byte, io_now, s.p.len ? io_read : NULL, NULL, io_set_baud };
         if (s.p.len == 0) {
-            esp_rom_job_prepare(&s_job, esp_rom_run_work(), &s_io, 0, 0, NULL, true);
+            esp_rom_job_prepare(&s_job, s_work, &s_io, 0, 0, NULL, true);
             esp_rom_run_begin(&s_job);
         } else {
             esp_rom_opts_t o = { (s.p.baud && s.p.baud != START_BAUD) ? s.p.baud : 0, s.p.flash_size };
-            esp_rom_job_prepare(&s_job, esp_rom_run_work(), &s_io, s.p.len, s.p.offset, &o, false);
+            esp_rom_job_prepare(&s_job, s_work, &s_io, s.p.len, s.p.offset, &o, false);
             esp_rom_run_begin(&s_job);
         }
         s.st = ST_JOB;

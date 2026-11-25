@@ -36,7 +36,10 @@ typedef struct {
 } esp_dut_params_t;
 
 /* Start: claims the pins (err holds the reason on failure), checks the staged upload, puts the
-   DUT into its loader and starts the job.  0 = started, < 0 = not started (err set). */
+   DUT into its loader and starts the job.  0 = started, < 0 = not started (err set): -1 a refusal
+   (BP0084-style: pins, staging, busy), -2 the usb image in the W25Q cannot run (BP0083: install
+   the blobs) or is busy.  The ROM-loader code runs from that image, in an XIP session the job holds
+   from start to its end (esp_rom_run.h), so the pod's own C3 flash and usb_flash exclude it. */
 int  esp_dut_flash_start(const esp_dut_params_t *p, char *err, uint32_t err_cap);
 
 /* Advance the background flash; cheap when none runs.  hw worker loop only. */

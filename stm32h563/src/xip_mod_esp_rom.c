@@ -1,6 +1,10 @@
 /*
- * esp_rom_job.c — the ESP32 ROM-loader write as a non-blocking state machine (see
+ * xip_mod_esp_rom.c — the ESP32 ROM-loader write as a non-blocking state machine (see
  * esp_rom_job.h).  Portable: everything hardware comes in through esp_rom_io_t.
+ *
+ * Runs from the W25Q (xip_image.h, the usb image): the job's state is in the esp_rom_job_t and the
+ * esp_rom_work_t its caller owns, nothing is static.  esp_rom_run.c opens the session around a job
+ * and calls begin and step through the image's table.
  */
 #include "esp_rom_job.h"
 #include "bp_log.h"

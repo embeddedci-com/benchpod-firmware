@@ -120,7 +120,9 @@ void handle_esp_flash(int conn_id, const char *json) {
     }
 
     char err[160];
-    if (esp_dut_flash_start(&p, err, sizeof(err)) != 0) { send_error(conn_id, err); return; }
+    int rc = esp_dut_flash_start(&p, err, sizeof(err));
+    if (rc == -2) { bp_err_xip_unavailable(conn_id, err); return; }   /* the usb image cannot run */
+    if (rc != 0) { send_error(conn_id, err); return; }
     char r[48];
     snprintf(r, sizeof(r), "{\"started\":true,\"op\":\"%s\"}", sync ? "sync" : "start");
     send_ok_str(conn_id, r);

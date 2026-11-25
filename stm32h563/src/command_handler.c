@@ -235,7 +235,7 @@ bool heavy_in_flight(void) {
     return capture_busy() || o == OTA_RECEIVING || o == OTA_VERIFIED || o == OTA_APPLYING ||
            esp_rom_flash_busy() || esp_dut_flash_busy() || prog_flash_busy() || xip_session_active()
 #if defined(BENCHPOD_USB_HOST)
-           || usb_flash_busy()   /* the esp mode reads the staged image without an XIP session */
+           || usb_flash_busy()
 #endif
            ;
 }
@@ -263,7 +263,10 @@ const char *bus_busy_reason(void) {
     if (esp_rom_flash_busy())
         return bp_tag_storage_bus_busy("busy: the ESP32-C3 is being flashed (about 2 minutes); try again "
                                        "when it ends", "the Wi-Fi chip is being flashed");
-    /* before the session test: a prog_flash job holds an XIP session for its whole run */
+    /* before the session test: an esp_flash job and a prog_flash job hold an XIP session for their whole run */
+    if (esp_dut_flash_busy())
+        return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
+                                       "it ends", "a target is being flashed (esp_flash)");
     if (prog_flash_busy())
         return bp_tag_storage_bus_busy("busy: a chip is being flashed over its programming pins (prog_flash); "
                                        "try again when it ends", "a target is being flashed (prog_flash)");
@@ -275,9 +278,6 @@ const char *bus_busy_reason(void) {
         return bp_tag_storage_bus_busy("busy: a board on the USB host port is being flashed (usb_flash); "
                                        "try again when it ends", "a flash over USB is running");
 #endif
-    if (esp_dut_flash_busy())
-        return bp_tag_storage_bus_busy("busy: an ESP32 target is being flashed (esp_flash); try again when "
-                                       "it ends", "a target is being flashed (esp_flash)");
 #if defined(BENCHPOD_WIFI_BRIDGE)
     if (wifi_bridge_ota_busy())
         return bp_tag_storage_bus_busy("busy: the Wi-Fi bridge is being updated (about a minute); try again "

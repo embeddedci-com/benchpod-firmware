@@ -7,6 +7,7 @@
 #include "msc_flash.h"
 #include "ctrl_flash.h"
 #include "ser_flash.h"
+#include "esp_rom_job.h"
 
 #include <stdint.h>
 
@@ -28,5 +29,7 @@ const xip_table_t xip_table = {
     { [XIP_FN_SELFTEST] = (const void *)selftest,
       [XIP_FN_MSC_FLASH_STEP] = (const void *)msc_flash_step,
       [XIP_FN_CTRL_FLASH_STEP] = (const void *)ctrl_flash_step,
-      [XIP_FN_SER_FLASH_STEP] = (const void *)ser_flash_step },
+      [XIP_FN_SER_FLASH_STEP] = (const void *)ser_flash_step,
+      [XIP_FN_ESP_ROM_BEGIN] = (const void *)esp_rom_job_begin,
+      [XIP_FN_ESP_ROM_STEP] = (const void *)esp_rom_job_step },
 };

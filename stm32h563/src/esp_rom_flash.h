@@ -26,6 +26,11 @@
  * stopped (esp_hosted_spi_stop()).  On success the C3 is left running the new
  * firmware; on failure it is left held in reset (EN low, powered down).
  * All of it runs on the hw worker.
+ *
+ * The ROM-loader protocol is code of the usb image in the W25Q (xip_mod_esp_rom.c): every one of
+ * these (sync, a background flash, the NVS erase) runs inside an XIP session (esp_rom_run.h), so
+ * each needs the xip blob slot to hold this firmware's image and refuses before it touches the C3's
+ * straps when it does not.
  * -------------------------------------------------------------------------- */
 
 /* Strap the C3 into its ROM download bootloader and establish SLIP comms
@@ -48,7 +53,13 @@ typedef void (*esp_flash_done_fn)(int result);
 #define ESP_FLASH_START_NO_IMAGE -2   /* slot esp is empty          */
 #define ESP_FLASH_START_BAD_SLOT -3   /* slot esp fails its SHA-256 */
 #define ESP_FLASH_START_NO_MODULE -4  /* no ESP32-C3 on this board (digital v3r3) */
+#define ESP_FLASH_START_NO_XIP   -5   /* the usb image that holds the ROM-loader code cannot run:
+                                         esp_rom_flash_start_why(): install the blobs (xip) */
+#define ESP_FLASH_START_XIP_BUSY -6   /* a capture, upload or another W25Q code job holds it: try again shortly */
 int esp_rom_flash_start(esp_flash_done_fn done);
+
+/* Why the last start returned ESP_FLASH_START_NO_XIP or ESP_FLASH_START_XIP_BUSY, in a sentence. */
+const char *esp_rom_flash_start_why(void);
 
 /* The same background flash with the image an esp update staged in PSRAM (ota.c, `len` bytes,
  * verified by the caller): how the pod updates the C3 now that it keeps no copy of its image

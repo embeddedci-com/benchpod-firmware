@@ -19,6 +19,8 @@
 #include "c3_image.h"
 #include "esp_rom_flash.h"
 #include "esp_rom_job.h"      /* esp_rom_result_str */
+#include "esp_rom_run.h"      /* esp_rom_run_ready: the ROM-loader code is in the usb image (xip) */
+#include "xip_session.h"
 #include "esp_wifi_ctrl.h"
 #include "net_server.h"       /* net_wifi_hold_for_flash */
 #include "w25q.h"
@@ -29,8 +31,11 @@
 #include <string.h>
 
 #define C3_UPDATE_DELAY_MS  1000u
+#define C3_UPDATE_BUSY_TRIES  60u   /* a capture, upload or other W25Q code job in the way: about a minute */
 
 static bool     s_pending;
+static bool     s_held;          /* the Wi-Fi control is held off the C3 (waiting to retry) */
+static uint8_t  s_tries;
 static uint32_t s_start_at;
 static uint32_t s_len, s_version, s_nvs_off, s_nvs_size;
 static uint8_t  s_sha[32];
@@ -44,6 +49,14 @@ int ota_apply_esp_staged(uint32_t size, uint32_t version, const uint8_t sha256[3
     }
     if (s_pending || esp_rom_flash_busy()) {
         snprintf(why, cap, "an ESP32-C3 flash is already running");
+        return -1;
+    }
+    /* The C3 is written by ROM-loader code that runs from the xip blob slot (esp_rom_run.h): say
+       now, in the commit's reply, what an empty or stale slot costs, not after the C3's Wi-Fi went down. */
+    int xe = esp_rom_run_ready();
+    if (xe != 0) {
+        snprintf(why, cap, "%s", xe == XIP_ERR_SLOT ? "install the xip blob first (benchpod install-blobs)"
+                                                    : xip_err_text((xip_err_t)xe));
         return -1;
     }
     s_len = size;
@@ -71,16 +84,28 @@ void c3_update_poll(void)
 {
     if (!s_pending || (int32_t)(HAL_GetTick() - s_start_at) < 0) return;
     s_pending = false;
-    s_nvs_off = s_nvs_size = 0;
-    if (!esp_rom_flash_staged_nvs(&s_nvs_off, &s_nvs_size))
-        log_printf("[c3] no NVS partition in the image's partition table: wifi-clear will not know it\n");
-    log_printf("[c3] writing the esp update into the ESP32-C3 (%lu bytes, about 2 minutes); "
-               "Wi-Fi is down meanwhile\n", (unsigned long)s_len);
-    net_wifi_hold_for_flash(true);    /* the Wi-Fi control must not drive EN/BOOT meanwhile */
-    if (esp_rom_flash_start_staged(s_len, flash_done) != 0) {
-        net_wifi_hold_for_flash(false);
-        ota_apply_finished(false, "ESP32-C3 flash could not start");
+    if (!s_held) {
+        s_nvs_off = s_nvs_size = 0;
+        if (!esp_rom_flash_staged_nvs(&s_nvs_off, &s_nvs_size))
+            log_printf("[c3] no NVS partition in the image's partition table: wifi-clear will not know it\n");
+        log_printf("[c3] writing the esp update into the ESP32-C3 (%lu bytes, about 2 minutes); "
+                   "Wi-Fi is down meanwhile\n", (unsigned long)s_len);
+        net_wifi_hold_for_flash(true);    /* the Wi-Fi control must not drive EN/BOOT meanwhile */
+        s_held = true;
     }
+    int rc = esp_rom_flash_start_staged(s_len, flash_done);
+    if (rc == 0) { s_held = false; s_tries = 0; return; }
+    if (rc == ESP_FLASH_START_XIP_BUSY && s_tries++ < C3_UPDATE_BUSY_TRIES) {
+        /* The ROM-loader code (the usb image) is in use for a moment: try again, the C3 untouched. */
+        s_start_at = HAL_GetTick() + C3_UPDATE_DELAY_MS;
+        s_pending = true;
+        return;
+    }
+    s_held = false;
+    s_tries = 0;
+    net_wifi_hold_for_flash(false);
+    ota_apply_finished(false, rc == ESP_FLASH_START_NO_XIP ? "install the xip blob first (benchpod install-blobs)"
+                                                          : "ESP32-C3 flash could not start");
 }
 
 bool c3_update_pending(void) { return s_pending; }

@@ -19,8 +19,8 @@
  * board (usb_host on, the device enumerated; a drive mounted for uf2/file, a serial port for
  * avr/samd/esp; a device for dfu/teensy/picoboot). The job runs in steps on the hw worker (usb_flash_poll), so the worker keeps
  * answering commands; it holds off captures, DAC playback, uploads and updates meanwhile, and keeps
- * host mode alive. Every mode but esp runs its protocol code from the W25Q in an XIP session
- * (xip_session.h); esp uses the internal flasher. */
+ * host mode alive. Every mode runs its protocol code from the W25Q in an XIP session
+ * (xip_session.h), esp too (the ROM loader of esp_rom_job.h is part of the image). */
 
 #include <stdbool.h>
 #include <stdint.h>
