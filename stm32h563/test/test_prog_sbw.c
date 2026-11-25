@@ -192,7 +192,7 @@ static void dr_capture(m430_t *m)
     case 0x83: case 0x84: scrambled20(m->dr_out, m->mab); m->dr_out_n = 20; break;
     case 0x85: case 0x41: case 0x42: case 0x43: bits_msb(m->dr_out, 16, m->mdb); m->dr_out_n = 16; break;
     case 0x17: bits_msb(m->dr_out, 16, 0x1234); m->dr_out_n = 16; break;             /* core ID, not zero */
-    case 0x87: scrambled20(m->dr_out, 0x1A00); m->dr_out_n = 20; break;              /* the device descriptor pointer */
+    case 0x87: bits_msb(m->dr_out, 20, 0x1A00); m->dr_out_n = 20; break;             /* the device descriptor pointer: plain, not scrambled */
     case 0x61: bits_msb(m->dr_out, 16, (m->halted && m->jmb_expect == 0) ? 1u : 0u); m->dr_out_n = 16; break;
     default:   m->dr_bypass = true; break;
     }

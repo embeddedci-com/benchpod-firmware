@@ -267,6 +267,11 @@ static int bring_up(prog_ctx_t *c, bool rst_low)
     if (dr16(c, 0) == 0) return PROG_E_PROTOCOL;
     ir(c, IR_DEVICE_ID);
     st->devptr = dr20(c, 0);
+    /* The chip sends this pointer as a plain 20-bit value, not in the MAB's scrambled order that dr20
+       undoes: undo that again (TI GetCoreipIdXv2: "The ID pointer is an un-scrambled 20bit value").
+       Without it 0x1A00 read as 0x001A0, and the device ID came from a peripheral register (FR2433 on
+       the bench: 0x0006 instead of 0x8240). */
+    st->devptr = ((st->devptr & 0xFFFFu) << 4) + (st->devptr >> 16);
     if (st->err) return PROG_E_PROTOCOL;
     int rc = sync_por(c);
     if (rc) return rc;
