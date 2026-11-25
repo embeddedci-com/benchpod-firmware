@@ -75,6 +75,7 @@ module engine_block #(
     output wire [31:0]  stop_after_cfg,
     // ---- DAC frame control byte (OP_DAC_CTRL 0x38, v2 >= v49) -> top ----
     output wire [7:0]   dac_ctrl,         // stream control byte, taken at each DAC start
+    output wire         dac_sclk24,       // v68: DAC SCLK mode (1 = 24 MHz), taken at each DAC start
     output wire         dac_wr_stb,       // one static frame...
     output wire [23:0]  dac_wr_cfg,       // ...{ctrl, code_hi, code_lo}
     // closed-loop DAC control (OP_START_DAC_LOOP 0x15, >=v23)
@@ -212,7 +213,7 @@ module engine_block #(
         .dac_period(dac_period), .dac_divider(dac_divider),
         .dac_psram_mode(dac_psram_mode), .dac_psram_base(dac_psram_base), .dac_psram_len(dac_psram_len),
         .stop_after_stb(stop_after_stb), .stop_after_cfg(stop_after_cfg),
-        .dac_ctrl(dac_ctrl), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
+        .dac_ctrl(dac_ctrl), .dac_sclk24(dac_sclk24), .dac_wr_stb(dac_wr_stb), .dac_wr_cfg(dac_wr_cfg),
         .dac_loop_mode(dac_loop_mode),
         .loop_arm_stb(loop_arm_stb),     .loop_arm_cfg(loop_arm_cfg),
         .loop_src_stb(loop_src_stb),     .loop_src_cfg(loop_src_cfg),

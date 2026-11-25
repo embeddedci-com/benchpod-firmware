@@ -418,6 +418,9 @@ dactest:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac.vvp \
 	         sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac.vvp
+	iverilog -g2012 -DTB_SCLK24 -o /tmp/$(PROJECT)_dac24.vvp sim/tb_dac8551.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dac24.vvp
+	@rm -f /tmp/$(PROJECT)_dac24.vvp
 	@rm -f /tmp/$(PROJECT)_dac.vvp
 
 # DAC8554 support (v49): the stream control byte and the one-shot static frame (OP_DAC_CTRL).
@@ -425,6 +428,9 @@ dac8554test:
 	iverilog -g2012 -o /tmp/$(PROJECT)_dac8554.vvp \
 	         sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
 	$(VVP) /tmp/$(PROJECT)_dac8554.vvp
+	iverilog -g2012 -DTB_SCLK24 -o /tmp/$(PROJECT)_dac855424.vvp sim/tb_dac8554.v src/dac8551_engine.v src/dac_pads.v $(CELLS_SIM)
+	$(VVP) /tmp/$(PROJECT)_dac855424.vvp
+	@rm -f /tmp/$(PROJECT)_dac855424.vvp
 	@rm -f /tmp/$(PROJECT)_dac8554.vvp
 
 # Self-checking simulation of the DAC8551 waveform-loop terminal (sleft counter).

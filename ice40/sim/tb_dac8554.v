@@ -19,6 +19,11 @@
 // Run:  make dac8554test
 `timescale 1ns/1ps
 module tb_dac8554;
+`ifdef TB_SCLK24
+    localparam TB_M24 = 1'b1, TB_OVH = 51;   // v68 24 MHz mode: 2 clk/bit
+`else
+    localparam TB_M24 = 1'b0, TB_OVH = 75;   // v68 16 MHz mode (default): 3 clk/bit
+`endif
     reg clk = 0;
     always #10 clk = ~clk;
 
@@ -40,7 +45,7 @@ module tb_dac8554;
     dac8551_engine #(.ADDR_W(12)) dut (
         .clk(clk), .rst(rst), .start(start), .stop(stop),
         .period_samples(period), .divider(divider),
-        .ctrl(ctrl), .wr_req(wr_req), .wr_frame(wr_frame),
+        .ctrl(ctrl), .sclk24(TB_M24), .wr_req(wr_req), .wr_frame(wr_frame),
         .wave_addr(waddr), .wave_data(wdata),
         .psram_mode(psram_mode), .strm_data(8'hA5), .strm_valid(1'b1), .strm_pop(strm_pop),
         .dac_sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b), .running(running)
@@ -188,7 +193,7 @@ module tb_dac8554;
                 $display("FAIL div=%0d psram=%0d: %0d static frames, want 1", div, psm, n - s);
                 errors = errors + 1;
             end
-            want_gap = 2 * (((div < 4) ? 4 : div) + 75);   // in halves
+            want_gap = 2 * (((div < 4) ? 4 : div) + TB_OVH);   // in halves
             for (k = 2; k < n; k = k + 1)
                 if (gaps[k] != want_gap) begin
                     $display("FAIL div=%0d psram=%0d: frame %0d came %0d halves after the previous, want %0d",
@@ -254,8 +259,8 @@ module tb_dac8554;
         repeat (20) @(posedge clk);
         send_static(24'h125555);
         repeat (200) @(posedge clk);
-        if (nfr != 2 || frames[0] !== 24'h16AAAA || frames[1] !== 24'h125555 || gaps[1] != 2 * (4 + 75)) begin
-            $display("FAIL static x2 at div 0: %0d frame(s) %06h %06h, gap %0d halves (want 2, 16aaaa 125555, 158)",
+        if (nfr != 2 || frames[0] !== 24'h16AAAA || frames[1] !== 24'h125555 || gaps[1] != 2 * (4 + 75)) begin   // idle static frames: always 16 MHz (v68)
+            $display("FAIL static x2 at div 0: %0d frame(s) %06h %06h, gap %0d halves (want 2, 16aaaa 125555, 158: idle static frames run at 16 MHz)",
                      nfr, frames[0], frames[1], gaps[1]);
             errors = errors + 1;
         end

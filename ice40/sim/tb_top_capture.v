@@ -597,6 +597,17 @@ module tb_top_capture;
     localparam STOP_N = 300;                 // stop-after cycles for the trigger co-trigger pass
     reg [7:0] r; integer i;
     integer ns, nb;                          // DAC_CTRL: stream / static frame counts
+    // v68 SCLK mode: SCLK rise-to-rise periods inside frames while sclk_rec is set (clk48 is 20 ns here)
+    reg        sclk_rec = 1'b0;
+    realtime   sclk_last = 0, sclk_pmin = 1e9, sclk_pmax = 0;
+    integer    m;
+    always @(posedge dac_sclk) if (sclk_rec) begin
+        if (sclk_last > 0 && $realtime - sclk_last < 150.0) begin
+            if ($realtime - sclk_last < sclk_pmin) sclk_pmin = $realtime - sclk_last;
+            if ($realtime - sclk_last > sclk_pmax) sclk_pmax = $realtime - sclk_last;
+        end
+        sclk_last = $realtime;
+    end
     reg [15:0] got; reg [15:0] want;
     integer base_la6, base_la2, base_dac, base_auto;
     initial begin
@@ -879,6 +890,24 @@ module tb_top_capture;
         if (r[0] !== 1'b0) begin $display("FAIL dac-ctrl idle: STATUS DAC_RUN set by a static frame"); errors = errors + 1; end
         cmd_dac_ctrl(8'h01, 8'h00, 16'h0000);           // back to the DAC8551 frame
         $display("  [dacctl] idle static 141234 alone, DAC_RUN stays 0; control byte back to 00");
+
+        // ---- v68: DAC_CTRL flags bit2 sets the SCLK mode from bit3 (1 = 24 MHz), taken at the next
+        //      start: 16 MHz (3 clk48 per bit) by default, 24 MHz (2 clk48), back to 16 MHz. ----
+        for (m = 0; m < 3; m = m + 1) begin
+            if (m == 1) cmd_dac_ctrl(8'h0C, 8'h00, 16'h0000);    // 24 MHz
+            if (m == 2) cmd_dac_ctrl(8'h04, 8'h00, 16'h0000);    // 16 MHz again
+            sclk_pmin = 1e9; sclk_pmax = 0; sclk_last = 0; sclk_rec = 1'b1;
+            cmd_start_dac(DAC_PA, 16'd4);
+            #20000;
+            sclk_rec = 1'b0;
+            cmd_op0(8'h12); #2000;
+            if (sclk_pmin != sclk_pmax || sclk_pmin != ((m == 1) ? 40.0 : 60.0)) begin
+                $display("FAIL sclk mode %0d: SCLK period %0.1f-%0.1f ns, want %0.1f (clk48 20 ns here)",
+                         m, sclk_pmin, sclk_pmax, (m == 1) ? 40.0 : 60.0);
+                errors = errors + 1;
+            end
+        end
+        $display("  [sclk mode] DAC_CTRL bit2/bit3: SCLK 3 clk48 per bit by default, 2 after 0x0C, 3 again after 0x04");
 
         // ---- MEASURE after a longer DAC run (v34): OP_START_MEASURE sets the DAC period (= count)
         //      and arms an ADC capture on the same cycle.  Its DAC start takes the same clk48

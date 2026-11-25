@@ -73,6 +73,10 @@ bool module_adc_low_range(void);
    header read at boot).  False (249 ohm) off digital v3r3 and without a module.  Read only by
    board_variant.c (board_caps()->analog.current_in_100r). */
 bool module_current_in_100r(void);
+/* The module's DAC logic runs on its 5 V AVDD behind a 3.3 -> 5 V buffer, so the DAC8554 takes
+   SCLK high/low of 10 ns and the firmware always uses the 24 MHz DAC SCLK (la_rate.h
+   dac_sclk24_for_rate fast_io).  No module revision does this yet: false until one does. */
+bool module_dac_io_5v(void);
 
 /* The digital board and the module put the DAC clock on different flat-cable pins (dac_link.h):
    the DAC must not be driven.  Live: a `module id` write takes effect at once.  False off a

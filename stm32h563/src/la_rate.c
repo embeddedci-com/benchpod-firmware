@@ -75,17 +75,48 @@ uint32_t dac_seq_overhead_clk(uint8_t gw_version)
     return gw_version >= DAC_SCLK_DDR_MIN_GW ? DAC_SEQ_OVERHEAD_CLK_V66 : DAC_SEQ_OVERHEAD_CLK_OLD;
 }
 
-uint32_t dac_sample_clocks(uint32_t divider, bool from_psram, uint8_t gw_version)
+uint32_t dac_seq_overhead_clk_mode(uint8_t gw_version, bool sclk24)
+{
+    if (sclk24 && gw_version >= DAC_SCLK_SWITCH_MIN_GW) return DAC_SEQ_OVERHEAD_CLK_24M;
+    return dac_seq_overhead_clk(gw_version);
+}
+
+bool dac_sclk24_for_rate(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram, uint8_t gw_version,
+                         bool fast_io)
+{
+    if (gw_version < DAC_SCLK_SWITCH_MIN_GW) return false;
+    if (fast_io) return true;
+    if (!(req_rate_hz > 0.0f)) return false;
+    /* The 16 MHz divider for this rate; below the floor by more than half a clock = above the max. */
+    float over16 = (float)(DAC_SEQ_OVERHEAD_CLK + (from_psram ? DAC_PSRAM_EXTRA_CLK : 0u));
+    float df = (float)dac_clk_hz / req_rate_hz - over16;
+    return df < (float)DAC_MIN_DIVIDER - 0.5f;
+}
+
+uint32_t dac_sample_clocks_mode(uint32_t divider, bool from_psram, uint8_t gw_version, bool sclk24)
 {
     if (divider < DAC_MIN_DIVIDER) divider = DAC_MIN_DIVIDER;   /* gateware v59+ floors it at 4 too */
-    return divider + dac_seq_overhead_clk(gw_version) + (from_psram ? DAC_PSRAM_EXTRA_CLK : 0u);
+    return divider + dac_seq_overhead_clk_mode(gw_version, sclk24) + (from_psram ? DAC_PSRAM_EXTRA_CLK : 0u);
+}
+
+uint32_t dac_sample_clocks(uint32_t divider, bool from_psram, uint8_t gw_version)
+{
+    return dac_sample_clocks_mode(divider, from_psram, gw_version, false);
 }
 
 dac_rate_plan_t dac_replay_plan(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram,
                                 uint8_t gw_version)
 {
+    return dac_replay_plan_ex(dac_clk_hz, req_rate_hz, from_psram, gw_version, false);
+}
+
+dac_rate_plan_t dac_replay_plan_ex(uint32_t dac_clk_hz, float req_rate_hz, bool from_psram,
+                                   uint8_t gw_version, bool fast_io)
+{
     dac_rate_plan_t p = {0};
-    uint32_t overhead = dac_sample_clocks(DAC_MIN_DIVIDER, from_psram, gw_version) - DAC_MIN_DIVIDER;
+    p.sclk24 = dac_sclk24_for_rate(dac_clk_hz, req_rate_hz, from_psram, gw_version, fast_io);
+    uint32_t overhead = dac_sample_clocks_mode(DAC_MIN_DIVIDER, from_psram, gw_version, p.sclk24)
+                        - DAC_MIN_DIVIDER;
     uint32_t d = DAC_MIN_DIVIDER;
     if (req_rate_hz > 0.0f) {
         /* rate = clk / (divider + overhead)  =>  divider = clk / rate - overhead */

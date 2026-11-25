@@ -51,7 +51,7 @@ module tb_dac_loop_frames;
     dac8551_engine #(.ADDR_W(12)) dac (
         .clk(clk48), .rst(rst48), .start(start), .stop(stop),
         .period_samples(13'd0), .divider(16'd0),
-        .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
+        .ctrl(8'h00), .sclk24(1'b0), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(wave_addr), .wave_data(8'd0),
         .psram_mode(1'b1), .strm_data(strm_data), .strm_valid(strm_valid), .strm_pop(strm_pop),
         .dac_sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b), .running(running)

@@ -13,29 +13,32 @@
 // see SERIAL TIMING); the control-plane inputs cross a CDC in top_v2 and the
 // waveform BRAM read port shares this clock.
 //
-// SERIAL TIMING (v67) vs the DAC8554 datasheet (SLAS431B, the IOVDD 2.7-3.6 V column: analog v3r2
+// SERIAL TIMING (v68) vs the DAC8554 datasheet (SLAS431B, the IOVDD 2.7-3.6 V column: analog v3r2
 // and later run IOVDD at 3.3 V), which is stricter than the DAC8551 (SLAS429E, VDD 3.6-5.5 V) on
 // every line, so the one timing serves both boards.  SCLK and DIN leave through DDR pads
-// (dac_pads), so their edges sit on a half-clk48 grid (10.4 ns).  One bit takes 3 clk:
-//     halves   q0    q1    q2
-//     SCLK     H H   H L   L L        16 MHz: high 3 halves, low 3 halves
-//     DIN      d d   d d   d d        (d = this bit; it changes with the SCLK rise)
-//   t1 SCLK period 3 clk = 62.5 ns (>= 40)
-//   t2 / t3 SCLK high / low 1.5 clk = 31.3 ns each (>= 20).  Both phases run between a rising and
-//      a falling clk48 edge, so the oscillator's duty cycle moves them (+-1 ns at 45/55 %), with
-//      about 10 ns to spare on each
-//   t4 SYNC fall -> SCLK rise 1 clk (>= 0)        t5/t6 DIN changes on SCLK RISES only: setup
-//                                                 31.3 ns, hold 31.3 ns (>= 5 / 4.5)
-//   t7 24th SCLK fall -> SYNC rise 1.5 clk (>= 0) t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
-//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3.5 clk = 156 ns (>= 130)   (divider floor 4)
+// (dac_pads), so their edges sit on a half-clk48 grid (10.4 ns).  Two SCLK modes (`sclk24`, set by
+// OP_DAC_CTRL flags bit2/bit3 and taken at each DAC start; the firmware picks it from the rate):
+//   16 MHz (default), one bit per 3 clk:          24 MHz, one bit per 2 clk:
+//     halves   q0    q1    q2                       halves   q0    q1
+//     SCLK     H H   H L   L L                      SCLK     H H   L L
+//     DIN      d d   d d   d d                      DIN      d d   d d
+//   t1 SCLK period 62.5 ns / 41.7 ns (>= 40)
+//   t2 / t3 SCLK high / low: 16 MHz 1.5 clk = 31.3 ns each, moved +-1 ns by the oscillator duty,
+//      about 10 ns spare.  24 MHz: 1 clk = 20.8 ns each, which measures 19.8-20.2 ns low at the
+//      DAC pin: at the datasheet limit, so the firmware only uses it for rates above the 16 MHz
+//      maximum, which the user asks for explicitly
+//   t4 SYNC fall -> SCLK rise 1 clk (>= 0)        t5/t6 DIN changes on SCLK RISES only: setup and
+//                                                 hold one SCLK phase (31.3 / 20.8 ns, >= 5 / 4.5)
+//   t7 24th SCLK fall -> SYNC rise >= 1 clk (>= 0) t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
+//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3 clk = 146 ns (>= 130)   (divider floor 4)
 // Why (2026-11-24 bench, benchpod-emc si-sim/dac-sclk-alternatives.md and dac-adc-placeholders.md):
 // v65's 24 MHz SCLK (1 clk high, 1 clk low) measured 21.8 / 19.8 ns at the DAC connector, under
 // t3.  v66 (19.2 MHz, one phase 1 clk48 and the other 1.5) measured the one-clk48 phase at about
 // 20.0-20.3 ns whichever way round, so no phase is one clk48 long any more: both are 1.5.
 // Every frame gap, static frames on an idle engine included, goes through the divider floor
 // below, so t8/t9 hold whatever divider the firmware last sent.
-// One sample takes max(divider, DIV_MIN) + 75 clk (v66: + 63; v65 and older: + 51) — the
-// firmware's DAC_SEQ_OVERHEAD_CLK model: 3 to fetch, 72 to shift.
+// One sample takes max(divider, DIV_MIN) + 75 clk at 16 MHz, + 51 at 24 MHz (v66: + 63; v65 and
+// older: + 51) — the firmware's DAC_SEQ_OVERHEAD_CLK model: 3 to fetch, 72 or 48 to shift.
 // tb_dac8551 checks all of these on the pins (through dac_pads), half-cycle-exactly.
 //
 // DEEP replay (psram_mode=1, gateware >= v17): instead of the 4 KB LOAD_WAVE BRAM,
@@ -70,6 +73,7 @@ module dac8551_engine #(
     input  wire [ADDR_W:0]   period_samples,  // 16-bit samples before looping
     input  wire [15:0]       divider,         // v40: the RELOAD, i.e. inter-sample clocks - 1
     input  wire [7:0]        ctrl,            // v49: control byte of every streamed frame
+    input  wire              sclk24,          // v68: 1 = 24 MHz SCLK (2/2 halves), 0 = 16 MHz (3/3)
     input  wire              wr_req,          // v49: send wr_frame once (1-clk pulse)
     input  wire [23:0]       wr_frame,        // v49: {ctrl, code}; held until the next wr_req
 
@@ -137,8 +141,15 @@ module dac8551_engine #(
     // running/psram_mode in ONE clk48 cycle — the v34 sweeps found that cone binding clk48 (~21 ns)
     // in both images.  Same trick as `dz` below: test one flop instead of the wide compare.
     reg              last;
-    // v67: one-hot phase of the 3-clk bit (q[0] .. q[2]); see the SCLK plan in the header.
+    // v67: one-hot phase of the bit (q[0] .. q[2], or q[0] .. q[1] at 24 MHz); see the header.
     reg [2:0]        q;
+    // v68: the SCLK mode, registered once (it only changes with a start, which restarts the FSM).
+    // Only a stream runs at 24 MHz: a static frame on an idle engine (the DAC8554's held levels)
+    // is always 16 MHz, whatever the last stream used.
+    reg              m24;
+    always @(posedge clk) m24 <= sclk24 & running;
+    wire             q_end = m24 ? q[1] : q[2];   // the bit's last cycle
+    wire             q_pre = m24 ? q[0] : q[1];   // the cycle before it
     reg              wpend;       // a static frame is waiting for a slot
     reg              wfr;         // the frame being fetched/shifted is the static one
     // `run_i` = the FSM's enable: `running` (streaming), or a static frame pending or in flight.
@@ -202,10 +213,10 @@ module dac8551_engine #(
             S_SHIFT: begin
                 // v67: one bit per 3 clk, halves H H H L L L (see the header).
                 // (sh/bitc/last/q step in the datapath block below)
-                sclk_a <= q[0] | q[1];
+                sclk_a <= q[0] | (q[1] & ~m24);           // 16 MHz: H H H L L L; 24 MHz: H H L L
                 sclk_b <= q[0];
                 if (q[0]) begin din_a <= sh[23]; din_b <= sh[23]; end
-                if (q[2] & last)
+                if (q_end & last)
                     // The 24th SCLK fall is in the middle of the q1 cycle; SYNC rises in
                     // S_IDLE one clk after this one (t7 = 1.5 clk), never on the fall itself.
                     // (the stream steps in its own block below, off `fe`)
@@ -232,7 +243,7 @@ module dac8551_engine #(
     //   stream) and every start reloads them.  A static frame (wfr) took a slot: no step.
     reg fe;
     always @(posedge clk) begin
-        fe <= ~rst & ~stop & ~start & run_i & (st == S_SHIFT) & q[1] & last & ~wfr;
+        fe <= ~rst & ~stop & ~start & run_i & (st == S_SHIFT) & q_pre & last & ~wfr;
         if (rst) begin
             sidx <= 0; sleft <= 0;
         end else if (stop) begin
@@ -277,9 +288,9 @@ module dac8551_engine #(
                     bitc <= 5'd0; last <= 1'b0; q <= 3'b001;
                 end
         S_SHIFT: begin
-                    q <= {q[1:0], q[2]};
+                    q <= q_end ? 3'b001 : {q[1:0], 1'b0};
                     if (q[0]) sh <= {sh[22:0], 1'b0};              // the bit just put out
-                    if (q[2]) begin
+                    if (q_end) begin
                         bitc <= bitc + 5'd1;
                         last <= (bitc == 5'd22);                   // the next bit is the 24th
                     end

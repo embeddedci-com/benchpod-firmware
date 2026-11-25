@@ -19,6 +19,11 @@
 // Run:  make dactest
 `timescale 1ns/1ps
 module tb_dac8551;
+`ifdef TB_SCLK24
+    localparam TB_M24 = 1'b1, TB_OVH = 51;   // v68 24 MHz mode: 2 clk/bit
+`else
+    localparam TB_M24 = 1'b0, TB_OVH = 75;   // v68 16 MHz mode (default): 3 clk/bit
+`endif
     reg clk = 0;
     always #10 clk = ~clk;
 
@@ -38,7 +43,7 @@ module tb_dac8551;
     dac8551_engine #(.ADDR_W(12)) dut (
         .clk(clk), .rst(rst), .start(start), .stop(stop),
         .period_samples(period), .divider(divider),
-        .ctrl(8'h00), .wr_req(1'b0), .wr_frame(24'd0),
+        .ctrl(8'h00), .sclk24(TB_M24), .wr_req(1'b0), .wr_frame(24'd0),
         .wave_addr(waddr), .wave_data(wdata),
         .psram_mode(psram_mode), .strm_data(8'hA5), .strm_valid(1'b1), .strm_pop(strm_pop),
         .dac_sync(sync_e), .sclk_a(sclk_a), .sclk_b(sclk_b), .din_a(din_a), .din_b(din_b), .running(running)
@@ -149,11 +154,11 @@ module tb_dac8551;
                     errors = errors + 1;
                 end
             end
-            want_gap = 2 * (((div < 4) ? 4 : div) + 75);   // in halves
+            want_gap = 2 * (((div < 4) ? 4 : div) + TB_OVH);   // in halves
             for (k = 2; k < 6; k = k + 1)
                 if (gaps[k] != want_gap) begin
-                    $display("FAIL div=%0d psram=%0d: sample %0d took %0d halves, want 2*(max(div,4)+75) = %0d",
-                             div, psm, k, gaps[k], want_gap);
+                    $display("FAIL div=%0d psram=%0d: sample %0d took %0d halves, want 2*(max(div,4)+%0d) = %0d",
+                             div, psm, k, gaps[k], TB_OVH, want_gap);
                     errors = errors + 1;
                 end
             repeat (40) @(posedge clk);
@@ -165,7 +170,7 @@ module tb_dac8551;
         run_case(4, 0); run_case(0, 0); run_case(1, 0); run_case(2, 0); run_case(3, 0); run_case(8, 0);
         run_case(2, 1); run_case(8, 1);
         if (errors == 0)
-            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t2-t9 on the pins (high %0d-%0d, low >= %0d, t9 >= %0d halves) and max(div,4)+75 clk/sample for div 0,1,2,3,4,8", min_hi, max_hi, min_lo, min_t9);
+            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t2-t9 on the pins (high %0d-%0d, low >= %0d, t9 >= %0d halves) and max(div,4)+%0d clk/sample for div 0,1,2,3,4,8 (sclk24=%0d)", min_hi, max_hi, min_lo, min_t9, TB_OVH, TB_M24);
         else
             $display("FAIL tb_dac8551: %0d error(s)", errors);
         $finish;

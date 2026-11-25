@@ -104,7 +104,10 @@ it came out bigger.
 ## DAC
 
 `dac8551_engine` shifts 24-bit frames to the DAC on `clk48`. From v66 SCLK and DIN leave
-through DDR pads (`dac_pads`). From v67 SCLK is 16 MHz, high and low one and a half clk48 each
+through DDR pads (`dac_pads`). From v68 the SCLK mode is switchable per DAC start (OP_DAC_CTRL
+flags bit2/bit3): 16 MHz by default, 24 MHz (one clk48 high, one low, 51 clk48 per sample) only
+for streams the firmware runs above the 16 MHz maximum; static frames on an idle engine always
+run at 16 MHz. From v67 SCLK is 16 MHz, high and low one and a half clk48 each
 (31.3 ns), one bit per 3 clk48. v66 ran 19.2 MHz with one phase one clk48 long, which measured
 only 20.0-20.3 ns at the DAC connector either way round. In v66 SCLK was high one and a half
 clk48 (31.3 ns) and low one (20.8 ns), two bits per 5 clk48. Up to v65 SCLK was 24 MHz, one clk48 high and one low, which

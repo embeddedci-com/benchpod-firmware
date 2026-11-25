@@ -209,6 +209,55 @@ int main(void) {
         CHECK(dac_sample_clocks(0, false, 67) == 79 && dac_sample_clocks(3, true, 67) == 80 && dac_sample_clocks(4, false, 67) == 79, "v67 sample clocks floor the divider at 4");
     }
 
+    /* ---- v68: the DAC SCLK mode per requested rate.  16 MHz (3 clk48/bit, 79-clk sample) whenever
+     *      the rate is reachable there within half a clock; 24 MHz (2 clk48/bit, 55) only above the
+     *      16 MHz maximum; auto/max (rate 0) is 16 MHz; a fast-I/O board is always 24 MHz. ---- */
+    {
+        const uint32_t clk = 48000000u;
+        struct { float rate; bool psram; bool want24; } e[] = {
+            { 0.0f,     false, false }, { 0.0f,     true,  false },   /* auto / max */
+            { 500000.f, false, false }, { 600000.f, false, false }, { 608000.f, false, false },
+            { 609000.f, false, false },   /* plays 607.6 kS/s at 16 MHz, same as 24 MHz would */
+            { 611000.f, false, false }, { 612000.f, false, true  }, { 700000.f, false, true  },
+            { 800000.f, false, true  }, { 857000.f, false, true  }, { 873000.f, false, true  },
+            { 600000.f, true,  false }, { 603000.f, true,  false }, { 604000.f, true,  true  },
+            { 857000.f, true,  true  },
+        };
+        for (unsigned i = 0; i < sizeof(e) / sizeof(e[0]); i++) {
+            CHECK(dac_sclk24_for_rate(clk, e[i].rate, e[i].psram, 68, false) == e[i].want24,
+                  "v68 %.0f S/s (psram=%d): sclk24 want %d", e[i].rate, e[i].psram, e[i].want24);
+            CHECK(dac_sclk24_for_rate(clk, e[i].rate, e[i].psram, 67, false) == false,
+                  "v67 %.0f S/s: no 24 MHz mode", e[i].rate);
+            CHECK(dac_sclk24_for_rate(clk, e[i].rate, e[i].psram, 68, true) == true,
+                  "fast-I/O board %.0f S/s: always 24 MHz", e[i].rate);
+            dac_rate_plan_t q = dac_replay_plan(clk, e[i].rate, e[i].psram, 68);
+            CHECK(q.sclk24 == e[i].want24, "v68 plan %.0f S/s (psram=%d): sclk24 %d", e[i].rate, e[i].psram, q.sclk24);
+        }
+        CHECK(dac_seq_overhead_clk_mode(68, false) == 75 && dac_seq_overhead_clk_mode(68, true) == 51 &&
+              dac_seq_overhead_clk_mode(67, true) == 75 && dac_seq_overhead_clk_mode(65, true) == 51,
+              "overhead per mode: 75 / 51 on v68, v67 has no 24 MHz mode");
+        dac_rate_plan_t q = dac_replay_plan(clk, 0.0f, false, 68);
+        CHECK(!q.sclk24 && q.divider == DAC_MIN_DIVIDER && q.rate_hz == 607595u && q.clamped == 0, "v68 auto RAM: 16 MHz max %u S/s", q.rate_hz);
+        q = dac_replay_plan(clk, 0.0f, true, 68);
+        CHECK(!q.sclk24 && q.rate_hz == 600000u && q.clamped == 0, "v68 auto PSRAM: 16 MHz max %u S/s", q.rate_hz);
+        q = dac_replay_plan(clk, 500000.f, false, 68);
+        CHECK(!q.sclk24 && q.divider == 21 && q.rate_hz == 500000u, "v68 500 kS/s: 16 MHz divider %u, %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 609000.f, false, 68);
+        CHECK(!q.sclk24 && q.divider == DAC_MIN_DIVIDER && q.rate_hz == 607595u && q.clamped == 0, "v68 609 kS/s: 16 MHz at %u S/s", q.rate_hz);
+        q = dac_replay_plan(clk, 800000.f, false, 68);
+        CHECK(q.sclk24 && q.divider == 9 && q.rate_hz == 800000u && q.clamped == 0, "v68 800 kS/s: 24 MHz divider %u, %u S/s", q.divider, q.rate_hz);
+        q = dac_replay_plan(clk, 873000.f, false, 68);
+        CHECK(q.sclk24 && q.divider == DAC_MIN_DIVIDER && q.rate_hz == 872727u && q.clamped == 0, "v68 873 kS/s: 24 MHz max %u S/s", q.rate_hz);
+        q = dac_replay_plan(clk, 900000.f, false, 68);
+        CHECK(q.sclk24 && q.rate_hz == 872727u && q.clamped == 1, "v68 900 kS/s: clamped to the 24 MHz max %u S/s", q.rate_hz);
+        q = dac_replay_plan(clk, 857000.f, true, 68);
+        CHECK(q.sclk24 && q.divider == DAC_MIN_DIVIDER && q.rate_hz == 857143u && q.clamped == 0, "v68 857 kS/s PSRAM: 24 MHz max %u S/s", q.rate_hz);
+        q = dac_replay_plan_ex(clk, 0.0f, false, 68, true);
+        CHECK(q.sclk24 && q.rate_hz == 872727u, "fast-I/O board auto: 24 MHz max %u S/s", q.rate_hz);
+        CHECK(dac_sample_clocks_mode(4, false, 68, true) == 55 && dac_sample_clocks_mode(4, true, 68, true) == 56 &&
+              dac_sample_clocks_mode(4, false, 68, false) == 79, "v68 sample clocks per mode");
+    }
+
     if (fails == 0) printf("PASS — all la_rate tests\n");
     else            printf("FAIL — %d la_rate test(s)\n", fails);
         /* la_psram_max_samples_at: the deepest capture la_psram_plan runs at the rate asked. */
