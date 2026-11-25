@@ -116,7 +116,7 @@ ANAPATH_SRCS := test_analog_path.c ../src/analog_path.c ../src/dac_quad.c ../src
 DACQUAD_SRCS := test_dac_quad.c ../src/dac_quad.c ../src/analog_path.c ../src/dac_limits.c ../src/cal_data.c ../src/board_caps.c ../src/config_store.c ../src/bp_json.c mocks/mock_flash.c
 CURROUT_SRCS := test_current_out.c ../src/current_out.c ../src/cal_data.c ../src/board_caps.c
 DACCODE16_SRCS := test_dac_code16.c ../src/cal_data.c ../src/board_caps.c
-WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/cal_data.c ../src/board_caps.c ../src/current_out.c
+WAVE16_SRCS := test_wave16.c ../src/wave16.c ../src/sensor_def_math.c ../src/cal_data.c ../src/board_caps.c ../src/current_out.c
 # Wi-Fi control state machine, compiled unmodified against a fake transport/C3.  shim/ stands in
 # for the two lwIP headers esp_netif.h pulls in (only the netif type name is needed).
 WIFICTRL_SRCS := test_esp_wifi_ctrl.c ../src/esp_wifi_ctrl.c ../src/log_level.c ../src/c3_restarts.c ../src/wifi_scan.c ../src/bp_json.c
@@ -158,7 +158,7 @@ CHUART_SRCS := test_ch_uart.c ../src/gw_caps.c ../src/command_handler_uart.c ../
               ../src/la_pull.c fake_pull.c ../src/pull_exp_logic.c ../src/bp_errors.c
 CHDAC_SRCS := test_ch_dac.c ../src/gw_caps.c ../src/command_handler_dac.c ../src/bp_json.c ../src/b64url.c ../src/adc_pool.c \
               ../src/psram_regions.c ../src/dac_loop_params.c ../src/cal_data.c ../src/board_caps.c \
-              ../src/wave16.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c ../src/bp_errors.c
+              ../src/wave16.c ../src/sensor_def_math.c ../src/current_out.c ../src/adc_cal.c ../src/config_store.c mocks/mock_flash.c ../src/bp_errors.c
 CHCAL_SRCS := test_ch_calibrate.c ../src/command_handler_analog.c ../src/adc_cal.c ../src/cal_data.c ../src/board_caps.c ../src/adc_scale.c \
               ../src/config_store.c ../src/bp_json.c ../src/dac_limits.c ../src/dac_quad.c ../src/current_out.c mocks/mock_flash.c
 CHCAPTURE_SRCS := test_ch_capture.c ../src/gw_caps.c ../src/command_handler_capture.c ../src/bp_json.c ../src/b64url.c \
