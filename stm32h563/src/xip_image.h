@@ -57,6 +57,7 @@ enum {
     XIP_FN_SER_FLASH_STEP, /* int (*)(void *ctx): ser_flash_step, Arduino AVR and SAMD bootloaders (ser_flash.h) */
     XIP_FN_ESP_ROM_BEGIN,  /* int (*)(void *job): esp_rom_job_begin, the ESP32 ROM loader write (esp_rom_job.h) */
     XIP_FN_ESP_ROM_STEP,   /* int (*)(void *job): esp_rom_job_step */
+    XIP_FN_USB_CHECK_STEP, /* int (*)(void *job): uc_job_step, a usb_check run (usb_check_core.h); 0 in a USB_HOST=0 build */
     XIP_FN_COUNT
 };
 

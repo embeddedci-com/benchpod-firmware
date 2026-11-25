@@ -416,7 +416,7 @@ endif
 C_SOURCES += src/usb_host.c src/usb_host_desc.c src/usb_host_reply.c \
              $(TUSB)/host/usbh.c $(TUSB)/portable/st/stm32_fsdev/hcd_stm32_fsdev.c \
              $(TUSB)/class/msc/msc_host.c src/usb_msc.c src/usb_flash.c \
-             src/usb_bus.c src/usb_check.c src/usb_check_core.c \
+             src/usb_bus.c src/usb_check.c src/usb_check_core.c src/xip_mod_usb_check.c \
              $(TUSB)/class/cdc/cdc_host.c src/usb_serial.c src/usb_serial_con.c \
              $(TUSB)/class/hid/hid_host.c src/usb_hid.c src/usb_hid_core.c
 endif

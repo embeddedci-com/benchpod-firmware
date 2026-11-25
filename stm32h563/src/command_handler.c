@@ -271,7 +271,7 @@ const char *bus_busy_reason(void) {
         return bp_tag_storage_bus_busy("busy: a chip is being flashed over its programming pins (prog_flash); "
                                        "try again when it ends", "a target is being flashed (prog_flash)");
     if (xip_session_active())
-        return bp_tag_storage_bus_busy("busy: the pod is running code from its W25Q (a flash over USB); try "
+        return bp_tag_storage_bus_busy("busy: the pod is running code from its W25Q (a USB flash or check); try "
                                        "again when it ends", "a flash over USB is running");
 #if defined(BENCHPOD_USB_HOST)
     if (usb_flash_busy())

@@ -155,6 +155,23 @@ typedef struct {
     struct { uint32_t off_ms, stayed, reenumerated, failed; } len[UC_REPLUG_LENGTHS_MAX];
 } uc_result_t;
 
+/* The short codes of uc_result_t.error. The step (in the W25Q image) names an error by its code and
+   gets the string from uc_error_str, internal flash: the result outlives the session, so it must not
+   point into the image. */
+typedef enum {
+    UC_E_NONE = 0, UC_E_INTERNAL, UC_E_EFUSE, UC_E_NO_DEVICE, UC_E_MONITOR, UC_E_BUS_BUSY,
+    UC_E_BUS_TIMEOUT, UC_E_HOST_STOPPED, UC_E_ABORTED, UC_E_NOT_POWERED
+} uc_err_t;
+const char *uc_error_str(uc_err_t e);
+
+/* The job's phases (j->phase): uc_job_phase names them, the step in the W25Q image (xip_mod_usb_check.c) runs them. */
+enum {
+    PH_START = 0, PH_OFF, PH_OFF_WAIT, PH_ON_WAIT, PH_GAP, PH_RESET_WAIT, PH_SAMPLE, PH_SUSPEND,
+    PH_SETTLE, PH_MEASURE, PH_RESUME, PH_CHECK, PH_RECOVER,
+    PH_CLEAN, PH_REINIT_STOP, PH_REINIT_OFF, PH_REINIT_ON,   /* every exit of a test that touched the bus */
+    PH_DONE
+};
+
 typedef struct {
     uc_args_t   a;
     uc_ops_t    ops;
@@ -175,7 +192,8 @@ typedef struct {
 /* Set up a job; the first uc_job_step starts it. `ops->efuse_on` is read now: the state to
    put back at the end. */
 void uc_job_init(uc_job_t *j, const uc_args_t *a, const uc_ops_t *ops);
-/* One step: 1 = still running, 0 = finished (the result is in j->r). */
+/* One step: 1 = still running, 0 = finished (the result is in j->r). Code of the usb image in the
+   W25Q (xip_mod_usb_check.c): usb_check.c calls it through the XIP session's table, never directly. */
 int  uc_job_step(uc_job_t *j);
 /* Stop at the next step (the rail and the bus are put back). */
 void uc_job_abort(uc_job_t *j);

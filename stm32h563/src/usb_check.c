@@ -1,6 +1,8 @@
 /* usb_check.c — see usb_check.h. USB_HOST=1 builds only: binds the job (usb_check_core.c) to the
    pod. The job object lives on the heap (static RAM is full) and stays until the next check
-   starts, so its result can be polled. */
+   starts, so its result can be polled. The job's steps (xip_mod_usb_check.c) run from the usb
+   image in the W25Q: an XIP session spans the whole check (it opens in usb_check_start and ends
+   when the job finished), so a check holds off captures and the other W25Q jobs like usb_flash. */
 #include "usb_check.h"
 #include "usb_bus.h"
 #include "usb_host.h"
@@ -8,6 +10,7 @@
 #include "usb_flash.h"
 #include "usb_serial.h"
 #include "usb_hid.h"
+#include "xip_session.h"
 #include "target_power.h"
 #include "power_profile.h"
 #include "ina238.h"
@@ -24,6 +27,7 @@
 #define STATUS_TIMEOUT_MS 300u
 
 static uc_job_t *s_job;
+static bool      s_session;   /* the check's XIP session is open */
 static uint8_t   s_status[2];   /* GET_STATUS answer (usb_ctrl_io keeps the buffer while in flight) */
 
 static uint32_t op_now(void *c) { (void)c; return xTaskGetTickCount() * portTICK_PERIOD_MS; }
@@ -122,6 +126,13 @@ int usb_check_start(const uc_args_t *a, const char **why)
         s_job = pvPortMalloc(sizeof(*s_job));
         if (!s_job) { *why = "out of memory"; return -1; }
     }
+    /* The last check: the steps run from the usb image. Every return below this ends the session. */
+    xip_err_t xe = xip_session_begin(XIP_IMG_USB);
+    if (xe != XIP_OK) {
+        *why = xip_img_err_text(XIP_IMG_USB, xe);
+        return xe == XIP_ERR_ACTIVE || xe == XIP_ERR_POOL_BUSY ? -1 : -3;   /* BP0087 busy, BP0083 */
+    }
+    s_session = true;
     if (needs_monitor) (void)ina238_set_adcrange_fine(MONITOR_ADDR);
     uc_job_init(s_job, a, &k_ops);
     return 0;
@@ -134,9 +145,17 @@ void usb_check_poll(void)
     usb_host_info_t hi;
     usb_host_info(&hi);
     if (hi.mode == USB_HOST_MODE_HOST && hi.remaining_s < 15u) (void)usb_host_start(hi.port, 30u);
-    if (uc_job_step(s_job) == 0)
-        LOG_I("[usbcheck] %s: %s%s%s (%lu ms)\n", uc_test_name(s_job->a.test), s_job->r.pass ? "pass" : "fail",
-              s_job->r.error[0] ? " " : "", s_job->r.error, (unsigned long)s_job->r.ms);
+    /* A step is one call into the image; the session ends with the job (the rail and the bus are back). */
+    const int more = s_session ? xip_session_call_ctx(XIP_FN_USB_CHECK_STEP, s_job) : 0;
+    if (more == 1) return;
+    if (s_session) { xip_session_end(); s_session = false; }
+    if (s_job->running) {   /* no session (cannot happen): end the job rather than step it outside one */
+        s_job->running = false;
+        s_job->r.pass = false;
+        s_job->r.error = uc_error_str(UC_E_INTERNAL);
+    }
+    LOG_I("[usbcheck] %s: %s%s%s (%lu ms)\n", uc_test_name(s_job->a.test), s_job->r.pass ? "pass" : "fail",
+          s_job->r.error[0] ? " " : "", s_job->r.error, (unsigned long)s_job->r.ms);
 }
 
 void usb_check_abort(void)

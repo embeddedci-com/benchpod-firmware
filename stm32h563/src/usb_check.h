@@ -15,7 +15,9 @@
 
 #include "usb_check_core.h"
 
-/* 0 = started; -1 = refused (BP0087 `why`); -2 = the board is not powered from eFuse 1 (BP0088). */
+/* 0 = started; -1 = refused (BP0087 `why`); -2 = the board is not powered from eFuse 1 (BP0088);
+   -3 = the W25Q code cannot run (BP0083 `why`: the xip blob slot is empty or stale). The check runs from
+   the usb image in an XIP session (xip_session.h) that lasts as long as the check. */
 int  usb_check_start(const uc_args_t *a, const char **why);
 void usb_check_poll(void);
 void usb_check_abort(void);
