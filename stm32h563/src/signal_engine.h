@@ -208,10 +208,11 @@ const char *signal_engine_image_name(int kind);
 bool     signal_engine_has_control_loop(void);
 
 /* iCE40 image switch (0=closed-loop, 1=deep-DAC-replay, 2=sensor emulation).  Despite the name
-   this is not an SB_WARMBOOT: it quiesces the PSRAM masters, then REFLASHES the iCE40 config flash
-   from W25Q slot gw0/gw1/gw2 (ice40_reflash_image, ~2 s) and reconfigures, then re-reads
+   this is not an SB_WARMBOOT: it quiesces the PSRAM masters, then loads the image from W25Q slot
+   gw0/gw1/gw2 in SPI slave mode (ice40_load_image, ~80 ms, no flash write; retried once, then
+   written to the config flash as before, ice40_reflash_image, ~2.4 s), then re-reads
    version/features and runs a 16-sample PSRAM-write selftest.  Returns 0 ok, -1 bad image number,
-   -2 the image's W25Q slot is empty (nothing changed), -3 reflash failed twice (falls back to
+   -2 the image's W25Q slot is empty (nothing changed), -3 every load failed (falls back to
    image 0), -5 the PSRAM-write selftest failed on the new image (falls back to image 0).
    When the requested image already runs (CDONE high, a live FPGA_FEATURES read names it, the
    PSRAM write path works) it returns 0 at once and touches nothing (ice40_switch_plan): no flash
@@ -219,6 +220,12 @@ bool     signal_engine_has_control_loop(void);
    says which happened. */
 int      fpga_warmboot(uint8_t image);
 int      fpga_warmboot_ex(uint8_t image, bool force, bool *skipped);
+/* The image the last switch loaded (0 after a restart: the iCE40 powers up with the loop image
+   at offset 0). */
+int      signal_engine_wanted_image(void);
+/* After a reload from the config flash (it lands on loop), load the wanted image again from its
+   slot; nothing when it is loop or already runs. Hw worker only. */
+void     signal_engine_restore_wanted_image(void);
 
 /* Bring every gateware PSRAM master (deep-replay reader / closed loop / capture writer) to a
    safe IDLE boundary before firmware grabs the shared quad bus for a runtime reflash or OTA.

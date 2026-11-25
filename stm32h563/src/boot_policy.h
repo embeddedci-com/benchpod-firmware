@@ -28,16 +28,6 @@ uint32_t boot_policy_off(uint32_t prev_off, uint32_t culprit);
 /* "network", "iCE40/PSRAM" or "network and iCE40/PSRAM". */
 const char *boot_policy_off_str(uint32_t off);
 
-/* A firmware update does not touch the iCE40's own config flash, so a pod keeps its old
-   gateware until something reprograms it. Which image (W25Q slot gw0/gw1/gw2) to load so the
-   gateware matches this firmware, or -1 to leave it: the running version (`running`, 0 = the
-   iCE40 did not answer) differs from the one this firmware was built for (`embedded`,
-   0 = unknown at build time).
-   Keeps the kind of image that is running (`running_kind`): 1 for the deep-replay image, 2 for
-   the sensor-emulation image, else 0.
-   An iCE40 that never configured (`configured` 0: CDONE low, a new board's blank config flash)
-   gets image 0 whatever the versions say: any gateware beats none. */
-int boot_policy_gateware_image(uint8_t running, uint8_t embedded, int running_kind, int configured);
 
 /* The version alone misses a new image of the SAME gateware version (a dev rebuild, or the
    emulation image of a later build of v54): it would never be written while that image kind
@@ -85,10 +75,25 @@ typedef enum {
                          blank record never makes every boot rewrite the flash. */
 } gw_action_t;
 
-/* boot_policy_gateware_image, then the identity: same version, configured, and the running
-   kind's slot (`ident`, from gw_ident_match on that slot) is not the recorded image -> write it;
-   no record -> compare. *img is the image to act on (unchanged for GW_ACT_NONE). */
-gw_action_t boot_policy_gateware_action(uint8_t running, uint8_t embedded, int running_kind,
-                                        int configured, gw_ident_match_t ident, int *img);
 
+/* From firmware 4.0.6 an image switch loads the image straight from its slot (SPI slave mode)
+   and never writes the config flash, so offset 0, the image the iCE40 powers up with, always
+   holds the loop image (slot gw0). What to do so that holds and the running gateware matches
+   this firmware:
+     - boot: GW_ACT_WRITE writes gw0 to offset 0, GW_ACT_COMPARE read-compares offset 0 with gw0
+       first (no record yet), GW_ACT_NONE leaves offset 0 alone. boot_ident is offset 0's record
+       against slot gw0 (gw_ident_match). A pod coming from an older firmware that last switched
+       to another image gets gw0 written once.
+     - load: the image to load from its slot afterwards (no write), -1 for none. The running kind
+       is kept: after a write or compare (both reconfigure the iCE40 from offset 0, so loop runs)
+       a deep or emulation image is loaded again, and a running image whose version is not this
+       firmware's is loaded from its slot.
+   An iCE40 that never configured gets gw0 written. Nothing is touched while the iCE40 does not
+   answer (running 0) or the firmware does not know its own gateware (embedded 0). */
+typedef struct {
+    gw_action_t boot;
+    int         load;
+} gw_plan_t;
+gw_plan_t boot_policy_gateware_plan(uint8_t running, uint8_t embedded, int running_kind,
+                                    int configured, gw_ident_match_t boot_ident);
 #endif /* BOOT_POLICY_H */

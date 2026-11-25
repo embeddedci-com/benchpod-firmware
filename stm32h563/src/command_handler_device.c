@@ -338,9 +338,9 @@ void handle_nrst(int conn_id, const char *json) {
 
 /* {"cmd":"fpga_image","image":0|1|2|"loop"|"deep"|"emulation"} — switch the running iCE40
    gateware IMAGE (0 = closed-loop, 1 = deep-DAC-PSRAM-replay, 2 = sensor emulation, gateware v54+).
-   SB_WARMBOOT can't reconfigure at runtime on this board (its config-SPI pins ARE the shared
-   PSRAM bus), so fpga_warmboot() actually REFLASHES the selected image and does a CRESET
-   cold-reconfig (~2-3 s). Returns the new image's {image, name, version, features}; also asks the
+   fpga_warmboot() loads the image straight from its W25Q slot in SPI slave mode (about 80 ms, no
+   flash write; ice40_slave_load), falling back to writing it to the config flash (2-3 s) when
+   that fails. Returns the new image's {image, name, version, features}; also asks the
    net task to re-announce capabilities so the server's cached caps track the swap.
    {"cmd":"fpga_image"} alone reports the running image. Leaving the emulation image while I2C,
    SPI or UART sensors run is refused (they need it): sensor_stop them first.
@@ -349,7 +349,7 @@ void handle_nrst(int conn_id, const char *json) {
    (ice40_switch.h, also in status). */
 void handle_fpga_image(int conn_id, const char *json) {
     char s[16] = {0};
-    char payload[256];
+    char payload[384];   /* worst case ~270: every counter at 2^32-1 */
     bp_emit_t e;
     if (!json_get_value(json, "image", s, sizeof(s)) || !s[0]) {
         int kind = signal_engine_image_kind();
@@ -427,7 +427,7 @@ bool fpga_image_swap_ex(int conn_id, int img, bool force, bool *skipped_out,
 
 /* Gateware v65 split the bus masters out of the emulation image (FPGA_FEATURE_BUS_MASTERS).
    On that image with no emulated I2C/SPI/UART sensor running, swap to the loop image first
-   (~2-3 s, as the first sensor_start swaps the other way), so a client that never heard of the
+   (about 80 ms, as the first sensor_start swaps the other way), so a client that never heard of the
    split keeps working.  With a digital sensor running, refuse with BP0059: the swap would stop it. */
 bool require_bus_masters(int conn_id, const char *feature) {
     if (gw_caps()->bus_masters) return true;

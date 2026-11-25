@@ -34,22 +34,6 @@ int main(void) {
     CHECK(strcmp(boot_policy_off_str(H), "iCE40/PSRAM") == 0, "str hw");
     CHECK(strcmp(boot_policy_off_str(A), "network and iCE40/PSRAM") == 0, "str both");
 
-    /* Boot-time gateware update: only when both versions are known and differ. */
-    CHECK(boot_policy_gateware_image(36, 36, 0, 1) == -1, "gw: same version, no update");
-    CHECK(boot_policy_gateware_image(35, 36, 0, 1) == 0, "gw: older loop image -> reload image 0");
-    CHECK(boot_policy_gateware_image(35, 36, 1, 1) == 1, "gw: older deep image -> reload image 1");
-    CHECK(boot_policy_gateware_image(53, 54, 2, 1) == 2, "gw: older emulation image -> reload image 2");
-    CHECK(boot_policy_gateware_image(53, 54, 7, 1) == 0, "gw: unknown image kind -> image 0");
-    CHECK(boot_policy_gateware_image(37, 36, 0, 1) == 0, "gw: newer gateware than the firmware -> match the firmware");
-    CHECK(boot_policy_gateware_image(0, 36, 0, 1) == -1, "gw: configured but not answering -> leave it (not a blank flash)");
-    CHECK(boot_policy_gateware_image(35, 0, 0, 1) == -1, "gw: embedded version unknown -> never touch it");
-    /* A new board: the config flash is blank, so the iCE40 never configured and answers v0. The
-       blobs arrive after the firmware (flash-self installs them once it boots), so this runs again
-       when gw0 is installed: load image 0 then, not only at the next boot. */
-    CHECK(boot_policy_gateware_image(0, 48, 0, 0) == 0, "gw: iCE40 never configured -> load image 0");
-    CHECK(boot_policy_gateware_image(0, 0, 0, 0) == 0, "gw: never configured, embedded unknown -> still image 0");
-    CHECK(boot_policy_gateware_image(48, 48, 1, 0) == 0, "gw: CDONE low wins over a stale version");
-
     /* The image's identity (gw_ident_t): a record names the slot and its sha256 + length. */
     uint8_t sha_a[32], sha_b[32];
     memset(sha_a, 0xA1, sizeof(sha_a));
@@ -72,51 +56,49 @@ int main(void) {
     CHECK(gw_ident_match(NULL, 1, 0, 104090, sha_a) == GW_IDENT_UNKNOWN, "ident: record not read -> unknown");
     CHECK(gw_ident_match(&rec, 0, 0, 104090, sha_a) == GW_IDENT_NONE, "ident: slot not what the firmware expects -> none");
 
-    /* The action: version first (as before), then the identity at the same version. */
-    int img = -7;
-    CHECK(boot_policy_gateware_action(53, 54, 2, 1, GW_IDENT_SAME, &img) == GW_ACT_WRITE && img == 2,
-          "act: older version -> write, whatever the record says");
-    img = -7;
-    CHECK(boot_policy_gateware_action(54, 54, 2, 1, GW_IDENT_SAME, &img) == GW_ACT_NONE && img == -7,
-          "act: same version, recorded image -> nothing");
-    CHECK(boot_policy_gateware_action(54, 54, 2, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_WRITE && img == 2,
-          "act: same version, new emulation image -> write image 2");
-    CHECK(boot_policy_gateware_action(54, 54, 1, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_WRITE && img == 1,
-          "act: same version, new deep image -> write image 1");
-    CHECK(boot_policy_gateware_action(54, 54, 0, 1, GW_IDENT_UNKNOWN, &img) == GW_ACT_COMPARE && img == 0,
-          "act: no record yet -> compare first, never a blind rewrite");
-    CHECK(boot_policy_gateware_action(54, 54, 7, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_WRITE && img == 0,
-          "act: unknown kind -> image 0");
-    img = -7;
-    CHECK(boot_policy_gateware_action(54, 54, 0, 1, GW_IDENT_NONE, &img) == GW_ACT_NONE && img == -7,
-          "act: slot not the firmware's blob -> nothing");
-    CHECK(boot_policy_gateware_action(0, 54, 0, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_NONE,
-          "act: configured but not answering -> nothing");
-    CHECK(boot_policy_gateware_action(54, 0, 0, 1, GW_IDENT_DIFFERS, &img) == GW_ACT_NONE,
-          "act: embedded version unknown -> nothing");
-    CHECK(boot_policy_gateware_action(0, 54, 0, 0, GW_IDENT_SAME, &img) == GW_ACT_WRITE && img == 0,
-          "act: never configured -> write image 0");
+    /* The plan (4.0.6+): offset 0 always holds gw0 (loop); the running kind is loaded from its
+       slot. P(boot, load) checks both fields. */
+#define P(r, e, k, c, id, b, l, msg) do { gw_plan_t p_ = boot_policy_gateware_plan(r, e, k, c, id); \
+        CHECK(p_.boot == (b) && p_.load == (l), "plan: %s (got %d, %d)", msg, (int)p_.boot, p_.load); } while (0)
+    P(54, 54, 0, 1, GW_IDENT_SAME,    GW_ACT_NONE,    -1, "loop runs, offset 0 is gw0 -> nothing");
+    P(54, 54, 1, 1, GW_IDENT_SAME,    GW_ACT_NONE,    -1, "deep runs (soft reset), offset 0 is gw0 -> nothing");
+    P(54, 54, 2, 1, GW_IDENT_SAME,    GW_ACT_NONE,    -1, "emulation runs, offset 0 is gw0 -> nothing");
+    P(54, 54, 0, 1, GW_IDENT_DIFFERS, GW_ACT_WRITE,   -1, "offset 0 holds another image -> write gw0 once");
+    P(54, 54, 1, 1, GW_IDENT_DIFFERS, GW_ACT_WRITE,    1, "older firmware left deep at offset 0 -> write gw0, load deep again");
+    P(54, 54, 2, 1, GW_IDENT_UNKNOWN, GW_ACT_COMPARE,  2, "no record -> compare, then load emulation again");
+    P(54, 54, 0, 1, GW_IDENT_UNKNOWN, GW_ACT_COMPARE, -1, "no record, loop -> compare only");
+    P(53, 54, 0, 1, GW_IDENT_DIFFERS, GW_ACT_WRITE,   -1, "new gateware: write gw0, the boot runs it");
+    P(53, 54, 1, 1, GW_IDENT_DIFFERS, GW_ACT_WRITE,    1, "new gateware on deep: write gw0, load deep from its slot");
+    P(53, 54, 1, 1, GW_IDENT_SAME,    GW_ACT_NONE,     1, "offset 0 is current, running deep is old -> load deep");
+    P(53, 54, 0, 1, GW_IDENT_SAME,    GW_ACT_NONE,     0, "offset 0 is current, running loop is old -> load loop");
+    P(53, 54, 2, 1, GW_IDENT_NONE,    GW_ACT_NONE,     2, "gw0 slot not this firmware's: offset 0 left, emulation loaded (if its slot is)");
+    P(54, 54, 7, 1, GW_IDENT_DIFFERS, GW_ACT_WRITE,   -1, "unknown kind counts as loop");
+    P(0,  54, 1, 1, GW_IDENT_DIFFERS, GW_ACT_NONE,    -1, "configured but not answering -> nothing");
+    P(54, 0,  1, 1, GW_IDENT_DIFFERS, GW_ACT_NONE,    -1, "embedded version unknown -> nothing");
+    P(0,  54, 0, 0, GW_IDENT_SAME,    GW_ACT_WRITE,   -1, "never configured -> write gw0");
+    P(0,  0,  2, 0, GW_IDENT_NONE,    GW_ACT_WRITE,   -1, "never configured, embedded unknown -> still gw0");
+#undef P
 
-    /* First boot after this update on a pod whose image is already right: the record is blank, so
-       one compare, it matches and is recorded; the next boot sees SAME and does nothing. No write. */
+    /* No storm: boots after the first never write. A pod whose offset 0 already holds gw0 with no
+       record: one compare, recorded, then nothing, whatever kind runs. */
     gw_ident_t store;
     memset(&store, 0xFF, sizeof(store));
     int writes = 0, compares = 0;
     for (int boot = 0; boot < 5; boot++) {
-        gw_action_t a = boot_policy_gateware_action(54, 54, 0, 1, gw_ident_match(&store, 1, 0, 104090, sha_a), &img);
-        if (a == GW_ACT_COMPARE) { compares++; gw_ident_make(&store, 0, 104090, sha_a); }   /* matched */
-        if (a == GW_ACT_WRITE) { writes++; gw_ident_make(&store, 0, 104090, sha_a); }
+        gw_plan_t p = boot_policy_gateware_plan(54, 54, boot % 3, 1, gw_ident_match(&store, 1, 0, 104090, sha_a));
+        if (p.boot == GW_ACT_COMPARE) { compares++; gw_ident_make(&store, 0, 104090, sha_a); }   /* matched */
+        if (p.boot == GW_ACT_WRITE) { writes++; gw_ident_make(&store, 0, 104090, sha_a); }
     }
     CHECK(compares == 1 && writes == 0, "storm: matching image -> 1 compare, 0 writes (got %d, %d)", compares, writes);
-    /* ... and when it does not match: one write, then recorded. */
-    memset(&store, 0xFF, sizeof(store));
+    /* Offset 0 recorded as deep (slot 1, an older firmware's switch): one write of gw0, then none. */
+    gw_ident_make(&store, 1, 104090, sha_b);
     writes = compares = 0;
     for (int boot = 0; boot < 5; boot++) {
-        gw_action_t a = boot_policy_gateware_action(54, 54, 0, 1, gw_ident_match(&store, 1, 0, 104090, sha_b), &img);
-        if (a == GW_ACT_COMPARE) { compares++; a = GW_ACT_WRITE; }   /* differs: write */
-        if (a == GW_ACT_WRITE) { writes++; gw_ident_make(&store, 0, 104090, sha_b); }
+        gw_plan_t p = boot_policy_gateware_plan(54, 54, 1, 1, gw_ident_match(&store, 1, 0, 104090, sha_a));
+        if (p.boot == GW_ACT_COMPARE) { compares++; p.boot = GW_ACT_WRITE; }
+        if (p.boot == GW_ACT_WRITE) { writes++; gw_ident_make(&store, 0, 104090, sha_a); }
     }
-    CHECK(compares == 1 && writes == 1, "storm: other image -> 1 compare, 1 write (got %d, %d)", compares, writes);
+    CHECK(compares == 0 && writes == 1, "storm: deep at offset 0 -> 1 write (got %d, %d)", compares, writes);
 
     if (fails) { printf("test_boot_policy: %d FAILED\n", fails); return 1; }
     printf("test_boot_policy: all passed\n");

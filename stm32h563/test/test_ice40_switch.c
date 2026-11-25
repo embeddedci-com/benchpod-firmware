@@ -34,20 +34,24 @@ static void test_counters(void) {
     ice40_switch_note_skip();
     ice40_switch_note_switch(); ice40_switch_note_reflash(); ice40_switch_note_erases(27);
     ice40_switch_note_switch(); ice40_switch_note_failed();
+    ice40_switch_note_slave(true); ice40_switch_note_slave(true); ice40_switch_note_slave(false);
+    ice40_switch_note_time_ms(52);
     const ice40_switch_stats_t *st = ice40_switch_stats();
     CHECK(st->switches == 2 && st->skipped == 1 && st->reflashes == 1 && st->erases == 27 && st->failed == 1,
           "counters %u %u %u %u %u", st->switches, st->skipped, st->reflashes, st->erases, st->failed);
-    char buf[160];
+    char buf[200];
     bp_emit_t e;
     bp_emit_init(&e, buf, sizeof(buf));
     ice40_switch_emit(&e);
     CHECK(bp_emit_ok(&e), "emit overflowed");
-    CHECK(!strcmp(buf, "\"fpga_switch\":{\"switches\":2,\"skipped\":1,\"reflashes\":1,\"erases\":27,\"failed\":1}"),
+    CHECK(!strcmp(buf, "\"fpga_switch\":{\"switches\":2,\"skipped\":1,\"failed\":1,\"slave_loads\":2,"
+                       "\"slave_fails\":1,\"reflashes\":1,\"erases\":27,\"last_ms\":52}"),
           "emit: %s", buf);
     /* The longest it gets (every counter at its maximum) fits the fpga_image reply's room. */
     ice40_switch_reset_stats();
     ice40_switch_note_erases(4294967295u);
     for (int i = 0; i < 3; i++) { ice40_switch_note_skip(); }
+    ice40_switch_note_time_ms(4294967295u);
     bp_emit_init(&e, buf, sizeof(buf));
     ice40_switch_emit(&e);
     CHECK(bp_emit_ok(&e) && strstr(buf, "\"erases\":4294967295"), "max emit: %s", buf);
