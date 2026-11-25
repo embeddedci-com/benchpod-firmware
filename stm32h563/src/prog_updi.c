@@ -373,6 +373,7 @@ static int store(prog_ctx_t *c, uint32_t daddr, uint32_t off, uint32_t real, uin
             else {
                 memset(s->buf + have, 0xFF, k - have);
                 if (rsd) r = xfer(c, s->buf, k, NULL, 0);
+                else if (words) for (uint32_t i = 0; !r && i + 1 < k; i += 2) r = ack1(c, s->buf + i, 2);
                 else for (uint32_t i = 0; !r && i < k; i++) r = ack1(c, s->buf + i, 1);
             }
             p += k;
@@ -432,7 +433,11 @@ static int write_chunk(prog_ctx_t *c, uint32_t a, uint32_t n) {
             TRY(nvm_cmd(c, V2_NOCMD));
         }
         TRY(nvm_cmd(c, V2_FLWR));
-        TRY(store(c, a, off, n, np, fl, fl));       /* flash words stream, user row bytes are ACKed */
+        /* ACKed: NVM v2 writes each flash word straight into the flash (no page buffer), and a
+           word sent while the last one is still being written is lost, so a streamed (no-ACK)
+           page desyncs the UPDI (AVR128DA48 on the bench: no answer after the first page). The
+           chip ACKs each word once it is written. */
+        TRY(store(c, a, off, n, np, fl, false));
     } else {
         TRY(nvm_cmd(c, V2_EEERWR));      /* eeprom and fuses: ACKed bytes (10 ms each) */
         TRY(store(c, a, off, n, np, false, false));
