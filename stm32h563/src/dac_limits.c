@@ -151,7 +151,6 @@ const char *dac_limits_check_route(const char *path) {
     const char *p = canon(path);
     const char *own = s_path_names[s_active.path];
     if (!strcmp(p, own) || !strcmp(p, "ext") || !strcmp(p, "current_in")) return NULL;
-    if (!strcmp(p, "cal1") && s_active.path == 1) return NULL;      /* cal1 keeps the 5V mux */
     snprintf(s_msg, sizeof(s_msg),
              "refused: %s. Routing to %s disconnects it and leaves the module input near 0 V, "
              "which is full output. dac_stop parks it at %ld mV instead",
@@ -161,7 +160,10 @@ const char *dac_limits_check_route(const char *path) {
 
 const char *dac_limits_check_volts(const char *path, float volts) {
     if (!s_active.enabled) return NULL;
-    if (dac_limits_path_index(path) != (int)s_active.path) return NULL;   /* the route check covers it */
+    /* cal1 is the 5 V stage into the ADC loopback: its level is the 5 V path's (the DAC keeps it
+       when the path goes back to 5v). dac_limits_path_index stays as it is for other callers. */
+    int idx = !strcmp(canon(path), "cal1") ? 1 : dac_limits_path_index(path);
+    if (idx != (int)s_active.path) return NULL;   /* the route check covers it */
     if (volts < min_v() - DAC_LIMITS_TOL_V || volts > max_v() + DAC_LIMITS_TOL_V) {
         snprintf(s_msg, sizeof(s_msg), "refused: %s; %ld mV is outside them", describe(), lroundf(volts * 1000.0f));
         return s_msg;

@@ -407,7 +407,7 @@ Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `waveform` | string | yes | — | `"sine"`, `"square"` or `"sawtooth"` |
-| `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"` or `"12v"`. The pod switches to it before the waveform starts. |
+| `path` | string | with `amplitude_v` | — | The DAC output: `"3v3"`, `"5v"`, `"12v"` or `"cal1"`. The pod switches to it before the waveform starts. `"cal1"` plays the waveform on the 5 V stage routed into the ADC loopback (with the 5 V calibration); the 5 V output is disconnected meanwhile. |
 | `amplitude_v`, `offset_v` | number (V) | together | — | Peak and center in volts. A peak up to 5% of the output's range past what it can reach is clamped to that end (so 0 to 3.3 V works on 3v3, whose calibrated range starts a few mV above 0); further out is refused. |
 | `amplitude_ua`, `offset_ua` | number (µA) | together, instead of `_v` | — | Peak and center on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
 | `freq_hz` | number (Hz) | no | `1000` | Output frequency |
@@ -465,7 +465,7 @@ With `on_capture` the reply is `{"status":"ok","data":{"cotrig":true}}`. Firmwar
 |---|---|
 | Unknown or missing `waveform` | `"unknown waveform"` |
 | Neither `amplitude_v` nor `amplitude_ua` (for example the old 8-bit form) | `amplitude_v (with path and offset_v) or amplitude_ua (with offset_ua) is required` |
-| `amplitude_v` without a 3v3/5v/12v `path` | `path must be 3v3\|5v\|12v with amplitude_v` |
+| `amplitude_v` without a 3v3/5v/12v/cal1 `path` | `path must be 3v3\|5v\|12v\|cal1 with amplitude_v` |
 | `amplitude_v` without `offset_v` (or `_ua`) | `offset_v is required with amplitude_v` |
 | `amplitude_v` not above 0 | `amplitude_v must be above 0 V` |
 | A peak more than 5% of the range past the output's range | `the peaks <lo> to <hi> mV are outside the 3v3 output's <min> to <max> mV` (µA on the 4-20 mA output) |
@@ -1132,9 +1132,9 @@ low-output end (`max_mv` when inverted, `min_mv` otherwise).
 
 | Command | Refused when |
 |---|---|
-| `dac_out` | `v` on the limited path is outside `min_mv`..`max_mv` |
+| `dac_out` | `v` on the limited path is outside `min_mv`..`max_mv` (path `cal1` is checked against the `5v` window) |
 | `dac_control_loop` | `vmin`/`vmax` (16-bit codes) fall outside the limits; `in_trip` on an inverted stage (it trips to `vmin`, the highest output there) |
-| `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1` unless the path is `5v`), which leaves the module input near 0 V |
+| `analog_path`, `dac_out`, `adc_read` | inverted stage only: the route disconnects the limited path (`off`, another DAC path, `cal2`, `cal1`), which leaves the module input near 0 V. `cal1` counts even on the `5v` path: it energizes K1, which disconnects the 5 V output and leaves the module input floating |
 | `generate`, `dac_set`, `load`, `load_bin`, `replay`, `measure`, `dac_mux`, `cal_switch` | always: they write raw DAC codes the limits can't be checked against |
 | `current_out` | always, when it has `ua`: the 4-20 mA output shares the DAC, so setting a current moves the limited path. Without `ua` it only reads the range and is allowed |
 
@@ -1200,6 +1200,15 @@ after routing; without it the range stays as it is. `off` and `cal2` put the ran
 |---|---|
 | `mv`, `uv` | The voltage the chosen code gives, in millivolts and in microvolts |
 | `code16` | The 16-bit DAC code now held |
+
+`path` is `3v3`, `5v`, `12v`, `cal1` or `off` (anything else: `path must be 3v3|5v|12v|cal1|off`).
+`cal1` sets the level on the 5 V stage and routes it into the ADC loopback (K1 and K4), with the
+5 V calibration. K1 is a changeover relay: the 5 V output (J11) is disconnected while `cal1` is
+selected, so an [`adc_read`](#analog-paths--analog_path--dac_out--adc_read) with `source` `cal1`
+needs no relay switching in between. The reply's `path` is `cal1`. While
+[DAC limits](#dac_limits--dac-output-limits-for-an-external-output-stage) are set on an inverted
+stage, `cal1` is refused (the stage's input would float near 0 V, which is full output); on a
+normal stage its level is checked against the `5v` window.
 
 When only routing, the reply is `{"path":…,"mv":0}` with no `uv` or `code16`. Firmware up to
 3.10.13 also replied `code`, the nearest 8-bit code (`-1` when only routing).
