@@ -218,6 +218,11 @@ firmware = "4.0.4"
 gateware = 62
 date = "2026-11-23"
 
+[[releases]]
+firmware = "4.0.5"
+gateware = 68
+date = "2026-11-25"
+
 [features.gpio]
 rev = 1
 firmware = "3.9.2"
@@ -995,7 +1000,7 @@ note = "prog_flash flashes a chip over its own programming pins: AVR UPDI, PIC I
 
 [features.bus_masters_image]
 rev = 18
-firmware = "next"
+firmware = "4.0.5"
 gateware = 65
 gw_const = "BUS_MASTERS_SPLIT_MIN_GW"
 dated = "code"
@@ -1004,7 +1009,7 @@ note = "Gateware v65 has no bus masters in the emulation image: SWD (flash and d
 
 [features.dap_id]
 rev = 19
-firmware = "next"
+firmware = "4.0.5"
 dated = "code"
 docs = "dap-over-tunnel.md#target-id-read"
 note = "dap_start with \"op\":\"id\" reads the IDs of the chip on the wire and answers one JSON object, without switching the connection to CMSIS-DAP: over SWD the DPIDR, TARGETID (DP version 2), AP0 IDR, the Cortex CPUID and up to 8 words of target memory from a \"read\" list (null when a read faults); over JTAG the IDCODEs of the chain. No halt, no reset, no target writes. Same gates and pin claims as dap_start."
