@@ -2796,6 +2796,7 @@ static bool i2c_armed_local = false;   /* the engine runs the I2C master (gw v55
 static bool jtag_armed_local = false;  /* the engine runs the JTAG master (gw v61) */
 
 int fpga_swd_arm(unsigned swclk, unsigned swdio) {
+    if (!gw_caps()->bus_masters) return -3;   /* v65 emulation image: no engine (require_bus_masters) */
     if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int clk_idx = la_wire_index(swclk);
     int dio_idx = la_wire_index(swdio);
@@ -2991,6 +2992,7 @@ uint32_t fpga_spi_hz_for_half(unsigned half) {
 int fpga_spi_arm(unsigned sck, unsigned mosi, unsigned miso, unsigned cs,
                  unsigned half, unsigned mode) {
     if (!gw_caps()->spi_master) return -3;
+    if (!gw_caps()->bus_masters) return -3;
     if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int w[4] = { la_wire_index(sck), la_wire_index(mosi), la_wire_index(miso), la_wire_index(cs) };
     for (int i = 0; i < 4; i++) {
@@ -3096,6 +3098,7 @@ uint32_t fpga_i2c_hz_for_half(unsigned half) {
 
 int fpga_i2c_arm(unsigned sda, unsigned scl, unsigned half) {
     if (!gw_caps()->i2c_master) return -3;
+    if (!gw_caps()->bus_masters) return -3;
     if (swd_armed_local || spi_armed_local || i2c_armed_local || jtag_armed_local) return -2;
     int ws = la_wire_index(sda), wc = la_wire_index(scl);
     if (ws < 0 || wc < 0 || ws == wc) return -1;

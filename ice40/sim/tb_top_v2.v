@@ -7,7 +7,7 @@
 // derivation and power-on reset.  That top-level seam is exactly where the last
 // two field bugs lived (the 0x5555 mis-latch and the config-pin tristate), so this
 // drives a behavioural SPI master (mode 0) and checks the instant-response
-// commands: PING -> 0xA5, VERSION -> 41, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
+// commands: PING -> 0xA5, VERSION -> 65, STATUS -> known flag byte, TRIGGER_STATUS -> idle, and
 // GPIO_GET (v35) returning a pattern driven onto the LA pads.
 //
 // It needs the iCE40 primitive sim models (yosys' cells_sim.v), passed on the
@@ -118,14 +118,14 @@ module tb_top_v2;
         // Wait out the internal power-on reset (64 clk48 + sync) with margin.
         #5000;
         cmd1(8'h01, r); check(r, 8'hA5, "PING");
-        cmd1(8'h02, r); check(r, 8'd63, "VERSION");
+        cmd1(8'h02, r); check(r, 8'd65, "VERSION");
         // FPGA_FEATURES (0x18): which image this is (v54: three images).
 `ifdef USE_DEEP_REPLAY
-        cmd1(8'h18, r); check(r, 8'h1A, "FPGA_FEATURES deep");
+        cmd1(8'h18, r); check(r, 8'h2A, "FPGA_FEATURES deep");
 `elsif USE_EMULATION
         cmd1(8'h18, r); check(r, 8'h04, "FPGA_FEATURES emulation");
 `else
-        cmd1(8'h18, r); check(r, 8'h09, "FPGA_FEATURES loop");
+        cmd1(8'h18, r); check(r, 8'h29, "FPGA_FEATURES loop");
 `endif
         // Fresh boot: dac/cap/step/swd all idle, no capture overflow -> STATUS 0x00.
         cmd1(8'h03, r); check(r, 8'h00, "STATUS");

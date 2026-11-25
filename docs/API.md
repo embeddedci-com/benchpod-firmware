@@ -3158,7 +3158,9 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 Gateware v45+ (`status` caps `spi_master`; `spi_stream` with it on firmware that has the command).  The iCE40 engine that runs SWD has a second job:
 an SPI master on any four LA pins, used to read and program SPI NOR flash (W25Q, MX25, GD25,
 IS25 and other 25-series parts) or to talk to any other SPI device.  One engine, so an SPI
-session and an SWD session (`dap_start`) exclude each other.
+session and an SWD session (`dap_start`) exclude each other.  From gateware v65 the engine is not
+in the emulation image: `spi_start` switches to the loop image first when no I2C, SPI or UART
+sensor runs, and fails with `BP0059` while one does ([the emulation image](#the-emulation-image)).
 
 Hold the DUT in reset while you flash its SPI flash (`{"cmd":"nrst","assert":true}`) so its own
 controller does not drive the same wires, and release it afterwards.
@@ -3299,6 +3301,10 @@ AVR TPI and XMEGA PDI notes:
   two steps of a job switched it off. The chip may start its program for a moment in such a pause.
 
 Stage the image in PSRAM first with `load_bin` and `"psram":true` (as for `esp_flash`), then start.
+`pic`, `c2`, `tpi` and `pdi` run on the FPGA's bus-master engine, which gateware v65 and later has
+only in the loop and deep images. On the emulation image `start` fails with `BP0058` (load the deep
+image, then stage the file) or `BP0059` while I2C, SPI or UART sensors run; `info` switches to the
+loop image by itself when no such sensor runs. `updi` runs in every image.
 The job runs in the background: `info` and `start` answer at once and `status` reports progress.
 Meanwhile captures, uploads, updates and DAP, SPI or I2C sessions answer busy.
 
@@ -3431,7 +3437,9 @@ session is open), `BP0031` (a pin conflict), `this pod has no reset pin: wire EN
 The pod is an I2C master on any two LA pins (firmware with gateware v55 and later): read and write
 registers of a chip on the DUT's board, or scan the bus. The pins are open drain, so the bus needs
 pull-ups. SWD, SPI and I2C sessions exclude each other: they share one engine in the FPGA. Every
-command and reply fits one cloud frame.
+command and reply fits one cloud frame. From gateware v65 that engine is not in the emulation image:
+`i2c_start` switches to the loop image first when no I2C, SPI or UART sensor runs, and fails with
+`BP0059` while one does ([the emulation image](#the-emulation-image)).
 
 ### `i2c_start` — claim two pins as an I2C master
 
@@ -3530,7 +3538,17 @@ While the emulation image runs, the closed DAC loop (`dac_control_loop`, `dac_lo
 `dac_loop_probe`) and deep DAC replay (`load_bin` with `psram`, a deep `replay`) are not
 available; they fail with `BP0059` (`fpga_image_sensors_first`, args `feature` and `image`: stop
 the sensors, then switch to that image). Captures, the UART
-proxy, SWD, GPIO, the SPI master, `generate` and shallow `replay` work in every image. The pod does
+proxy, GPIO, `generate` and shallow `replay` work in every image.
+
+From gateware v65 the emulation image has no bus masters either: SWD (`dap_start`: flashing and
+debugging the DUT), JTAG, the [SPI master](#spi-master-flash-an-spi-device), the
+[I2C master](#i2c-master) (and the GPIO expanders it drives) and the two-wire pin programmers
+(`prog_flash` pic, c2, tpi and pdi) need the loop or deep image. While I2C, SPI or UART sensors run,
+`dap_start`, `spi_start` and `i2c_start` fail with `BP0059` (`feature` `"SWD"`, `"the SPI master"` or
+`"the I2C master"`). Flash the DUT first, then start the sensors: that order needs one image swap.
+With the emulation image loaded and no such sensor running, those commands switch to the loop
+image themselves before they answer (2 to 3 seconds), so older clients keep working. Up to
+gateware v64 every image had the bus masters. The pod does
 not swap back by itself: after `sensor_stop` the emulation image stays loaded until
 [`fpga_image`](#fpga_image--switch-the-running-gateware-image) switches it, and `fpga_image` to
 another image is refused while I2C, SPI or UART sensors run. Analog sensors work in every image
@@ -4076,7 +4094,23 @@ to the cloud, and puts an external output stage back on its park level when DAC 
 ```
 
 Reply: `{"image":2,"name":"emulation","version":54,"features":4}`; without `image` it reports the
-running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation.
+running one. `features` are the FPGA_FEATURES bits: 1 control loop, 2 deep replay, 4 emulation,
+8 the JTAG master (v61+), 16 the SWIM master (v62 to v64, deep image only), 32 the bus masters
+(v65+: SWD, the SPI master and the I2C master; loop and deep images). From gateware v65 the loop
+image reports 41 (0x29), the deep image 42 (0x2A) and the emulation image 4.
+
+Images and what each has, from gateware v65:
+
+| Image | Has | Lacks |
+|---|---|---|
+| loop | closed-loop DAC, SWD, JTAG, SPI and I2C master | deep replay, emulated sensors |
+| deep | deep DAC replay, SWD, JTAG, SPI and I2C master | closed loop, emulated sensors |
+| emulation | emulated I2C, SPI and UART sensors | closed loop, deep replay, SWD, JTAG, SPI and I2C master |
+
+Captures, the UART proxy, GPIO, `generate`, shallow `replay` and the analog sensors work in every
+image. `dap_start`, `spi_start`, `i2c_start` and `prog_flash` `"op":"info"` leave the emulation image
+for the loop image by themselves when no I2C, SPI or UART sensor runs (see
+[the emulation image](#the-emulation-image)).
 
 Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `BP0017` (the emulation image needs
 gateware v54), `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the

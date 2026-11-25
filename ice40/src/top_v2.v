@@ -800,6 +800,19 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 65 = v64 + THE EMULATION IMAGE SPLIT: the emulation image drops the bus-master
+    // engine (swd_engine: SWD, the SPI master, the I2C master), 98.5% -> ~84% LC, and the deep image
+    // drops SWIM (no firmware drives it yet), 88% -> ~76%.  FPGA_FEATURES bit 5 (0x20) is set on the
+    // images that carry the bus masters (loop, deep).  The firmware refuses SWD/SPI/I2C master commands
+    // on the emulation image while a digital sensor runs, and otherwise swaps to the loop image first.
+    // Bit 4 (SWIM) is now clear on every image.  No protocol change.
+    // GATEWARE_VERSION 64 = v63 + REGISTERED LA PADS (la_bank.v): each LA pad's output value and output
+    // enable are flops in its SB_IO (PIN_TYPE 6'b1101_01, rising clk edge) instead of combinational, so
+    // a channel changing hands can no longer put a few-ns pulse on the DUT's line (seen on v63 emu seeds
+    // 6 and 52 as a second pulse after every step on the bench's floating LA9).  Every LA output moves 1
+    // clk later; swd_engine's input synchroniser drops from 2 flops to 1, so the SPI/SWD/JTAG/I2C/SWIM
+    // masters read at the same point relative to the pins as before (6 MHz still at half = 2).
+    // tools/check_la_pads.py checks the pad type on every build.  tb_top_la_mux, tb_top_swdq.
     // GATEWARE_VERSION 63 = v62 + a LATER ADC SDO SAMPLE (adc_mcp33131.v) for timing margin with more
     // series resistance on the module cable: each bit is sampled on the falling clk edge in the middle
     // of SCLK high (the SDO SB_IO's DDR input register, now in adc_mcp33131), 20.8 ns later than v62,
@@ -1281,13 +1294,13 @@ module top (
     // exclusive across the two images, which the firmware swaps by reflashing).  The firmware reads it to advertise capabilities
     // per running image (closed-loop vs deep-replay), not by version.
 `ifdef USE_DEEP_REPLAY
-    localparam [7:0] IMG_FEATURES = 8'h1A;   // deep-DAC-PSRAM-replay + JTAG master (v61) + SWIM master (v62)
+    localparam [7:0] IMG_FEATURES = 8'h2A;   // deep-DAC-PSRAM-replay + JTAG master (v61) + bus masters (v65); SWIM out (v65)
 `elsif USE_EMULATION
-    localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54)
+    localparam [7:0] IMG_FEATURES = 8'h04;   // sensor emulation (v54); no bus masters (v65)
 `else
-    localparam [7:0] IMG_FEATURES = 8'h09;   // closed-loop DAC control + JTAG master (v61)
+    localparam [7:0] IMG_FEATURES = 8'h29;   // closed-loop DAC control + JTAG master (v61) + bus masters (v65)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd63), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd65), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),

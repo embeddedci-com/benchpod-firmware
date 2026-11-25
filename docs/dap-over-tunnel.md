@@ -54,6 +54,12 @@ A connection enters DAP mode exactly like SWD mode does today:
    ST-LINK boots first), which no fixed settle delay covers for every board.  The benchpod CLI
    and the Python SDK send 5000 when they powered the target.
 
+   With gateware v65 and later the emulation image has no SWD or JTAG engine. On that image
+   `dap_start` switches to the loop image before it answers (2 to 3 seconds) when no emulated I2C,
+   SPI or UART sensor runs, and fails with BP0059 (`fpga_image_sensors_first`) while one does: stop
+   the sensors first, or flash before starting them. See
+   [the emulation image](API.md#the-emulation-image).
+
    > Since rev3 there is **no `nreset` field**. nRESET is the pod's own
    > `/NRST_CONTROL` pin (J1 pin 22 — see the [DUT header pinout](API.md#dut-header)),
    > driven by `swd_ll_nreset()` → `nrst_ctrl.c`, not by an LA channel. CMSIS-DAP
@@ -115,7 +121,9 @@ retried as DAP_TransferConfigure says.
 ## JTAG
 
 Firmware 4.0.4 and later (feature `jtag`), with gateware v61 or later, has a JTAG master in the loop and deep images (not in the emulation
-image, which has no room for it; `dap_start` with JTAG pins refuses there with BP0059 or BP0058).
+image, which has no room for it; from gateware v65 `dap_start` switches to the loop image when no
+emulated sensor runs, and refuses with BP0059 while one does; before v65 it refuses there with BP0059
+or BP0058).
 `dap_start` takes four LA channels, `tck`, `tms`, `tdi` and `tdo`, and an optional `trst`
 (nTRST, driven as an output, released high); nRESET stays on the pod's own reset pin. With both
 the SWD and the JTAG pins, the pod arms SWD first (or JTAG with `"port":"jtag"`), and

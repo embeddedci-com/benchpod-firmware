@@ -38,9 +38,12 @@
 // Bit timing (modes 0 and 3 both change data on the falling edge and sample on the
 // rising one; they differ only in the idle level, `cpol`): SCK low + next MOSI bit for
 // `half` clk, SCK high for `half` clk, then MISO is taken.  MISO goes through the same
-// 2-flop synchroniser as SWDIO, so the value used at the end of the high phase is the
-// pin as it was 2 clk earlier.  With half >= 2 that is at or after the rising edge the
-// target saw, a full half period after its data changed.  half 0 or 1 would sample
+// one-flop synchroniser as SWDIO, and (v64) la_bank registers every LA output in its pad, so
+// the pins move 1 clk after the engine's state does: the value used at the end of the high
+// phase is the pin 1 clk earlier.  At half = 2 that is the instant the SCK pin rose (1 clk after
+// the engine raised it), the same point relative to the pins as up to v63 (2-flop synchroniser,
+// combinational pads).  With half >= 2 that is at or after the rising edge the target saw, a
+// full half period after its data changed.  half 0 or 1 would sample
 // before the edge, so the firmware clamps half to 2..63 (6 MHz .. 190 kHz at 24 MHz).
 //
 // SWD transfer queue (v45, SWD_QFEED / SWD_QCONFIG / SWD_QSTATUS).  With SWD armed, a
@@ -53,7 +56,8 @@
 //   idle cycles driving 0
 // The host drives SWDIO on the falling edge; the target changes it on the rising edge, and the
 // engine samples it at the END of the low phase, just before the next rising edge (CMSIS-DAP's
-// SW_READ_BIT).  Through the 2-flop synchroniser that is the pin 2 clk earlier, still a whole
+// SW_READ_BIT).  Through the one-flop synchroniser that is the pin 1 clk earlier (the pins lag the
+// engine by 1 clk since v64, see above), still a whole
 // high phase after the target's edge, so half = 2 (6 MHz) keeps full margin.  A read stores its
 // 4 data bytes (LE) in the reply buffer.  An ACK other than OK, or a read parity error, stops the
 // queue after a turnaround (+ idle); SWD_QSTATUS reports the transfers completed, the ACK and
@@ -187,20 +191,25 @@ module swd_engine #(
 
     assign reply_count = {{(16-REPLY_AW){1'b0}}, wptr};
 
-    // SWDIO / MISO is a pad-driven async input; 2-flop synchronise it before sampling, same
-    // metastability idiom as spi_slave / i2c_target.  SWD bit-bang holds the line static for
-    // many clocks around a 'c'; the shifters account for the 2-cycle latency (see the header).
-    reg dio_s0, dio_s1, scl_s0, scl_s1;
+    // SWDIO / MISO / TDO / SDA / SCL are pad-driven async inputs, registered once before the
+    // engines use them.  Up to v63 this was a 2-flop synchroniser with combinational pads; v64
+    // registers every LA output in its SB_IO (la_bank), which puts the pins 1 clk behind the
+    // engine, so one flop here keeps every read point where it was relative to the pins (the SPI,
+    // SWD and JTAG masters keep 6 MHz at half = 2; see the header).  The flop's output has a whole
+    // clk minus the 14:1 channel mux and the engines' logic to settle, so metastability is not a
+    // practical concern at 24 MHz.  SWD bit-bang holds the line static for many clocks around a
+    // 'c'.
+    reg dio_s1, scl_s1;
     always @(posedge clk) begin
-        if (rst) begin dio_s0 <= 1'b0; dio_s1 <= 1'b0; scl_s0 <= 1'b0; scl_s1 <= 1'b0; end
-        else     begin dio_s0 <= dio_in; dio_s1 <= dio_s0; scl_s0 <= scl_in; scl_s1 <= scl_s0; end
+        if (rst) begin dio_s1 <= 1'b0; scl_s1 <= 1'b0; end
+        else     begin dio_s1 <= dio_in; scl_s1 <= scl_in; end
     end
 
     // ---- the sequencer: SPI bytes or SWD transfers from the queue (one job at a time) ----
     // One cycle = `half` clk low then `half` clk high.  Its index `idx` (and SWDIO) moves on at
     // the end of the high half, i.e. on the falling edge.
     //   SPI:  a unit is one byte, idx 0..7; MOSI = sh[0]; MISO is taken at the END of the high
-    //         half (the device changed it on the falling edge; the 2-flop synchroniser then sees
+    //         half (the device changed it on the falling edge; the input flop then sees
     //         the pin at the rising edge) and shifted in at the top as the byte shifts out.
     //   SWD:  a unit is one transfer (see the header), idx 0..end_idx; the target's bit is taken
     //         at the end of the LOW half.

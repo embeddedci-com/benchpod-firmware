@@ -7,9 +7,11 @@
 //   -DUSE_DEEP_REPLAY deep image:      deep DAC replay from PSRAM (dac_psram_reader + arbiter)
 //   -DUSE_EMULATION   emulation image: the emulated sensors (I2C targets, SPI target, UART2)
 //
-// Everything else (ADC capture, LA capture incl. change capture, the UART proxy, SWD, GPIO,
-// the SPI master, the shallow DAC generate) is in all three.  Since v54 the sensor blocks are
-// only in the emulation image; the firmware swaps to it when a sensor starts.  Two derived
+// Everything else (ADC capture, LA capture incl. change capture, the UART proxy, GPIO, the
+// shallow DAC generate) is in all three.  Since v54 the sensor blocks are only in the emulation
+// image; the firmware swaps to it when a sensor starts.  Since v65 the bus-master engine (SWD,
+// the SPI master, the I2C master; FPGA_FEATURES bit 5) is only in the loop and deep images, and
+// SWIM is in none (the deep image dropped it for room).  Two derived
 // macros keep the ifdefs short:
 //
 //   HAS_DAC_LOOP   the loop image (neither flag)
