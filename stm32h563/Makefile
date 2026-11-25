@@ -244,6 +244,8 @@ C_SOURCES := \
   src/c3_image.c \
   src/c3_update.c \
   src/esp_rom_job.c \
+  src/esp_rom_names.c \
+  src/esp_rom_run.c \
   src/esp_dut_flash.c \
   src/prog_flash.c \
   src/prog_job.c \

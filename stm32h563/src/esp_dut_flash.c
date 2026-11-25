@@ -8,6 +8,7 @@
 #include "esp_dut_flash.h"
 #include "bp_errors.h"
 #include "esp_rom_job.h"
+#include "esp_rom_run.h"
 #include "command_handler_internal.h"   /* uart_pins_*, command_handler_psram_stage */
 #include "signal_engine.h"              /* fpga_uart_*, fpga_la_set, quiesce */
 #include "la_pins.h"
@@ -213,17 +214,19 @@ void esp_dut_flash_poll(void)
         if (now - s.t_state < EN_SETTLE_MS) return;
         s_io = (esp_rom_io_t){ io_send, io_rx_byte, io_now, s.p.len ? io_read : NULL, NULL, io_set_baud };
         if (s.p.len == 0) {
-            esp_rom_job_start_sync(&s_job, &s_io);
+            esp_rom_job_prepare(&s_job, esp_rom_run_work(), &s_io, 0, 0, NULL, true);
+            esp_rom_run_begin(&s_job);
         } else {
             esp_rom_opts_t o = { (s.p.baud && s.p.baud != START_BAUD) ? s.p.baud : 0, s.p.flash_size };
-            esp_rom_job_start_ex(&s_job, &s_io, s.p.len, s.p.offset, &o);
+            esp_rom_job_prepare(&s_job, esp_rom_run_work(), &s_io, s.p.len, s.p.offset, &o, false);
+            esp_rom_run_begin(&s_job);
         }
         s.st = ST_JOB;
         return;
     }
     case ST_JOB:
         fpga_uart_tx_pump();
-        if (esp_rom_job_step(&s_job)) {
+        if (esp_rom_run_step(&s_job)) {
             /* The ROM answered: let go of the boot strap, the DUT may use that pin. */
             if (!s.boot_released && s_job.phase > ESP_ROM_SYNC) {
                 od_set(s.p.boot, 1);

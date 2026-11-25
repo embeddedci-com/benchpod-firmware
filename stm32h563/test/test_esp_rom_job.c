@@ -12,6 +12,24 @@
  *   - a step never waits: nothing happens until the simulated reply is due.
  */
 #include "esp_rom_job.h"
+
+/* The job's state is in the job and this work buffer, as in the firmware (esp_rom_run.c). */
+static esp_rom_work_t work;
+static void esp_rom_job_start_ex(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t off,
+                                 const esp_rom_opts_t *o)
+{
+    esp_rom_job_prepare(j, &work, io, len, off, o, false);
+    esp_rom_job_begin(j);
+}
+static void esp_rom_job_start(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t off)
+{
+    esp_rom_job_start_ex(j, io, len, off, NULL);
+}
+static void esp_rom_job_start_sync(esp_rom_job_t *j, const esp_rom_io_t *io)
+{
+    esp_rom_job_prepare(j, &work, io, 0, 0, NULL, true);
+    esp_rom_job_begin(j);
+}
 #include "mbedtls/md5.h"
 
 #include <stdint.h>

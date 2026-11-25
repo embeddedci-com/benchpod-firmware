@@ -12,6 +12,7 @@
 #include "ctrl_flash.h"
 #include "ser_flash.h"
 #include "esp_rom_job.h"
+#include "esp_rom_run.h"
 #include "esp_rom_flash.h"
 #include "esp_dut_flash.h"
 #include "xip_session.h"
@@ -248,12 +249,13 @@ static int esp_poll(void)
         s_esp_io = (esp_rom_io_t){ esp_send, esp_rx_byte, now_ms, esp_read, NULL,
                                    usb_serial_is_bridge() ? esp_set_baud : NULL };
         esp_rom_opts_t o = { .baud = usb_serial_is_bridge() ? ESP_FAST_BAUD : 0, .flash_size = 0 };
-        esp_rom_job_start_ex(&s_esp, &s_esp_io, s.len, s.address, &o);
+        esp_rom_job_prepare(&s_esp, esp_rom_run_work(), &s_esp_io, s.len, s.address, &o, false);
+        esp_rom_run_begin(&s_esp);
         s.esp_pre = ESP_PRE_JOB;
         return 1;
     }
     default:
-        if (esp_rom_job_step(&s_esp)) return 1;
+        if (esp_rom_run_step(&s_esp)) return 1;
         if (s_esp.result >= 0 && s.leave) esp_hard_reset();
         return s_esp.result == ESP_ROM_UNVERIFIED ? RC_ESP_UNVERIFIED : s_esp.result;
     }

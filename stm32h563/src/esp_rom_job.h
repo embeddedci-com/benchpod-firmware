@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <string.h>
 
 /* ---- ESP32 ROM-loader write job, one step at a time -----------------------
  *
@@ -15,6 +16,11 @@
  *
  * Portable (no HAL): the UART, the clock and the image source come in through esp_rom_io_t,
  * which is how test_esp_rom_job.c drives it against a simulated C3 ROM.
+ *
+ * The state machine (esp_rom_job_begin, esp_rom_job_step) has no static state: the job's own
+ * fields are in esp_rom_job_t, and its buffers (the SLIP frames, the running MD5) in the
+ * esp_rom_work_t the caller provides (esp_rom_job_prepare).  That is what lets it run from the
+ * usb image in the W25Q (xip_image.h), where objects may have no .data or .bss.
  *
  * Used for the pod's own ESP32-C3 (esp_rom_flash.c) and for an ESP32-family DUT on the LA pins
  * (esp_dut_flash.c).  With esp_rom_opts_t it also changes the baud rate (CHANGE_BAUDRATE) and
@@ -78,7 +84,21 @@ typedef enum {
 #define ESP_ROM_ERR_CHIP    -7   /* a chip this job does not write (ESP8266)                 */
 #define ESP_ROM_ERR_BAUD    -8   /* the ROM changed its baud rate but our UART could not     */
 
+/* The job's buffers, one per running job (the caller allocates it; the job points at it). */
 typedef struct {
+    uint8_t  pkt[16 + ESP_ROM_BLOCK];                   /* FLASH_DATA payload, kept for resends  */
+    uint8_t  slip[2 * (8 + 16 + ESP_ROM_BLOCK) + 2];    /* the encoded frame, worst case         */
+    uint8_t  resp[256];                                 /* the decoded reply                     */
+    uint32_t pkt_chk;
+    uint32_t value;                                     /* the reply header's value word         */
+    const uint8_t *payload;
+    int      plen;
+    int      pending_result;                            /* what DONE reports after FLASH_END     */
+    uint32_t md5[32];                                   /* a mbedtls_md5_context (checked in the .c) */
+} esp_rom_work_t;
+
+typedef struct {
+    esp_rom_work_t     *w;
     const esp_rom_io_t *io;
     uint32_t len, offset, blocks, seq;
     esp_rom_phase_t phase;
@@ -86,7 +106,7 @@ typedef struct {
     uint8_t  attempt;                    /* sends of the current command                  */
     uint8_t  status_len;                 /* ROM status bytes per reply (from the SYNC reply) */
     uint32_t chip_magic;
-    bool     sync_only;                  /* esp_rom_job_start_sync: stop after the chip magic */
+    bool     sync_only;                  /* esp_rom_job_prepare: stop after the chip magic */
     esp_rom_opts_t opts;
     esp_rom_phase_t failed_phase;        /* the phase a failed job stopped in (result < 0) */
     uint32_t baud;                       /* the rate the link runs at once BAUD is done (0 = unchanged) */
@@ -101,19 +121,28 @@ typedef struct {
     uint16_t rn;
 } esp_rom_job_t;
 
-/* Begin writing `len` bytes from io->read (or 0xFF with io->read NULL) at `offset`: sends the
-   first SYNC.  The job owns static buffers, so one job runs at a time. */
-void esp_rom_job_start(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset);
+/* Set a job up: zero it and record what to do.  Write `len` bytes from io->read (or 0xFF with
+   io->read NULL) at `offset`; opts NULL = none (the C3 sequence); sync_only: only SYNC and read
+   the chip magic (the wiring test, len ignored).  Plain data stores: it runs anywhere. */
+static inline void esp_rom_job_prepare(esp_rom_job_t *j, esp_rom_work_t *w, const esp_rom_io_t *io,
+                                       uint32_t len, uint32_t offset, const esp_rom_opts_t *opts,
+                                       bool sync_only)
+{
+    memset(j, 0, sizeof(*j));
+    j->w = w;
+    j->io = io;
+    if (opts) j->opts = *opts;
+    j->len = len;
+    j->offset = offset;
+    j->sync_only = sync_only;
+}
 
-/* The same with options (NULL = none, which is esp_rom_job_start). */
-void esp_rom_job_start_ex(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset,
-                          const esp_rom_opts_t *opts);
+/* Start a prepared job: sends the first SYNC.  1 while it runs, 0 when it ended at once (bad
+   arguments: phase is ESP_ROM_DONE). */
+int esp_rom_job_begin(esp_rom_job_t *j);
 
-/* Only SYNC and read the chip magic (the wiring test): ESP_ROM_OK or ESP_ROM_ERR_SYNC. */
-void esp_rom_job_start_sync(esp_rom_job_t *j, const esp_rom_io_t *io);
-
-/* Advance the job; never waits.  true while it still runs, false once phase is ESP_ROM_DONE. */
-bool esp_rom_job_step(esp_rom_job_t *j);
+/* Advance the job; never waits.  1 while it still runs, 0 once phase is ESP_ROM_DONE. */
+int esp_rom_job_step(esp_rom_job_t *j);
 
 /* "block 513/1072" style progress: blocks acknowledged so far.  A job that failed reports how far
    it got (0 when it never reached the data), not the total. */

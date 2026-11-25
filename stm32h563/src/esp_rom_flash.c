@@ -14,6 +14,7 @@
  */
 #include "esp_rom_flash.h"
 #include "esp_rom_job.h"
+#include "esp_rom_run.h"
 #include "esp_part_table.h"
 #include "board_pins.h"
 #include "watchdog.h"
@@ -201,7 +202,7 @@ static void rom_enter(void)
 /* Run a job to its end on the calling task (short jobs only: sync, the NVS erase). */
 static int run_blocking(esp_rom_job_t *j)
 {
-    while (esp_rom_job_step(j)) {
+    while (esp_rom_run_step(j)) {
         watchdog_heartbeat(WD_TASK_WORKER, "worker");
         sleep_ms_rtos(1);
     }
@@ -246,7 +247,8 @@ int esp_rom_flash_sync(uint32_t *chip_magic_out)
     static esp_rom_io_t io;
     io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL, NULL };
     static esp_rom_job_t j;
-    esp_rom_job_start_sync(&j, &io);
+    esp_rom_job_prepare(&j, esp_rom_run_work(), &io, 0, 0, NULL, true);
+    esp_rom_run_begin(&j);
     int rc = run_blocking(&j);
     uart_deinit();
     if (rc != ESP_ROM_OK) {
@@ -299,7 +301,8 @@ int esp_rom_flash_start(esp_flash_done_fn done)
     rom_enter();
     s_from_slot = true;
     s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, slot_read, (void *)(uintptr_t)BLOB_ESP, NULL };
-    esp_rom_job_start(&s_job, &s_io, blob_store_info(BLOB_ESP)->len, 0);
+    esp_rom_job_prepare(&s_job, esp_rom_run_work(), &s_io, blob_store_info(BLOB_ESP)->len, 0, NULL, false);
+    esp_rom_run_begin(&s_job);
     return 0;
 }
 
@@ -315,7 +318,8 @@ int esp_rom_flash_start_staged(uint32_t len, esp_flash_done_fn done)
     rom_enter();
     s_from_slot = false;   /* c3_update.c records what it wrote */
     s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, staged_read, NULL, NULL };
-    esp_rom_job_start(&s_job, &s_io, len, 0);
+    esp_rom_job_prepare(&s_job, esp_rom_run_work(), &s_io, len, 0, NULL, false);
+    esp_rom_run_begin(&s_job);
     return 0;
 }
 
@@ -327,7 +331,7 @@ bool esp_rom_flash_staged_nvs(uint32_t *off, uint32_t *size)
 void esp_rom_flash_poll(void)
 {
     if (!s_active) return;
-    if (esp_rom_job_step(&s_job)) return;
+    if (esp_rom_run_step(&s_job)) return;
     int rc = s_job.result;
     uart_deinit();
     unsigned secs = (unsigned)((HAL_GetTick() - s_t0) / 1000u);
@@ -393,7 +397,8 @@ int esp_rom_flash_erase_nvs(void)
         static esp_rom_io_t io;
         io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL, NULL };   /* NULL: erase */
         static esp_rom_job_t j;
-        esp_rom_job_start(&j, &io, size, off);
+        esp_rom_job_prepare(&j, esp_rom_run_work(), &io, size, off, NULL, false);
+        esp_rom_run_begin(&j);
         rc = run_blocking(&j) == ESP_ROM_OK ? 0 : -1;   /* an unverified erase is not "blank" */
     }
     uart_deinit();

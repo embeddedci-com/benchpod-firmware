@@ -30,16 +30,11 @@
 
 #define REPLY_PENDING      1
 
-/* Static I/O scratch: one job at a time. */
-static uint8_t  s_pkt[16 + ESP_ROM_BLOCK];                 /* FLASH_DATA payload, kept for resends */
-static uint32_t s_pkt_chk;
-static uint8_t  s_slip[2 * (8 + 16 + ESP_ROM_BLOCK) + 2];  /* worst-case encoded                  */
-static uint8_t  s_resp[256];                               /* decoded reply                       */
-static uint32_t s_value;                                   /* the reply header's value word       */
-static const uint8_t *s_payload;
-static int      s_plen;
-static mbedtls_md5_context s_md5;
-static int      s_pending_result;                          /* what DONE reports after FLASH_END   */
+#define W(j) ((j)->w)
+
+_Static_assert(sizeof(mbedtls_md5_context) <= sizeof(((esp_rom_work_t *)0)->md5),
+               "esp_rom_work_t.md5 is too small for a mbedtls_md5_context");
+#define MD5(j) ((mbedtls_md5_context *)(void *)W(j)->md5)
 
 static void put_le32(uint8_t *p, uint32_t v)
 { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
@@ -57,7 +52,7 @@ static void send_cmd(esp_rom_job_t *j, uint8_t op, const uint8_t *data, uint16_t
     h[2] = (uint8_t)dlen; h[3] = (uint8_t)(dlen >> 8);
     put_le32(h + 4, checksum);
 
-    uint8_t *w = s_slip;
+    uint8_t *w = W(j)->slip;
     *w++ = SLIP_END;
     for (uint32_t i = 0; i < 8u + dlen; i++) {
         uint8_t b = (i < 8u) ? h[i] : data[i - 8u];
@@ -69,7 +64,7 @@ static void send_cmd(esp_rom_job_t *j, uint8_t op, const uint8_t *data, uint16_t
 
     j->op = op;
     j->in_frame = false; j->esc = false; j->rn = 0;
-    uint32_t wire_ms = j->io->send(s_slip, (uint32_t)(w - s_slip));
+    uint32_t wire_ms = j->io->send(W(j)->slip, (uint32_t)(w - W(j)->slip));
     j->deadline = j->io->now_ms() + wire_ms + timeout_ms;
 }
 
@@ -81,19 +76,20 @@ static void send_cmd(esp_rom_job_t *j, uint8_t op, const uint8_t *data, uint16_t
 static int eval_frame(esp_rom_job_t *j)
 {
     uint32_t n = j->rn;
-    if (n < 8 + 2 || s_resp[0] != 0x01 || s_resp[1] != j->op) return REPLY_PENDING;
-    uint16_t size = (uint16_t)(s_resp[2] | (s_resp[3] << 8));
+    const uint8_t *resp = W(j)->resp;
+    if (n < 8 + 2 || resp[0] != 0x01 || resp[1] != j->op) return REPLY_PENDING;
+    uint16_t size = (uint16_t)(resp[2] | (resp[3] << 8));
     if (8u + size > n) return REPLY_PENDING;
     if (j->status_len == 0)   /* the SYNC reply carries only the status: 4 bytes on the C3 ROM */
         j->status_len = (size == 4) ? 4 : 2;
     if (size < j->status_len) return REPLY_PENDING;
-    const uint8_t *body = s_resp + 8;
+    const uint8_t *body = resp + 8;
     uint8_t status = body[size - j->status_len];
     if (status != 0) return -(100 + (int)body[size - j->status_len + 1]);
-    s_value   = (uint32_t)s_resp[4] | ((uint32_t)s_resp[5] << 8) |
-                ((uint32_t)s_resp[6] << 16) | ((uint32_t)s_resp[7] << 24);
-    s_payload = body;
-    s_plen    = (int)size - j->status_len;
+    W(j)->value   = (uint32_t)resp[4] | ((uint32_t)resp[5] << 8) |
+                    ((uint32_t)resp[6] << 16) | ((uint32_t)resp[7] << 24);
+    W(j)->payload = body;
+    W(j)->plen    = (int)size - j->status_len;
     return 0;
 }
 
@@ -120,7 +116,7 @@ static int poll_reply(esp_rom_job_t *j)
             j->esc = true;
             continue;
         }
-        if (j->rn < sizeof(s_resp)) s_resp[j->rn++] = (uint8_t)c;
+        if (j->rn < sizeof(W(j)->resp)) W(j)->resp[j->rn++] = (uint8_t)c;
     }
     return reached(j->io->now_ms(), j->deadline) ? -1 : REPLY_PENDING;
 }
@@ -132,7 +128,7 @@ static void finish(esp_rom_job_t *j, int result)
     if (result < 0) j->failed_phase = j->phase;
     j->result = result;
     j->phase  = ESP_ROM_DONE;
-    mbedtls_md5_free(&s_md5);
+    if (W(j)) mbedtls_md5_free(MD5(j));
 }
 
 static void send_sync(esp_rom_job_t *j)
@@ -145,7 +141,7 @@ static void send_sync(esp_rom_job_t *j)
 
 static void send_pkt(esp_rom_job_t *j)
 {
-    send_cmd(j, OP_FLASH_DATA, s_pkt, (uint16_t)sizeof(s_pkt), s_pkt_chk, ESP_ROM_DATA_TIMEOUT_MS);
+    send_cmd(j, OP_FLASH_DATA, W(j)->pkt, (uint16_t)sizeof(W(j)->pkt), W(j)->pkt_chk, ESP_ROM_DATA_TIMEOUT_MS);
 }
 
 /* Read block j->seq once (it is hashed once), pad it and send it. false = the source failed. */
@@ -153,21 +149,21 @@ static bool send_block(esp_rom_job_t *j)
 {
     uint32_t off = j->seq * ESP_ROM_BLOCK;
     uint32_t n = (j->len - off < ESP_ROM_BLOCK) ? j->len - off : ESP_ROM_BLOCK;
-    put_le32(s_pkt + 0, ESP_ROM_BLOCK);   /* data length (padded) */
-    put_le32(s_pkt + 4, j->seq);
-    put_le32(s_pkt + 8, 0);
-    put_le32(s_pkt + 12, 0);
+    put_le32(W(j)->pkt + 0, ESP_ROM_BLOCK);   /* data length (padded) */
+    put_le32(W(j)->pkt + 4, j->seq);
+    put_le32(W(j)->pkt + 8, 0);
+    put_le32(W(j)->pkt + 12, 0);
     if (!j->io->read) {
-        memset(s_pkt + 16, 0xFF, n);
-    } else if (j->io->read(j->io->read_ctx, off, s_pkt + 16, n) != 0) {
+        memset(W(j)->pkt + 16, 0xFF, n);
+    } else if (j->io->read(j->io->read_ctx, off, W(j)->pkt + 16, n) != 0) {
         LOG_E("[espflash] reading the image at %lu failed\n", (unsigned long)off);
         return false;
     }
-    mbedtls_md5_update(&s_md5, s_pkt + 16, n);
-    if (n < ESP_ROM_BLOCK) memset(s_pkt + 16 + n, 0xFF, ESP_ROM_BLOCK - n);
+    mbedtls_md5_update(MD5(j), W(j)->pkt + 16, n);
+    if (n < ESP_ROM_BLOCK) memset(W(j)->pkt + 16 + n, 0xFF, ESP_ROM_BLOCK - n);
     uint32_t chk = CHECKSUM_MAGIC;        /* covers only the block bytes (esptool convention) */
-    for (uint32_t i = 0; i < ESP_ROM_BLOCK; i++) chk ^= s_pkt[16 + i];
-    s_pkt_chk = chk;
+    for (uint32_t i = 0; i < ESP_ROM_BLOCK; i++) chk ^= W(j)->pkt[16 + i];
+    W(j)->pkt_chk = chk;
     j->attempt = 1;
     send_pkt(j);
     return true;
@@ -186,7 +182,7 @@ static void send_md5(esp_rom_job_t *j)
 static void send_end(esp_rom_job_t *j, int result)
 {
     uint8_t e[4]; put_le32(e, 1);         /* stay in the loader: the caller resets the C3 */
-    s_pending_result = result;
+    W(j)->pending_result = result;
     j->phase = ESP_ROM_END;
     send_cmd(j, OP_FLASH_END, e, sizeof(e), 0, 1000);
 }
@@ -216,50 +212,32 @@ static void send_begin(esp_rom_job_t *j)
     send_cmd(j, OP_FLASH_BEGIN, b, n, 0, ESP_ROM_BEGIN_TIMEOUT_MS);
 }
 
-void esp_rom_job_start(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset)
+int esp_rom_job_begin(esp_rom_job_t *j)
 {
-    esp_rom_job_start_ex(j, io, len, offset, NULL);
-}
-
-void esp_rom_job_start_ex(esp_rom_job_t *j, const esp_rom_io_t *io, uint32_t len, uint32_t offset,
-                          const esp_rom_opts_t *opts)
-{
-    memset(j, 0, sizeof(*j));
-    j->io = io;
-    if (opts) j->opts = *opts;
-    j->len = len;
-    j->offset = offset;
-    j->blocks = (len + ESP_ROM_BLOCK - 1) / ESP_ROM_BLOCK;
-    mbedtls_md5_init(&s_md5);
-    mbedtls_md5_starts(&s_md5);
-    if (len == 0 || !io || !io->send || !io->rx_byte || !io->now_ms) {
+    const esp_rom_io_t *io = j->io;
+    if (!io || !io->send || !io->rx_byte || !io->now_ms || !j->w ||
+        (!j->sync_only && j->len == 0)) {
         finish(j, ESP_ROM_ERR_ARGS);
-        return;
+        return 0;
     }
-    log_printf("[espflash] %s %lu bytes at 0x%06lx\n", io->read ? "programming" : "erasing",
-               (unsigned long)len, (unsigned long)offset);
+    mbedtls_md5_init(MD5(j));
+    if (!j->sync_only) {
+        j->blocks = (j->len + ESP_ROM_BLOCK - 1) / ESP_ROM_BLOCK;
+        mbedtls_md5_starts(MD5(j));
+        log_printf("[espflash] %s %lu bytes at 0x%06lx\n", io->read ? "programming" : "erasing",
+                   (unsigned long)j->len, (unsigned long)j->offset);
+    }
     j->phase = ESP_ROM_SYNC;
     j->attempt = 1;
     send_sync(j);
+    return 1;
 }
 
-void esp_rom_job_start_sync(esp_rom_job_t *j, const esp_rom_io_t *io)
+int esp_rom_job_step(esp_rom_job_t *j)
 {
-    memset(j, 0, sizeof(*j));
-    j->io = io;
-    j->sync_only = true;
-    mbedtls_md5_init(&s_md5);
-    if (!io || !io->send || !io->rx_byte || !io->now_ms) { finish(j, ESP_ROM_ERR_ARGS); return; }
-    j->phase = ESP_ROM_SYNC;
-    j->attempt = 1;
-    send_sync(j);
-}
-
-bool esp_rom_job_step(esp_rom_job_t *j)
-{
-    if (j->phase == ESP_ROM_IDLE || j->phase == ESP_ROM_DONE) return false;
+    if (j->phase == ESP_ROM_IDLE || j->phase == ESP_ROM_DONE) return 0;
     int r = poll_reply(j);
-    if (r == REPLY_PENDING) return true;
+    if (r == REPLY_PENDING) return 1;
 
     switch (j->phase) {
     case ESP_ROM_SYNC:
@@ -277,7 +255,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
         break;
 
     case ESP_ROM_MAGIC: {
-        if (r == 0) j->chip_magic = s_value;
+        if (r == 0) j->chip_magic = W(j)->value;
         log_printf("[espflash] %s ROM synced (magic 0x%08lx)\n", esp_rom_chip_name(j->chip_magic),
                    (unsigned long)j->chip_magic);
         if (j->sync_only) { finish(j, ESP_ROM_OK); break; }
@@ -369,7 +347,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
         }
         {
             uint8_t want[16];
-            mbedtls_md5_finish(&s_md5, want);
+            mbedtls_md5_finish(MD5(j), want);
             for (int i = 0; i < 16; i++) snprintf(j->want_md5 + i * 2, 3, "%02x", want[i]);
         }
         j->phase = ESP_ROM_MD5;
@@ -378,8 +356,8 @@ bool esp_rom_job_step(esp_rom_job_t *j)
         break;
 
     case ESP_ROM_MD5:
-        if (r == 0 && s_plen >= 32) {
-            memcpy(j->got_md5, s_payload, 32);
+        if (r == 0 && W(j)->plen >= 32) {
+            memcpy(j->got_md5, W(j)->payload, 32);
             j->got_md5[32] = '\0';
             if (memcmp(j->got_md5, j->want_md5, 32) != 0) {
                 LOG_E("[espflash] MD5 MISMATCH: the chip does not hold the image\n");
@@ -407,7 +385,7 @@ bool esp_rom_job_step(esp_rom_job_t *j)
         break;
 
     case ESP_ROM_END:
-        finish(j, s_pending_result);      /* FLASH_END's own answer does not matter */
+        finish(j, W(j)->pending_result);      /* FLASH_END's own answer does not matter */
         break;
 
     default:
@@ -415,54 +393,4 @@ bool esp_rom_job_step(esp_rom_job_t *j)
         break;
     }
     return j->phase != ESP_ROM_DONE;
-}
-
-const char *esp_rom_result_str(int result)
-{
-    switch (result) {
-    case ESP_ROM_OK:         return "verified";
-    case ESP_ROM_UNVERIFIED: return "written, MD5 not read back";
-    case ESP_ROM_ERR_SYNC:   return "no answer from the ROM loader";
-    case ESP_ROM_ERR_BEGIN:  return "FLASH_BEGIN failed";
-    case ESP_ROM_ERR_READ:   return "reading the image failed";
-    case ESP_ROM_ERR_DATA:   return "a block was not acknowledged";
-    case ESP_ROM_ERR_MD5:    return "MD5 mismatch";
-    case ESP_ROM_ERR_CHIP:   return "chip not supported (ESP8266)";
-    case ESP_ROM_ERR_BAUD:   return "could not change the baud rate";
-    default:                 return "bad arguments";
-    }
-}
-
-const char *esp_rom_chip_name(uint32_t magic)
-{
-    switch (magic) {
-    case ESP_MAGIC_ESP32:   return "ESP32";
-    case 0x000007C6u:       return "ESP32-S2";
-    case 0x00000009u:       return "ESP32-S3";
-    case 0x6921506Fu: case 0x1B31506Fu: case 0x4881606Fu: case 0x4361606Fu:
-                            return "ESP32-C3";
-    case 0x6F51306Fu: case 0x7C41A06Fu:
-                            return "ESP32-C2";
-    case 0x2CE0806Fu:       return "ESP32-C6";
-    case 0xD7B73E80u:       return "ESP32-H2";
-    case ESP_MAGIC_ESP8266: return "ESP8266";
-    default:                return "unknown";
-    }
-}
-
-const char *esp_rom_phase_str(esp_rom_phase_t phase)
-{
-    switch (phase) {
-    case ESP_ROM_IDLE:   return "idle";
-    case ESP_ROM_SYNC:   return "sync";
-    case ESP_ROM_MAGIC:  return "detect";
-    case ESP_ROM_BAUD:   return "baud";
-    case ESP_ROM_ATTACH: return "attach";
-    case ESP_ROM_PARAMS: return "params";
-    case ESP_ROM_BEGIN:  return "erase";
-    case ESP_ROM_DATA:   return "write";
-    case ESP_ROM_MD5:    return "verify";
-    case ESP_ROM_END:    return "end";
-    default:             return "done";
-    }
 }

@@ -189,7 +189,7 @@ BENCHTLS_CFLAGS := -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"' -I../config 
 CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/cloud_ca.c ../src/blob_store.c mocks/mock_w25q.c
 MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
 # The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
-ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
+ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c ../src/esp_rom_names.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
 ifneq ($(HAVE_MBEDTLS),)
 OTA_TARGET := build/test_ota build/test_blob_store build/test_c3_image build/test_cloud_extras build/test_esp_rom_job
 endif
