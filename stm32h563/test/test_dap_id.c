@@ -53,6 +53,7 @@ static bool mem_find(uint32_t a, uint32_t *v) {
     return false;
 }
 uint8_t swd_ll_transfer(uint8_t req, uint32_t *data) {
+    g_now_us += 10;   /* a transfer takes time: the WAIT retry is bounded by the clock */
     if (!m.present || (uint64_t)m.up_after_ms * 1000u > g_now_us) return SWD_ACK_NO_ACK;
     if (m.waits > 0) { m.waits--; return SWD_ACK_WAIT; }
     bool ap = req & SWD_REQ_APnDP, rd = req & SWD_REQ_RnW;

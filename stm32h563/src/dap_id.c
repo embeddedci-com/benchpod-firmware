@@ -34,16 +34,20 @@
 #define IDR_CLASS_MEMAP  8u            /* IDR bits 16:13 */
 #define CPUID_ADDR       0xE000ED00u
 
-/* A target that keeps answering WAIT has its own idea of "busy": give up after this many. */
-#define ID_WAIT_RETRIES 64
+/* WAIT means the target's bus is busy: an MCU sleeping in WFI between interrupts stalls AHB-AP
+   accesses to its system bus (DBGMCU, flash) until the next wake-up, while the core's own SCS
+   (CPUID) still answers.  64 back-to-back retries are a few microseconds, far shorter than a 1 ms
+   SysTick, so retry for up to ID_WAIT_MS instead (a busy loop: short, and the worker keeps its
+   heartbeat through the callers' sleeps). */
+#define ID_WAIT_MS 20
 
 static uint8_t xfer(uint8_t req, uint32_t *data) {
+    absolute_time_t deadline = make_timeout_time_ms(ID_WAIT_MS);
     uint8_t ack;
-    for (int i = 0; i < ID_WAIT_RETRIES; i++) {
+    for (;;) {
         ack = swd_ll_transfer(req, data);
-        if (ack != SWD_ACK_WAIT) return ack;
+        if (ack != SWD_ACK_WAIT || time_reached(deadline)) return ack;
     }
-    return ack;
 }
 /* ACK OK only counts when the read's parity was good too (OK|PERR is not SWD_ACK_OK). */
 static bool dp_wr(uint8_t a, uint32_t v) { return xfer(a, &v) == SWD_ACK_OK; }
