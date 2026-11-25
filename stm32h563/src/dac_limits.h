@@ -19,7 +19,9 @@
  *     the path's calibration), and an inverted stage may not arm in_trip (the gateware trips
  *     TO vmin, which is the HIGHEST output there).
  *   - For an inverted stage, a route that disconnects the limited path is refused (off, another
- *     DAC path, cal2, cal1 unless the path is 5v): a disconnected input sits near 0 V.
+ *     DAC path, cal2, cal1): a disconnected input sits near 0 V. cal1 energizes K1, which
+ *     disconnects the 5 V output, so it counts as a route away even on the 5v path.
+ *   - dac_out with path cal1 is checked against the 5v window (the DAC keeps that level).
  *   - Commands that write raw DAC codes or flip the mux by hand are refused: generate, dac_set,
  *     load, load_bin, replay, measure, dac_mux, cal_switch (and the console's dacraw/dacmux).
  *   - current_out with a current is refused: the 4-20 mA output has no DAC of its own, so setting
