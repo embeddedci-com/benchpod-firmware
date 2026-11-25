@@ -288,8 +288,9 @@ replaces it.
 Without a programmer, through the pod: the pod must run a dev build too if you use a dev-signed
 image (release pod firmware refuses it with `unknown-key`; the pod's EMI build, `make EMI_TEST=1`,
 is one), and the bridge must be paired with that pod. A bridge that runs a **release** image trusts
-only the release keys, so it needs the release-signed EMC image: run **Actions > Sign bridge EMC
-image > Run workflow** (`.github/workflows/sign-bridge-emc.yml`, a reviewer approves it) and
+only the release keys, so it needs the release-signed EMC image: push a tag
+`bridge-emc-<bridge version>-<n>` (for example `bridge-emc-0.1.3-1`), which starts
+`.github/workflows/sign-bridge-emc.yml`; a reviewer approves it in the `release` environment. Then
 download the artifact `bridge-emc-<version>`. The repo is public, so the artifact is encrypted with
 age to the keys in `emc-artifact-recipients.txt`; decrypt it on a machine that holds one (below)
 and use that folder instead of `build-emc/blobs`. A
