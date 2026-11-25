@@ -72,8 +72,8 @@ int dac_generate16(wave16_shape_t shape, float freq, double amp, double mid,
                    uint32_t duration_ms, float sample_rate_hz);
 
 /* Play an arbitrary user-supplied waveform (loop=true: until dac_stop(); false: once) with the
-   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (4 + 63) ~= 716 kS/s on
-   gateware v66+, 48 MHz / (4 + 51) ~= 873 kS/s before;
+   DAC sample clock from a target rate in Hz (0 = the max rate, 48 MHz / (4 + 75) ~= 608 kS/s on
+   gateware v67+, 716 kS/s on v66, 48 MHz / (4 + 51) ~= 873 kS/s before;
    faster requests are clamped to it). Replay a captured trace at the rate it was captured at,
    so the playback time base matches the recording. */
 int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
@@ -85,7 +85,8 @@ int dac_generate_arbitrary_rate(const uint8_t *data, size_t len, bool loop,
    the whole 8 MB region (up to FPGA_DAC_REPLAY_MAX_SAMPLES) — enough to replay a
    full stored ADC recording.  The caller must have staged the bytes into PSRAM and
    released the shared bus (psram_bus_release) so the iCE40 can read.  Pass 0 rate
-   for the max clock (48 MHz / (4 + 64) ~= 706 kS/s from PSRAM on gateware v66+, 857 kS/s before;
+   for the max clock (48 MHz / (4 + 76) = 600 kS/s from PSRAM on gateware v67+, 706 kS/s on v66,
+   857 kS/s before;
    faster requests are clamped). */
 int dac_replay_psram(uint32_t count, float sample_rate_hz);
 

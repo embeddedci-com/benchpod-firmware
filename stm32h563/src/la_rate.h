@@ -88,16 +88,19 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version);
 /* ---- DAC sample period ------------------------------------------------------------------
  * Extra clk48 the DAC8551 sequencer spends per sample BEYOND the inter-sample divider gap:
  * 3 fetch/latch cycles (BRAM: S_RDLO + S_RDHI + S_LAT) plus the 24-bit SPI frame (S_SHIFT).
- * Gateware v66+ shifts it at 2.5 clocks/bit (a 19.2 MHz SCLK through DDR pads, for the DAC8554's
- * 20 ns SCLK low time): 3 + 60 = 63.  Up to v65, 2 clocks/bit (24 MHz): 3 + 48 = 51.  See
+ * Gateware v67+ shifts it at 3 clocks/bit (a 16 MHz SCLK through DDR pads, both phases 31 ns, for
+ * the DAC8554's 20 ns SCLK high/low time): 3 + 72 = 75.  v66: 2.5 clocks/bit (19.2 MHz) = 63.  Up
+ * to v65, 2 clocks/bit (24 MHz): 3 + 48 = 51.  See
  * ice40/src/dac8551_engine.v and tb_dac8551.  So one sample takes max(divider, DAC_MIN_DIVIDER)
  * + overhead clocks and the real update rate is DAC_CLK/(divider + overhead), NOT
  * DAC_CLK/divider.  Ignoring it made generate() play far below the requested frequency at small
  * dividers, and made replay play slow (80 kS/s asked came out at 73.7 kS/s, 400 kS/s at
  * 281 kS/s; measured on the pod).  Use dac_seq_overhead_clk(gw) for the running gateware. */
 #define DAC_SCLK_DDR_MIN_GW      66u
-#define DAC_SEQ_OVERHEAD_CLK     63u   /* gateware >= DAC_SCLK_DDR_MIN_GW */
-#define DAC_SEQ_OVERHEAD_CLK_OLD 51u   /* gateware <  DAC_SCLK_DDR_MIN_GW */
+#define DAC_SCLK_16M_MIN_GW      67u
+#define DAC_SEQ_OVERHEAD_CLK     75u   /* gateware >= DAC_SCLK_16M_MIN_GW (16 MHz, 3 clocks/bit) */
+#define DAC_SEQ_OVERHEAD_CLK_V66 63u   /* gateware 66 (19.2 MHz, 2.5 clocks/bit) */
+#define DAC_SEQ_OVERHEAD_CLK_OLD 51u   /* gateware <  DAC_SCLK_DDR_MIN_GW (24 MHz) */
 uint32_t dac_seq_overhead_clk(uint8_t gw_version);
 /* A deep (PSRAM) replay takes one more clk48 per sample: the dac_psram_reader FIFO is
  * first-word-fall-through and refills its head one clk48 after each pop, so the engine's

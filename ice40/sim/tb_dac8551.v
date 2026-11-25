@@ -6,12 +6,12 @@
 // Timing (DAC8554 SLAS431B, IOVDD 2.7-3.6 V column — see the dac8551_engine header), checked in
 // HALF clk48 cycles (10.4 ns, the DDR pads' grid) on every frame, for dividers 0,1,2,3,4,8 (BRAM)
 // and 2,8 (stream):
-//   t2/t3  SCLK high >= 2 halves inside a frame (the plan: 3), low exactly 2 halves (20.8 ns)
+//   t2/t3  SCLK high and low >= 2 halves inside a frame (the plan, v67: 3 halves = 31.3 ns each)
 //   t5/t6  DIN stable for the 2 halves before each SCLK fall and the half after it
 //   t7     SYNC rises >= 1 half after the 24th SCLK fall
 //   t8     SYNC high >= 6 halves between frames
 //   t9     24th SCLK fall -> next SYNC fall >= 13 halves (135 ns; DAC8554 >= 130 ns)
-//   rate   one sample = max(divider, 4) + 63 clk (firmware DAC_SEQ_OVERHEAD_CLK = 63 from v66)
+//   rate   one sample = max(divider, 4) + 63 clk (firmware DAC_SEQ_OVERHEAD_CLK = 75 from v67)
 // The monitor samples the pins 1 ns after every clk edge, so each sample is one half-cycle's
 // value and two pins changing in the same half land in the same sample.  The DAC is modelled as
 // taking DIN's value from BEFORE the falling edge, with SYNC as it was before that edge.
@@ -48,8 +48,8 @@ module tb_dac8551;
 
     // ---- pin monitor (v66: per HALF clk48, 1 ns after each edge, through dac_pads) ----
     // `h` counts halves (10.4 ns at 48 MHz).  DIN is taken at an SCLK fall with SYNC low, as the
-    // value BEFORE the fall.  Checks: t2 SCLK high >= 2 halves and t3 low exactly 2 halves inside
-    // a frame (the plan: high 3, low 2); t5 DIN stable for the 2 halves before each fall; t6 DIN unchanged in the half after
+    // value BEFORE the fall.  Checks: t2 SCLK high >= 2 halves and t3 low >= 2 halves inside
+    // a frame (the plan, v67: 3 and 3); t5 DIN stable for the 2 halves before each fall; t6 DIN unchanged in the half after
     // it; t7 SYNC rises >= 1 half after the 24th fall; t8 SYNC high >= 6 halves; t9 24th fall ->
     // next SYNC fall >= 13 halves (135 ns >= 130).
     integer    errors = 0, h = 0, bits = 0, nfr = 0;
@@ -80,8 +80,8 @@ module tb_dac8551;
             end
             if (!pc && bits > 0 && h_sclk_edge >= 0) begin   // SCLK rose after a bit: low phase
                 if (h - h_sclk_edge < min_lo) min_lo = h - h_sclk_edge;
-                if (h - h_sclk_edge != 2) begin
-                    $display("FAIL t3: SCLK low for %0d halves (want 2), half %0d", h - h_sclk_edge, h);
+                if (h - h_sclk_edge < 2) begin
+                    $display("FAIL t3: SCLK low for %0d halves (want >= 2), half %0d", h - h_sclk_edge, h);
                     errors = errors + 1;
                 end
             end
@@ -149,10 +149,10 @@ module tb_dac8551;
                     errors = errors + 1;
                 end
             end
-            want_gap = 2 * (((div < 4) ? 4 : div) + 63);   // in halves
+            want_gap = 2 * (((div < 4) ? 4 : div) + 75);   // in halves
             for (k = 2; k < 6; k = k + 1)
                 if (gaps[k] != want_gap) begin
-                    $display("FAIL div=%0d psram=%0d: sample %0d took %0d halves, want 2*(max(div,4)+63) = %0d",
+                    $display("FAIL div=%0d psram=%0d: sample %0d took %0d halves, want 2*(max(div,4)+75) = %0d",
                              div, psm, k, gaps[k], want_gap);
                     errors = errors + 1;
                 end
@@ -165,7 +165,7 @@ module tb_dac8551;
         run_case(4, 0); run_case(0, 0); run_case(1, 0); run_case(2, 0); run_case(3, 0); run_case(8, 0);
         run_case(2, 1); run_case(8, 1);
         if (errors == 0)
-            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t2-t9 on the pins (high %0d-%0d, low %0d, t9 >= %0d halves) and max(div,4)+63 clk/sample for div 0,1,2,3,4,8", min_hi, max_hi, min_lo, min_t9);
+            $display("PASS tb_dac8551: frames 001234/005678 (BRAM) + 00a5a5 (stream); t2-t9 on the pins (high %0d-%0d, low >= %0d, t9 >= %0d halves) and max(div,4)+75 clk/sample for div 0,1,2,3,4,8", min_hi, max_hi, min_lo, min_t9);
         else
             $display("FAIL tb_dac8551: %0d error(s)", errors);
         $finish;

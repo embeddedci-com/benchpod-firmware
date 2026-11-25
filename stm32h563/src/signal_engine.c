@@ -244,7 +244,7 @@ void SPI1_IRQHandler(void)            { HAL_SPI_IRQHandler(&hspi_ice); }
 
 /* DAC_SEQ_OVERHEAD_CLK, DAC_PSRAM_EXTRA_CLK and DAC_MIN_DIVIDER (the DAC8551 sequencer's per-sample
    cost) live in la_rate.h, next to the host-tested replay divider math (dac_replay_plan).  The
-   overhead depends on the gateware (63 clk48 on v66+, 51 before): dac_overhead() is the running one. */
+   overhead depends on the gateware (75 clk48 on v67+, 63 on v66, 51 before): dac_overhead() is the running one. */
 static uint32_t dac_overhead(void) { return dac_seq_overhead_clk(s_fpga_version); }
 
 /* True DAC update rate (Hz) achieved by the sequencer for a given divider.  The
@@ -315,7 +315,7 @@ static uint32_t compute_divider_and_period(float freq, float forced_sample_rate_
    LA side of a capture).  sample_rate = FPGA_HFOSC_HZ / divider, so divider = HFOSC / rate.
    0 (or negative) → divider 2, the LA's max rate (12 MS/s).  Clamped to 2..65535.  The DAC
    has its own conversion (dac_replay_plan in la_rate.c; it tops out near 716 kS/s from RAM, 706 kS/s from PSRAM
-   on gateware v66+, 873 / 857 kS/s before). */
+   on gateware v66, 608 / 600 kS/s on v67+, 873 / 857 kS/s before). */
 static uint32_t divider_from_rate_hz(float sample_rate_hz) {
     if (sample_rate_hz <= 0.0f) return 2;
     uint32_t d = (uint32_t)((float)FPGA_HFOSC_HZ / sample_rate_hz + 0.5f);

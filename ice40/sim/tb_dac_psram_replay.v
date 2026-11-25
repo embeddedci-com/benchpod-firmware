@@ -111,11 +111,11 @@ module tb_dac_psram_replay;
         end
     end
 
-    // Sample period in psram_mode with the real reader: max(divider, 4) + 64 clk48 (v66; + 52 up
-    // to v65), one more than the BRAM path's + 63 (tb_dac8551), because the reader's FWFT head refills one clk48 after
+    // Sample period in psram_mode with the real reader: max(divider, 4) + 76 clk48 (v67; v66 + 64; + 52 up
+    // to v65), one more than the BRAM path's + 75 (tb_dac8551), because the reader's FWFT head refills one clk48 after
     // each pop, so S_PHI waits a cycle for the high byte.  The wire divider here is the v40
     // reload 8, i.e. divider 9.  Firmware's deep-replay divider math depends on this.
-    localparam integer DEEP_SAMPLE_CLK = 9 + 64;
+    localparam integer DEEP_SAMPLE_CLK = 9 + 76;
 
     localparam NFRAMES = 11;   // > 2 loops of 4 samples -> exercises the wrap
     function [15:0] want_sample(input integer i);
@@ -136,7 +136,7 @@ module tb_dac_psram_replay;
                 end
             for (k = 1; k < NFRAMES; k = k + 1)
                 if (fclk[k] - fclk[k-1] != DEEP_SAMPLE_CLK) begin
-                    $display("FAIL %0s: frame[%0d] came %0d clk48 after the previous one, want %0d (divider 9 + 64)",
+                    $display("FAIL %0s: frame[%0d] came %0d clk48 after the previous one, want %0d (divider 9 + 76)",
                              what, k, fclk[k] - fclk[k-1], DEEP_SAMPLE_CLK);
                     errors = errors + 1;
                 end
@@ -169,7 +169,7 @@ module tb_dac_psram_replay;
         wait (fidx >= NFRAMES);
         check_frames("re-arm");
         if (errors == 0)
-            $display("PASS tb_dac_psram_replay: %0d DAC frames replayed from PSRAM in order across the wrap (len=%0d B) at divider + 64 clk48 per sample, and again after a re-arm onto base 0x100 / len 6 B", NFRAMES, LEN);
+            $display("PASS tb_dac_psram_replay: %0d DAC frames replayed from PSRAM in order across the wrap (len=%0d B) at divider + 76 clk48 per sample, and again after a re-arm onto base 0x100 / len 6 B", NFRAMES, LEN);
         else
             $display("FAIL tb_dac_psram_replay: %0d error(s)", errors);
         $finish;

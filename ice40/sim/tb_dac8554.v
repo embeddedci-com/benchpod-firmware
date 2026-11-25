@@ -6,7 +6,7 @@
 // frame, static ones included.  Cases:
 //   1. BRAM stream with ctrl 0x12 (DAC8554 channel B): frames {12, sample} in loop order.
 //   2. A static frame while a BRAM stream runs: it takes one sample slot, the stream skips no
-//      sample (the frames around it stay in loop order), and every gap is still max(div,4)+63.
+//      sample (the frames around it stay in loop order), and every gap is still max(div,4)+75.
 //   3. The same in psram_mode (stream source 0xA5A5, ctrl 0x14 = channel C).
 //   4. A static frame while the engine is idle (after STOP): exactly one frame, `running` stays
 //      0, SYNC ends high.  Then a second one: one more frame.
@@ -50,8 +50,8 @@ module tb_dac8554;
 
     // ---- pin monitor (v66: per HALF clk48, 1 ns after each edge, through dac_pads) ----
     // `h` counts halves (10.4 ns at 48 MHz).  DIN is taken at an SCLK fall with SYNC low, as the
-    // value BEFORE the fall.  Checks: t2 SCLK high >= 2 halves and t3 low exactly 2 halves inside
-    // a frame (the plan: high 3, low 2); t5 DIN stable for the 2 halves before each fall; t6 DIN unchanged in the half after
+    // value BEFORE the fall.  Checks: t2 SCLK high >= 2 halves and t3 low >= 2 halves inside
+    // a frame (the plan, v67: 3 and 3); t5 DIN stable for the 2 halves before each fall; t6 DIN unchanged in the half after
     // it; t7 SYNC rises >= 1 half after the 24th fall; t8 SYNC high >= 6 halves; t9 24th fall ->
     // next SYNC fall >= 13 halves (135 ns >= 130).
     integer    errors = 0, h = 0, bits = 0, nfr = 0;
@@ -82,8 +82,8 @@ module tb_dac8554;
             end
             if (!pc && bits > 0 && h_sclk_edge >= 0) begin   // SCLK rose after a bit: low phase
                 if (h - h_sclk_edge < min_lo) min_lo = h - h_sclk_edge;
-                if (h - h_sclk_edge != 2) begin
-                    $display("FAIL t3: SCLK low for %0d halves (want 2), half %0d", h - h_sclk_edge, h);
+                if (h - h_sclk_edge < 2) begin
+                    $display("FAIL t3: SCLK low for %0d halves (want >= 2), half %0d", h - h_sclk_edge, h);
                     errors = errors + 1;
                 end
             end
@@ -188,7 +188,7 @@ module tb_dac8554;
                 $display("FAIL div=%0d psram=%0d: %0d static frames, want 1", div, psm, n - s);
                 errors = errors + 1;
             end
-            want_gap = 2 * (((div < 4) ? 4 : div) + 63);   // in halves
+            want_gap = 2 * (((div < 4) ? 4 : div) + 75);   // in halves
             for (k = 2; k < n; k = k + 1)
                 if (gaps[k] != want_gap) begin
                     $display("FAIL div=%0d psram=%0d: frame %0d came %0d halves after the previous, want %0d",
@@ -248,14 +248,14 @@ module tb_dac8554;
         end
 
         // 7. two static frames back to back at divider 0: the second is requested mid-frame,
-        //    so it waits only for the floor.  Sample gap max(0, 4) + 63 clk, t9 checked by the monitor.
+        //    so it waits only for the floor.  Sample gap max(0, 4) + 75 clk, t9 checked by the monitor.
         nfr = 0; divider = 16'd0; h_sync_fall = -1;
         send_static(24'h16AAAA);
         repeat (20) @(posedge clk);
         send_static(24'h125555);
         repeat (200) @(posedge clk);
-        if (nfr != 2 || frames[0] !== 24'h16AAAA || frames[1] !== 24'h125555 || gaps[1] != 2 * (4 + 63)) begin
-            $display("FAIL static x2 at div 0: %0d frame(s) %06h %06h, gap %0d halves (want 2, 16aaaa 125555, 134)",
+        if (nfr != 2 || frames[0] !== 24'h16AAAA || frames[1] !== 24'h125555 || gaps[1] != 2 * (4 + 75)) begin
+            $display("FAIL static x2 at div 0: %0d frame(s) %06h %06h, gap %0d halves (want 2, 16aaaa 125555, 158)",
                      nfr, frames[0], frames[1], gaps[1]);
             errors = errors + 1;
         end

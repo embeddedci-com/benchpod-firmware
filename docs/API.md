@@ -412,7 +412,7 @@ Firmware up to 3.10.13 also took 8-bit levels (`amplitude` 0-127, `offset` 0-255
 | `amplitude_ua`, `offset_ua` | number (µA) | together, instead of `_v` | — | Peak and center on the 4-20 mA output (J9), which is routed instead. The trough may go down to 4000 µA (played as the live zero, like `current_out`); the top is the output's maximum. |
 | `freq_hz` | number (Hz) | no | `1000` | Output frequency |
 | `duration_ms` | integer (ms) | no | `0` | How long to generate. `0` = run until the next command |
-| `sample_rate_hz` | number (Hz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 63 cycles of the 48 MHz engine clock (divider ≥ 4; + 51 on gateware 65 and older), so the maximum is 48 MHz ÷ 67 ≈ 716 kS/s (873 kS/s on gateware 65 and older); the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
+| `sample_rate_hz` | number (Hz) | no | auto | DAC sample-clock rate. Omit it to auto-pick the highest rate that fits one period in the waveform buffer. A **lower** rate reduces high-frequency clock feedthrough on the analog output (cleaner scope trace) at the cost of fewer samples per period. One DAC sample takes divider + 75 cycles of the 48 MHz engine clock (divider ≥ 4; + 63 on gateware 66, + 51 on gateware 65 and older), so the maximum is 48 MHz ÷ 79 ≈ 608 kS/s (716 kS/s on gateware 66, 873 kS/s on 65 and older); the firmware snaps to the nearest achievable rate, clamps faster requests to the maximum and logs the actual rate. |
 | `route` | boolean | no | `true` | `false` keeps the current analog switching (for example `cal1`, a DAC to ADC loopback, which routing the output would undo); the volts still use `path`'s calibration. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: wait and start the waveform at the next capture's t0 (the DAC co-trigger). The reply is then `{"cotrig":true}`, or `{"cotrig":false}` when the gateware cannot co-trigger and the waveform started right away. |
 
@@ -430,7 +430,7 @@ The firmware precomputes one full period in a sample buffer and the FPGA loops i
 period_samples = floor(sample_rate / freq_hz)
 ```
 
-where `sample_rate = 48 MHz / (divider + 63)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 63 clocks per sample on top of the divider (3 to fetch the sample, 60 to shift the 24-bit SPI frame at a 19.2 MHz serial clock). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 716 kS/s. Gateware 65 and older shift the frame at 24 MHz: 51 clocks per sample, about 873 kS/s at most.
+where `sample_rate = 48 MHz / (divider + 75)`: the DAC engine runs on the 48 MHz `clk48` domain and spends 75 clocks per sample on top of the divider (3 to fetch the sample, 72 to shift the 24-bit SPI frame at a 16 MHz serial clock). The divider is at least 4 (the DAC's minimum gap between frames), so the maximum is about 608 kS/s. Gateware 66 shifts the frame at 19.2 MHz (63 clocks, 716 kS/s at most), 65 and older at 24 MHz (51 clocks, 873 kS/s).
 
 The waveform buffer holds 2048 16-bit samples. Lower frequencies need a lower sample rate: leave `sample_rate_hz` out and the firmware picks one that fits the period.
 
@@ -1011,7 +1011,7 @@ Play the trace back out the DAC. The trace is whichever was most recently put th
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `samples` | integer | no | full recorded length | Number of samples to play, ≤ the recorded length. |
-| `sample_rate_hz` | number (Hz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 63 cycles of the 48 MHz DAC clock from RAM, divider + 64 from PSRAM, divider ≥ 4; + 51 / + 52 on gateware 65 and older). The maximum, also the default, is about 716 kS/s from RAM and 706 kS/s for a deep (PSRAM) replay (873 / 857 kS/s on gateware 65 and older); a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
+| `sample_rate_hz` | number (Hz) | no | max | DAC sample rate. Set this to the **same** rate the trace was captured at so the playback time base matches the recording. The firmware plays the nearest achievable rate (one sample takes divider + 75 cycles of the 48 MHz DAC clock from RAM, divider + 76 from PSRAM, divider ≥ 4; + 63 / + 64 on gateware 66, + 51 / + 52 on 65 and older). The maximum, also the default, is about 608 kS/s from RAM and 600 kS/s for a deep (PSRAM) replay (716 / 706 kS/s on gateware 66, 873 / 857 kS/s on 65 and older); a faster request is clamped to it. The reply's `sample_rate_hz` is the rate it plays at. |
 | `on_capture` | boolean | no | `false` | Gateware v27+: start at the next capture's t0 (the DAC co-trigger). |
 
 #### Response

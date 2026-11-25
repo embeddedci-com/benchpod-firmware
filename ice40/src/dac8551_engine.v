@@ -9,35 +9,33 @@
 // normal) on DIN, framed by SYNC, MSB first, latched on SCLK falling edges.
 //
 // `period_samples` is in 16-bit samples.  Clocked on `clk`: gateware >= 13 (top_v2)
-// runs it on clk48 (48 MHz) for a ~2x update rate (SCLK 24 MHz until v65, 19.2 MHz from v66,
+// runs it on clk48 (48 MHz) for a ~2x update rate (SCLK 24 MHz until v65, 19.2 MHz in v66, 16 MHz from v67,
 // see SERIAL TIMING); the control-plane inputs cross a CDC in top_v2 and the
 // waveform BRAM read port shares this clock.
 //
-// SERIAL TIMING (v66) vs the DAC8554 datasheet (SLAS431B, the IOVDD 2.7-3.6 V column: analog v3r2
+// SERIAL TIMING (v67) vs the DAC8554 datasheet (SLAS431B, the IOVDD 2.7-3.6 V column: analog v3r2
 // and later run IOVDD at 3.3 V), which is stricter than the DAC8551 (SLAS429E, VDD 3.6-5.5 V) on
 // every line, so the one timing serves both boards.  SCLK and DIN leave through DDR pads
-// (dac_pads), so their edges sit on a half-clk48 grid (10.4 ns).  Two bits take 5 clk:
-//     halves   q0    q1    q2    q3    q4
-//     SCLK     H H   H L   L H   H H   L L        19.2 MHz: high 3 halves, low 2 halves
-//     DIN      e e   e e   e o   o o   o o        (e/o = the even/odd bit of the pair)
-//   t1 SCLK period 2.5 clk = 52.1 ns (>= 40)
-//   t2 SCLK high 1.5 clk = 31.3 ns (>= 20): moves with the oscillator's duty cycle, 10 ns spare
-//   t3 SCLK low 1 clk = 20.8 ns (>= 20): always two halves of the SAME edge type (fall to fall
-//      or rise to rise), so it does not depend on the duty cycle
+// (dac_pads), so their edges sit on a half-clk48 grid (10.4 ns).  One bit takes 3 clk:
+//     halves   q0    q1    q2
+//     SCLK     H H   H L   L L        16 MHz: high 3 halves, low 3 halves
+//     DIN      d d   d d   d d        (d = this bit; it changes with the SCLK rise)
+//   t1 SCLK period 3 clk = 62.5 ns (>= 40)
+//   t2 / t3 SCLK high / low 1.5 clk = 31.3 ns each (>= 20).  Both phases run between a rising and
+//      a falling clk48 edge, so the oscillator's duty cycle moves them (+-1 ns at 45/55 %), with
+//      about 10 ns to spare on each
 //   t4 SYNC fall -> SCLK rise 1 clk (>= 0)        t5/t6 DIN changes on SCLK RISES only: setup
-//                                                 31.3 ns, hold 20.8 ns (>= 5 / 4.5)
-//   t7 24th SCLK fall -> SYNC rise 2 clk (>= 0)   t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
-//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3 clk = 146 ns (>= 130)   (divider floor 4)
-// Why (2026-11-24 bench, benchpod-emc si-sim/dac-sclk-alternatives.md): v65's 24 MHz SCLK (1 clk
-// high, 1 clk low, from a fabric flop) measured 21.8 / 19.8 ns at the DAC connector, under t3.
-// At 24 MHz no split fixes that (41.7 ns against 2 x 20).  Through the DDR pads the offset turns
-// round: a first v66 build with 2 halves high / 3 low measured 20.3 / 31.8 ns (high at t2), i.e.
-// one clk48 of SCLK high comes out about 0.5 ns short there.  So the one-clk48 phase is the LOW
-// one: expected about 30.7 / 21.3 ns at the pin.
+//                                                 31.3 ns, hold 31.3 ns (>= 5 / 4.5)
+//   t7 24th SCLK fall -> SYNC rise 1.5 clk (>= 0) t8 SYNC high >= DIV_MIN+2 clk = 125 ns (>= 40)
+//   t9 24th SCLK fall -> next SYNC fall >= DIV_MIN+3.5 clk = 156 ns (>= 130)   (divider floor 4)
+// Why (2026-11-24 bench, benchpod-emc si-sim/dac-sclk-alternatives.md and dac-adc-placeholders.md):
+// v65's 24 MHz SCLK (1 clk high, 1 clk low) measured 21.8 / 19.8 ns at the DAC connector, under
+// t3.  v66 (19.2 MHz, one phase 1 clk48 and the other 1.5) measured the one-clk48 phase at about
+// 20.0-20.3 ns whichever way round, so no phase is one clk48 long any more: both are 1.5.
 // Every frame gap, static frames on an idle engine included, goes through the divider floor
 // below, so t8/t9 hold whatever divider the firmware last sent.
-// One sample takes max(divider, DIV_MIN) + 63 clk (v65 and older: + 51) — the firmware's
-// DAC_SEQ_OVERHEAD_CLK model: 3 to fetch, 60 to shift.
+// One sample takes max(divider, DIV_MIN) + 75 clk (v66: + 63; v65 and older: + 51) — the
+// firmware's DAC_SEQ_OVERHEAD_CLK model: 3 to fetch, 72 to shift.
 // tb_dac8551 checks all of these on the pins (through dac_pads), half-cycle-exactly.
 //
 // DEEP replay (psram_mode=1, gateware >= v17): instead of the 4 KB LOAD_WAVE BRAM,
@@ -133,14 +131,14 @@ module dac8551_engine #(
     always @(posedge clk) slast <= (sleft <= {{ADDR_W{1'b0}}, 1'b1});
     reg [7:0]        lo;
     reg [23:0]       sh;
-    reg [3:0]        pcnt;        // v66: bit PAIRS done in this frame (12 per frame)
-    // `last` = registered "this is the 12th bit pair" (v66; v34-v65: bitc == 23).  The frame-end
+    reg [4:0]        bitc;        // v67: bits done in this frame (24 per frame)
+    // `last` = registered "this is the 24th bit" (bitc == 23; v66: the 12th bit pair).  The frame-end
     // branch updates st/sidx/sleft, so its clock-enable cone decoded the 5-bit compare plus st/ph/
     // running/psram_mode in ONE clk48 cycle — the v34 sweeps found that cone binding clk48 (~21 ns)
     // in both images.  Same trick as `dz` below: test one flop instead of the wide compare.
     reg              last;
-    // v66: one-hot phase of the 5-clk bit pair (q[0] .. q[4]); see the SCLK plan in the header.
-    reg [4:0]        q;
+    // v67: one-hot phase of the 3-clk bit (q[0] .. q[2]); see the SCLK plan in the header.
+    reg [2:0]        q;
     reg              wpend;       // a static frame is waiting for a slot
     reg              wfr;         // the frame being fetched/shifted is the static one
     // `run_i` = the FSM's enable: `running` (streaming), or a static frame pending or in flight.
@@ -202,16 +200,14 @@ module dac8551_engine #(
                 dac_sync<=1'b0; st<=S_SHIFT;       // (sh loads {ctrl, high, low})
             end
             S_SHIFT: begin
-                // v66: two bits per 5 clk, halves H H H L L | H H H L L (see the header).
-                // (sh/pcnt/last/q step in the datapath block below)
-                sclk_a <= q[0] | q[1] | q[3];
-                sclk_b <= q[0] | q[2] | q[3];
-                if (q[0])             din_a <= sh[23];        // even bit, both halves
-                else if (q[2] | q[3]) din_a <= din_b;         // q2: even bit held; q3: odd bit
-                if (q[0] | q[2])      din_b <= sh[23];        // q0: even bit; q2: odd bit
-                if (q[4] & last)
-                    // The 24th SCLK fall starts the q4 cycle; SYNC rises in
-                    // S_IDLE one clk after this one (t7 = 2 clk), never on the fall itself.
+                // v67: one bit per 3 clk, halves H H H L L L (see the header).
+                // (sh/bitc/last/q step in the datapath block below)
+                sclk_a <= q[0] | q[1];
+                sclk_b <= q[0];
+                if (q[0]) begin din_a <= sh[23]; din_b <= sh[23]; end
+                if (q[2] & last)
+                    // The 24th SCLK fall is in the middle of the q1 cycle; SYNC rises in
+                    // S_IDLE one clk after this one (t7 = 1.5 clk), never on the fall itself.
                     // (the stream steps in its own block below, off `fe`)
                     st<=S_IDLE;
             end
@@ -224,8 +220,8 @@ module dac8551_engine #(
     end
 
     // The stream index (v51): sidx/sleft step at the frame end, i.e. the edge where the FSM sees
-    // S_SHIFT with q[4] and last up (v66; before: ph).  That edge always follows a cycle in S_SHIFT
-    // with q[3] and last up (q rotates, and last only changes on a q[4] edge), so `fe` registers the
+    // S_SHIFT with q[2] and last up (v67; v66 q[4]; before: ph).  That edge always follows a cycle in
+    // S_SHIFT with q[1] and last up (q rotates, and last only changes on a q[2] edge), so `fe` registers the
     // decision one cycle early and the enable of these 2 x (ADDR_W+1) flops tests rst/stop/start
     // and one flop, instead of the st/ph/last/wfr/run_i cone that bound the v50 loop image's clk48
     // (ph -> last -> 3 LUTs -> sidx/sleft CEN, 22-23 ns on the failing seeds).  `fe` also leaves
@@ -236,7 +232,7 @@ module dac8551_engine #(
     //   stream) and every start reloads them.  A static frame (wfr) took a slot: no step.
     reg fe;
     always @(posedge clk) begin
-        fe <= ~rst & ~stop & ~start & run_i & (st == S_SHIFT) & q[3] & last & ~wfr;
+        fe <= ~rst & ~stop & ~start & run_i & (st == S_SHIFT) & q[1] & last & ~wfr;
         if (rst) begin
             sidx <= 0; sleft <= 0;
         end else if (stop) begin
@@ -254,7 +250,7 @@ module dac8551_engine #(
         end
     end
 
-    // Frame datapath (v42): lo, sh, pcnt, last and q are loaded at S_PLO/S_RDHI and S_PHI/S_LAT
+    // Frame datapath (v42): lo, sh, bitc, last and q are loaded at S_PLO/S_RDHI and S_PHI/S_LAT
     // before every frame and only read in S_SHIFT, so they need no reset, stop or start term.  In
     // the FSM above they sat behind its rst/stop/start/running priority chain, which put all of
     // that into the clock enable of ~35 flops; the v42 loop image's clk48 then closed below
@@ -274,18 +270,18 @@ module dac8551_engine #(
         S_RDHI: lo <= wave_data;                                   // capture low byte
         S_PHI:  if (strm_valid) begin
                     sh <= {ctrl, strm_data, lo};                   // {ctrl, high, low}
-                    pcnt <= 4'd0; last <= 1'b0; q <= 5'b00001;
+                    bitc <= 5'd0; last <= 1'b0; q <= 3'b001;
                 end
         S_LAT:  begin
                     sh <= wfr ? wr_frame : {ctrl, wave_data, lo};  // static, or {ctrl, high, low}
-                    pcnt <= 4'd0; last <= 1'b0; q <= 5'b00001;
+                    bitc <= 5'd0; last <= 1'b0; q <= 3'b001;
                 end
         S_SHIFT: begin
-                    q <= {q[3:0], q[4]};
-                    if (q[0] | q[2]) sh <= {sh[22:0], 1'b0};      // the bit just put out
-                    if (q[4]) begin
-                        pcnt <= pcnt + 4'd1;
-                        last <= (pcnt == 4'd10);                   // the next pair is the 12th
+                    q <= {q[1:0], q[2]};
+                    if (q[0]) sh <= {sh[22:0], 1'b0};              // the bit just put out
+                    if (q[2]) begin
+                        bitc <= bitc + 5'd1;
+                        last <= (bitc == 5'd22);                   // the next bit is the 24th
                     end
                 end
         default: ;

@@ -29,7 +29,7 @@ OPCODES = [
     ("VERSION",         0x02, "none",                                           "version byte (GATEWARE_VERSION in top_v2.v)"),
     ("STATUS",          0x03, "none",                                           "flag byte: bit0 DAC running, bit1 capture busy, bit2 capture done, bit3 step train busy, bit4 SWD armed, bit5 sticky capture overflow (dropped bytes, an overlapping arm, or from v43 a writer burst cut because the STM32 took the bus; cleared by the next arm), bit6 control loop tripped (v30), bit7 always 0 (a 1 means the iCE40 is not driving MISO)"),
     ("LOAD_WAVE",       0x10, "len(2) + N data bytes",                          "none (fills the 4 KB waveform BRAM: up to 2048 16-bit samples for START_DAC, or the control loop's curve)"),
-    ("START_DAC",       0x11, "period(2) + divider(2)",                         "none (shallow: loops the LOAD_WAVE BRAM, period in samples, <= 2048. A DAC sample takes max(divider, 4) + 63 clk48 on v66+ (19.2 MHz SCLK; + 51 up to v65): v59+ floors the divider at 4 for the DAC8554's frame-gap timing (t9 >= 130 ns), v34-v58 at 3 (the DAC8551's 100 ns), earlier gateware at 0. v40+: the wire carries divider - 1 (the reload), and the gateware floors it at 3 (2 before v59))"),
+    ("START_DAC",       0x11, "period(2) + divider(2)",                         "none (shallow: loops the LOAD_WAVE BRAM, period in samples, <= 2048. A DAC sample takes max(divider, 4) + 75 clk48 on v67+ (16 MHz SCLK; + 63 on v66, + 51 up to v65): v59+ floors the divider at 4 for the DAC8554's frame-gap timing (t9 >= 130 ns), v34-v58 at 3 (the DAC8551's 100 ns), earlier gateware at 0. v40+: the wire carries divider - 1 (the reload), and the gateware floors it at 3 (2 before v59))"),
     ("STOP_DAC",        0x12, "none",                                           "none (also leaves deep replay and the control loop, and cancels a start staged by DAC_ARM_ON_CAPTURE)"),
     ("START_DAC_PSRAM", 0x13, "base(3) + count(3) + divider(2)",                "none (v17+; DEEP replay: the iCE40 streams the waveform straight out of PSRAM, up to the full 8 MB / 4,194,304 16-bit samples; the MCU stages it into PSRAM over XSPI first; divider as START_DAC. Deep image only (FPGA_FEATURES bit1)). v52+: sent over a running replay it restarts the stream at the new base and length; until v51 the reader kept its old position, so STOP_DAC had to come first"),
     ("SET_DAC_STOP_AFTER", 0x14, "cycles(4)",                                    "none (v21+; arms the iCE40 to cut a concurrently running DAC `cycles` of the 24 MHz clk after the NEXT capture's t0, so the captured window shows the DAC switch off; cycles=0 disarms; send BEFORE the capture arm. v40+: one-shot, the capture's end clears it; until v39 it re-applied to every later capture)"),
@@ -230,7 +230,7 @@ def gen_sys_h(dac48=False):
         "/* DAC8551 waveform-sequencer clock.  Gateware >= 13 runs the DAC engine on clk48\n"
         "   (48 MHz) for a ~2x update rate (smoother output), so the DAC divider maths use\n"
         "   this, NOT FPGA_HFOSC_HZ.  Older gateware ran the DAC at FPGA_HFOSC_HZ (24 MHz).\n"
-        "   One sample takes divider + 63 clocks on gateware v66+, + 51 before (la_rate.h dac_seq_overhead_clk). */\n"
+        "   One sample takes divider + 75 clocks on gateware v67+, + 63 on v66, + 51 before (la_rate.h dac_seq_overhead_clk). */\n"
         f"#define DAC_CLK_HZ {DAC_CLK_MHZ}000000u\n\n"
     ) if dac48 else ""
     return (BANNER_C + "#ifndef FPGA_CONFIG_H\n#define FPGA_CONFIG_H\n\n"

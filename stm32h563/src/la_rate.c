@@ -71,7 +71,8 @@ uint16_t step_delay_wire(uint32_t delay_us, uint8_t gw_version)
 
 uint32_t dac_seq_overhead_clk(uint8_t gw_version)
 {
-    return gw_version >= DAC_SCLK_DDR_MIN_GW ? DAC_SEQ_OVERHEAD_CLK : DAC_SEQ_OVERHEAD_CLK_OLD;
+    if (gw_version >= DAC_SCLK_16M_MIN_GW) return DAC_SEQ_OVERHEAD_CLK;
+    return gw_version >= DAC_SCLK_DDR_MIN_GW ? DAC_SEQ_OVERHEAD_CLK_V66 : DAC_SEQ_OVERHEAD_CLK_OLD;
 }
 
 uint32_t dac_sample_clocks(uint32_t divider, bool from_psram, uint8_t gw_version)

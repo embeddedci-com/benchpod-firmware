@@ -808,6 +808,10 @@ module top (
         .psram_io0(psram_io0), .psram_io1(psram_io1), .psram_io2(psram_io2), .psram_io3(psram_io3));
 
     // ---- shared signal-engine control plane (v2: 14 LA channels; GATEWARE_VERSION below) ----
+    // GATEWARE_VERSION 67 = v66 + A 16 MHz DAC SCLK, 3 halves high / 3 low (dac8551_engine): both
+    // phases 1.5 clk48 = 31.3 ns.  v66's one-clk48 phase measured 20.0-20.3 ns at the DAC connector
+    // whichever way round (2026-11-24, c2f662), barely over the DAC8554's 20 ns.  One DAC sample
+    // takes max(divider, 4) + 75 clk48: 608 kS/s at most from RAM, 600 kS/s from PSRAM.
     // GATEWARE_VERSION 66 = v65 + A 19.2 MHz DAC SCLK (dac8551_engine, dac_pads): SCLK and DIN leave
     // through DDR pads, two bits per 5 clk48 (SCLK high 3 halves = 31.3 ns, low 2 halves = 20.8 ns),
     // SYNC through its pad register, all one clk48 later.  The 2026-11-24 bench measured v65's 24 MHz
@@ -1316,7 +1320,7 @@ module top (
 `else
     localparam [7:0] IMG_FEATURES = 8'h29;   // closed-loop DAC control + JTAG master (v61) + bus masters (v65)
 `endif
-    engine_block #(.N(14), .GATEWARE_VERSION(8'd66), .FEATURES(IMG_FEATURES)) engines_i (
+    engine_block #(.N(14), .GATEWARE_VERSION(8'd67), .FEATURES(IMG_FEATURES)) engines_i (
         .clk(clk), .rst(rst),
         .sck(sck), .mosi(mosi), .miso(miso), .csn(csn),
         .la(la),
