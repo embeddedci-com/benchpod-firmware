@@ -2879,9 +2879,9 @@ static void fpga_swd_read_raw(uint8_t *reply, size_t count) {
     spi_cmd_read(CMD_SWD_READ, args, sizeof(args), reply, count);
 }
 
-size_t fpga_swd_feed(const uint8_t *in, size_t len,
-                     char *reply, size_t reply_cap, size_t *reply_len,
-                     bool *exit_to_json, bool *quit) {
+static size_t swd_feed(const uint8_t *in, size_t len,
+                       char *reply, size_t reply_cap, size_t *reply_len,
+                       bool *exit_to_json, bool *quit, bool exact) {
     *exit_to_json = false;
     *quit         = false;
     *reply_len    = 0;
@@ -2933,7 +2933,14 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
 
         if (wlen > 0) {
             fpga_swd_feed_raw(wire, wlen);
-            if (cc > 0) {
+            if (cc > 0 && exact) {
+                /* SWD_READ sends reply byte 0 twice: read one more and drop the first, as
+                   fpga_swdq_read and fpga_spi_xfer do. */
+                uint8_t tmp[sizeof(wire) + 1];
+                fpga_swd_read_raw(tmp, cc + 1);
+                memcpy(reply + *reply_len, tmp + 1, cc);
+                *reply_len += cc;
+            } else if (cc > 0) {
                 fpga_swd_read_raw((uint8_t *)reply + *reply_len, cc);
                 *reply_len += cc;
             }
@@ -2942,6 +2949,18 @@ size_t fpga_swd_feed(const uint8_t *in, size_t len,
     }
 
     return i;
+}
+
+size_t fpga_swd_feed(const uint8_t *in, size_t len,
+                     char *reply, size_t reply_cap, size_t *reply_len,
+                     bool *exit_to_json, bool *quit) {
+    return swd_feed(in, len, reply, reply_cap, reply_len, exit_to_json, quit, false);
+}
+
+size_t fpga_swd_feed_exact(const uint8_t *in, size_t len,
+                           char *reply, size_t reply_cap, size_t *reply_len,
+                           bool *exit_to_json, bool *quit) {
+    return swd_feed(in, len, reply, reply_cap, reply_len, exit_to_json, quit, true);
 }
 
 /* ---- SWD transfer queue (gateware >= v45) -------------------------------- */

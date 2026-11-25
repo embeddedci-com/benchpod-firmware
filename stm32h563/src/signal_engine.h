@@ -571,6 +571,12 @@ void fpga_swd_poll(void);
 size_t fpga_swd_feed(const uint8_t *in, size_t len,
                      char *reply, size_t reply_cap, size_t *reply_len,
                      bool *exit_to_json, bool *quit);
+/* fpga_swd_feed, but reply[i] is exactly the i-th 'c' sample. fpga_swd_feed hands back
+   SWD_READ's raw reply, whose byte 0 is repeated (swd_ll's ack_lead absorbs it): every sample
+   one slot late. The pin programmers (prog_wire.c) need the exact samples. */
+size_t fpga_swd_feed_exact(const uint8_t *in, size_t len,
+                           char *reply, size_t reply_cap, size_t *reply_len,
+                           bool *exit_to_json, bool *quit);
 
 /* ---- SPI master over the FPGA (gateware >= SPI_MASTER_MIN_GW) ---------------
    The SWD engine's second job: SCK/MOSI/MISO/CS on four LA channels (1..14), so an SWD

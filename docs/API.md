@@ -259,7 +259,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `power_profile` | T1 | Record a current/voltage profile of one eFuse rail | object | on `stop` |
 | `module` | T0/T2 | Digital v3r3: the analog module's state, and its ID and calibration EEPROM | object | no |
 | `module_power` | T1 | Digital v3r3: switch the analog module's 5 V and the USB-A bridge port | object | no |
-| `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe | `"dap ready"` (string) | no |
+| `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe; `"op":"id"` reads the chip's IDs instead (see [dap-over-tunnel.md](dap-over-tunnel.md#target-id-read)) | `"dap ready"` (string), object for `op` `id` | no |
 | `uart_proxy_start` | T1 | Enter transparent UART bridge mode | `"uart ready"` (string) | no |
 | `spi_start` | T1 | Claim four LA pins as an SPI master | object | no |
 | `spi_stop` | T1 | End the SPI session | `"spi stopped"` | no |

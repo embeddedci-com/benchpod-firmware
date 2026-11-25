@@ -17,6 +17,7 @@
 #include "dap.h"
 #include "prog_flash.h"
 #include "swd_ll.h"
+#include "dap_id.h"
 #include "jtag_ll.h"
 #include "gw_caps.h"
 #include "watchdog.h"
@@ -236,8 +237,40 @@ static unsigned json_la(const char *json, const char *key) {
     return json_get_value(json, key, s, sizeof(s)) ? (unsigned)atoi(s) : 0u;
 }
 
+/* dap_start "op":"id": read the IDs of the chip on the armed port, release the pins, answer one
+   JSON object.  The connection stays JSON: no PROTO_DAP, nothing for the host to close. */
+static void dap_id_reply(int conn_id, bool jtag, const uint32_t *reads, size_t n_reads,
+                         uint32_t wait_ms) {
+    char out[640];   /* worst case ~500 B (8 reads), well inside BP_CLOUD_REPLY_MAX */
+    size_t len;
+    if (jtag) {
+        uint32_t id[DAP_ID_MAX_IDCODES];
+        size_t n = dap_id_jtag(wait_ms, id, DAP_ID_MAX_IDCODES);
+        len = dap_id_fmt_jtag(out, sizeof(out), id, n);
+    } else {
+        dap_id_swd_t r;
+        dap_id_swd(wait_ms, reads, n_reads, &r);
+        len = dap_id_fmt_swd(out, sizeof(out), &r);
+    }
+    swd_disarm_and_release();   /* before the reply: the host may use the pins right after it */
+    if (len) send_ok_large(conn_id, out);
+    else     send_error(conn_id, "id reply too large");
+}
+
 void handle_dap_start(int conn_id, const char *json) {
     if (!require_la_voltage(conn_id)) return;
+    char opv[8] = {0};
+    bool id_op = false;
+    if (json_get_value(json, "op", opv, sizeof(opv))) {
+        if (strcmp(opv, "id") == 0) id_op = true;
+        else if (strcmp(opv, "start") != 0) { send_error(conn_id, "dap_start op must be start or id"); return; }
+    }
+    uint32_t id_reads[DAP_ID_MAX_READS];
+    int n_id_reads = 0;
+    if (id_op) {
+        n_id_reads = dap_id_parse_reads(json, id_reads, DAP_ID_MAX_READS);
+        if (n_id_reads < 0) { send_error(conn_id, "read takes at most 8 addresses"); return; }
+    }
     unsigned swclk = json_la(json, "swclk"), swdio = json_la(json, "swdio");
     unsigned tck = json_la(json, "tck"), tms = json_la(json, "tms"),
              tdi = json_la(json, "tdi"), tdo = json_la(json, "tdo"), trst = json_la(json, "trst");
@@ -320,6 +353,15 @@ void handle_dap_start(int conn_id, const char *json) {
         s_dap_pins.tck = tck; s_dap_pins.tms = tms; s_dap_pins.tdi = tdi; s_dap_pins.tdo = tdo;
         s_dap_pins.trst = trst;
         if (trst) fpga_la_set(trst, 1);   /* nTRST released (high) */
+    }
+
+    if (id_op) {
+        char v[12];
+        uint32_t wait_ms = DAP_ID_WAIT_MS;
+        if (json_get_value(json, "wait_ms", v, sizeof(v)) && atoi(v) > 0)
+            wait_ms = (uint32_t)atoi(v) > DAP_WAIT_MAX_MS ? DAP_WAIT_MAX_MS : (uint32_t)atoi(v);
+        dap_id_reply(conn_id, jtag_first, id_reads, (size_t)n_id_reads, wait_ms);
+        return;
     }
 
     dap_reset();
