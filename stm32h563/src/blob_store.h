@@ -24,6 +24,9 @@
  *             (blob_store_set_xip_listed), with or without a C3.
  *   0x240000  slot XIP_PROG, the second code image (the pin programmers of prog_flash), 256 KB,
  *             listed with the XIP slot.
+ *   0x300000  the EMI test build's run log (emi_log.h), 440 KB up to 0x36E000, inside the old ESP
+ *             slot. Not a blob slot: only `make EMI_TEST=1` builds write it, and test_blob_store.c
+ *             checks that no slot overlaps it.
  *   0x600000  slot FW: the STM32 firmware of the last update, 1 MB (written at OTA commit, for
  *             the bootloader planned next; see docs/design/ota-fallback.md). Not a release blob:
  *             listings (blob_status, the console, the manifest) stop at BLOB_COUNT. Only on a

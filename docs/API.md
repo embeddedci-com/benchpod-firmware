@@ -5126,8 +5126,10 @@ loss: the pod keeps two copies and writes the older one. Refusals: `BP0006` (a m
 ### `emi_log` — the EMI test build's run log
 
 Only in the EMI test build (`make EMI_TEST=1`, never released); other builds answer `"unknown cmd"`.
-That build keeps every run (one power-on) in the W25Q's free range `0x192000`-`0x200000` (440 KB,
-7,040 records of 64 bytes; no blob slot uses it, so a slot added there later would erase it): a
+That build keeps every run (one power-on) in the W25Q at `0x300000`-`0x36E000`, unused space in the
+retired ESP slot (440 KB, 7,040 records of 64 bytes; no blob slot uses it, and the host tests fail if
+one is added there). EMI builds up to firmware 4.0.6 kept it at `0x192000`-`0x200000`, where it
+overwrote the gw2 gateware slot (sensor emulation) and could reach the wiring profiles: a
 `START` record at boot (firmware version, reset cause, core clock, DAC mode, gateware version), an
 `EVENT` on every change (the status LED's state, the Ethernet link lost or back, the activity
 started or stopped, a recovery step with its result, an ESP32-C3 restart with its cause) and a `CHECK` with the counters (captures, errors, frames sent and dropped, link
@@ -5157,7 +5159,7 @@ the reply says where the read started; `uptime_ms` is the pod's uptime, to turn 
 loop's last failure, empty when none) and `fw`:
 
 ```json
-{"status":"ok","data":{"base":1646592,"record":64,"slots":7040,"valid":345,"run":12,
+{"status":"ok","data":{"base":3145728,"record":64,"slots":7040,"valid":345,"run":12,
   "next_seq":346,"write_slot":345,"oldest_slot":512,"queued":0,"lost":0,"written":18,"erases":4,
   "write_errors":0,"session_us_last":273,"session_us_max":2969,"glitch_us_last":0,"glitch_us_max":0,
   "dac_stops":0,"max_count":16,"uptime_ms":4821930,"offset":0,"count":16,

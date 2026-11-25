@@ -3,6 +3,9 @@
 #include "blob_store.h"
 #include "w25q.h"
 #include "mocks/mock_w25q.h"
+#include "emi_log.h"
+#include "c3_image.h"
+#include "ice40_flash.h"
 #include "mbedtls/sha256.h"
 
 #include <stdio.h>
@@ -281,6 +284,34 @@ static void test_state(void) {
 /* The firmware's generated manifest is not linked into the host test. */
 const blob_manifest_t *blob_manifest(blob_id_t id) { (void)id; return NULL; }
 
+/* The EMI test build's run log (emi_log.h) is not a slot, so nothing else stops a slot from moving
+   into its range: its erase ahead at every boot would then wipe that slot (gw2 and the wiring
+   slots did, while the log sat at 0x192000). No slot, the C3 record sector and the gateware
+   identity sector may overlap it, and it must fit the smallest W25Q the store accepts (8 MB). */
+static bool overlaps(uint32_t a, uint32_t a_end, uint32_t b, uint32_t b_end) {
+    return a < b_end && b < a_end;
+}
+
+static void test_emi_log_range(void) {
+    CHECK(EMI_LOG_BASE % EMI_LOG_SECTOR == 0 && EMI_LOG_END % EMI_LOG_SECTOR == 0 && EMI_LOG_BASE < EMI_LOG_END,
+          "emi log range 0x%lx-0x%lx not whole sectors", (unsigned long)EMI_LOG_BASE, (unsigned long)EMI_LOG_END);
+    CHECK(EMI_LOG_END <= MOCK_W25Q_BYTES, "emi log past 8 MB");
+    for (int i = 0; i < BLOB_SLOT_COUNT; i++) {
+        /* esp is the retired 4 MB slot the newer slots and the log live in: no firmware fills it
+           any more (the C3 image goes straight into the C3). */
+        if (i == BLOB_ESP) continue;
+        const uint32_t b = blob_slot_base((blob_id_t)i);
+        const uint32_t e = b + BLOB_HDR_SIZE + blob_slot_capacity((blob_id_t)i);
+        CHECK(!overlaps(EMI_LOG_BASE, EMI_LOG_END, b, e), "emi log 0x%lx-0x%lx overlaps slot %s 0x%lx-0x%lx",
+              (unsigned long)EMI_LOG_BASE, (unsigned long)EMI_LOG_END, blob_name((blob_id_t)i),
+              (unsigned long)b, (unsigned long)e);
+    }
+    CHECK(!overlaps(EMI_LOG_BASE, EMI_LOG_END, C3_IMAGE_REC_ADDR, C3_IMAGE_REC_ADDR + 0x1000u),
+          "emi log overlaps the C3 record sector");
+    CHECK(!overlaps(EMI_LOG_BASE, EMI_LOG_END, 0u, GW_IDENT_OFF + 0x1000u),
+          "emi log overlaps the boot gateware or its identity sector");
+}
+
 int main(void) {
     test_state();
     test_empty_flash();
@@ -293,6 +324,7 @@ int main(void) {
     test_power_cut_anywhere();
     test_no_flash();
     test_fw_slot();
+    test_emi_log_range();
     if (fails) { printf("test_blob_store: %d FAILED\n", fails); return 1; }
     printf("test_blob_store: all passed\n");
     return 0;
