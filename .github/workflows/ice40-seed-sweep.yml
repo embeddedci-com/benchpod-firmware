@@ -5,9 +5,9 @@
 #
 #   gh workflow run ice40-seed-sweep.yml --ref <branch> -f first=1 -f last=32
 #
-# The seeds are split into chunks that run in parallel on separate runners (loop 2, deep 2, emu 8:
-# emu seeds take the longest), each chunk with a rolling pool of jobs (seed_sweep.sh).  The summary
-# job merges the chunks into one table per image (step summary and the sweep-<image> artifact, the
+# The seeds are split into chunks that run in parallel on separate runners (loop 4, deep 2, emu 4:
+# since the v65 emu split, loop seeds take the longest), each chunk with a rolling pool of jobs
+# (seed_sweep.sh).  The summary job merges the chunks into one table per image (step summary and the sweep-<image> artifact, the
 # same format as `make -C ice40 seed-sweep`).  The synthesized netlist of each image is the
 # json-<image> artifact, to reproduce a seed locally.
 name: iCE40 seed sweep
@@ -50,7 +50,7 @@ jobs:
           # json=true marks the one chunk per image that uploads the synthesized netlist.
           matrix=$(awk -v f="$first" -v l="$last" 'BEGIN {
             n = l - f + 1
-            split("loop:2 deep:2 emu:8", spec, " ")
+            split("loop:4 deep:2 emu:4", spec, " ")
             printf "{\"include\":["
             sep = ""
             for (i = 1; i <= 3; i++) {
