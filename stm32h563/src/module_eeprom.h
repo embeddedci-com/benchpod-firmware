@@ -83,15 +83,15 @@ bool module_ee_has_low_range(int rc, const module_id_t *id);
 
 /* The first analog module revision with the 100 ohm sense resistor on the 4-20 mA input (R81, J8,
    behind a 30 mA limiter).  Revisions before it have 249 ohm. */
-#define MOD_SHUNT100_REV_MAJOR 3u
-#define MOD_SHUNT100_REV_MINOR 5u
+#define MOD_SHUNT100_REV_MAJOR 4u
+#define MOD_SHUNT100_REV_MINOR 0u
 
-/* The module's `current_in` sense resistor is 100 ohm: an analog module of revision 3.5 or later.
+/* The module's `current_in` sense resistor is 100 ohm: an analog module of revision 4.0 or later.
    A blank, unreadable or missing header is the older 249 ohm (what every board before it has). */
 bool module_ee_has_100r_shunt(int rc, const module_id_t *id);
 
 /* The module has the DAC clock on the flat cable's pin 7 (dac_link.h): an analog module of
-   revision 3.5 or later (DAC_LINK_SWAP_REV_*).  A blank, unreadable or missing header is an
+   revision 4.0 or later (DAC_LINK_SWAP_REV_*).  A blank, unreadable or missing header is an
    older module, with the clock on pin 8. */
 bool module_ee_has_cn1_dac_swap(int rc, const module_id_t *id);
 

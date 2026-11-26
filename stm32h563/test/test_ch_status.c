@@ -122,9 +122,9 @@ uint32_t console_rx_dropped(void) { return g_typical ? 0 : 4294967295u; }
 uint32_t console_tx_dropped(void) { return g_typical ? 0 : 4294967295u; }
 int la_vccio_get_mv(void) { return 3300; }
 int la_io_get_mv(void) { return 3300; }
-const char *board_rev_str(void) { return "analog-v3r4"; }
+const char *board_rev_str(void) { return "analog-v4"; }
 int board_rev_strap_mv(void) { return 3300; }
-/* The second strap: absent on every board but digital v3r4; the worst case carries it. */
+/* The second strap: absent on every board but digital v4; the worst case carries it. */
 int board_rev2_strap_mv(void) { return g_typical ? -1 : 2147483647; }
 size_t fw_sign_key_count(void) { return 4; }
 void lan_tls_get_info(lan_tls_info_t *o) {
@@ -179,7 +179,7 @@ const char *fault_last_reset_str(void) { return "watchdog+lockup+brownou"; }
 const char *fault_last_crash_str(void) { return g_crash; }
 static bool g_module_board;
 bool module_link_board(void) { return g_module_board; }
-void module_emit_state(bp_emit_t *e, bool id) { (void)id; bp_emit_raw(e, "{\"module\":\"v3r4\"}"); }
+void module_emit_state(bp_emit_t *e, bool id) { (void)id; bp_emit_raw(e, "{\"module\":\"v4\"}"); }
 
 /* ---- helpers ----------------------------------------------------------------------------- */
 static size_t run_req(int conn, const char *req) {

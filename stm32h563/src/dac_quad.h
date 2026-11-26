@@ -80,7 +80,7 @@ uint16_t dac_quad_park_code(int ch);
 /* ---- The ADC low range and the +-12 V output (channel C) -------------------------------------
  *
  * The ADC low range (i2c_bus.h adc_range_t, +-5.46 V full scale) exists only on the analog module
- * v3r4 and later, which always has this DAC.  The +-12 V output reaches the ADC through the front
+ * v4 and later, which always has this DAC.  The +-12 V output reaches the ADC through the front
  * SMA when it is cabled to the ADC input (the `calibrate adc:ext` setup), so while the low range
  * is on, channel C stays within +-DAC_QUAD_LOW_RANGE_MAX_MV:
  *   - a held level on C past it is refused (dac_out, sensor emulation, SCPI, anything that holds);

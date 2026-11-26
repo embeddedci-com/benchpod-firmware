@@ -119,7 +119,7 @@ note = "The ADC low range (analog module v3r4+)."
 
 [facts.vref_out]
 hw = "vref_out"
-note = "J1 pin 21 is switched and measured, and 5 V I/O exists (digital board v3r4+). Older boards never announce it."
+note = "J1 pin 21 is switched and measured, and 5 V I/O exists (digital board v4+). Older boards never announce it."
 
 [[releases]]
 firmware = "3.9.2"
@@ -840,7 +840,7 @@ note = "la_voltage takes 5000: the bank stays at 3.3 V and pin 21, the pull-up r
 rev = 7
 firmware = "3.10.13"
 requires = ["vref_out"]
-docs = "API.md#pull-resistors-on-digital-v3r4"
+docs = "API.md#pull-resistors-on-digital-v4"
 dated = "code"
 note = "Every channel pulls up or down with 10k, 2.2k or both; la pull takes strength (the pod picks from the pin's function without it) and replies strength and strengths; la_pins says pull_dirs once. Refusal BP0029 while pin 21 is down."
 
@@ -921,7 +921,7 @@ rev = 11
 firmware = "4.0.0"
 docs = "API.md#dac-pinout-on-the-flat-cable"
 dated = "code"
-note = "A digital board and an analog module with different flat-cable DAC pinouts (digital v3r4+ with module 3.4 or older, or the reverse): every command that drives the DAC is refused with BP0080 (dac_pinout_mismatch, args cmd, digital, module; merged from main as BP0035) and status.module / module report dac_pinout_ok false."
+note = "A digital board and an analog module with different flat-cable DAC pinouts (digital v4+ with module 3.4 or older, or the reverse): every command that drives the DAC is refused with BP0080 (dac_pinout_mismatch, args cmd, digital, module; merged from main as BP0035) and status.module / module report dac_pinout_ok false."
 
 [features.la_pins_paged]
 rev = 12
@@ -942,7 +942,7 @@ rev = 14
 firmware = "4.0.3"
 docs = "API.md#usb_host--usb-host-mode"
 dated = "code"
-note = "USB host mode: the pod hosts the board's USB port at full speed for timeout_s (1 to 3600, default 60) and reports what enumerates: IDs, strings (47 characters, ASCII), speed, timing, the first configuration (up to 1024 bytes, 8 interfaces listed, all counted, truncated and malformed flags) and enumeration (none, running, done, stuck). Port usb_a (the USB-A host port, digital v3r4) or usb_c (the pod's own USB-C connector through a breakout, on pods without a USB-A host port; the pod supplies no VBUS there). Refused over the pod's own USB (BP0076); BP0077 no such port, BP0078 no crystal, BP0079 already on the other port."
+note = "USB host mode: the pod hosts the board's USB port at full speed for timeout_s (1 to 3600, default 60) and reports what enumerates: IDs, strings (47 characters, ASCII), speed, timing, the first configuration (up to 1024 bytes, 8 interfaces listed, all counted, truncated and malformed flags) and enumeration (none, running, done, stuck). Port usb_a (the USB-A host port, digital v4) or usb_c (the pod's own USB-C connector through a breakout, on pods without a USB-A host port; the pod supplies no VBUS there). Refused over the pod's own USB (BP0076); BP0077 no such port, BP0078 no crystal, BP0079 already on the other port."
 
 [features.usb_flash]
 rev = 14

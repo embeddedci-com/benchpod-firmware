@@ -65,12 +65,12 @@ static bool            uart_upload_suspended = false;
    otherwise decodes as a flood of 0x00 during boot, and a one-wire line floats from the moment TX
    releases it.  So the pod holds RX high from before the entry sequence to the end of the session
    (uart_session_close puts back what the channel did before, la_pull_hold).  Per board:
-     - before digital v3r4: LA1-LA6 pull up, to the bank rail on v3 (so at 1.8 V too; on v2 to
+     - before digital v4: LA1-LA6 pull up, to the bank rail on v3 (so at 1.8 V too; on v2 to
        +3V3, and la_pull_available() keeps them off below 3.3 V).  LA7/LA8's resistor pulls DOWN:
        engaging it held RX at the opposite of the idle level and guaranteed the 0x00 flood, so
        those are not held.  LA9-LA14 have no resistor: the proxy still runs, it just cannot hold
        RX high.
-     - digital v3r4: every channel pulls up, to J1 pin 21: 10k for a two-wire RX, the 2.2k a
+     - digital v4: every channel pulls up, to J1 pin 21: 10k for a two-wire RX, the 2.2k a
        one-wire line gets (la_pull_strength_for).  Nothing while pin 21 is down. */
 static uart_pins_t     s_pins;                   /* the proxy's pins and RX hold */
 

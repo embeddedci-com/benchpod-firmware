@@ -136,7 +136,7 @@ static void test_la_mv(void) {
     CHECK(la_mv_of("{\"la_mv\":null}") == 0);
     CHECK(la_mv_of("{\"la_mv\":3300.5}") == 0);
     CHECK(la_mv_of("{\"la_mv\":33000}") == 0);
-    CHECK(la_mv_of("{\"la_mv\":5000}") == 5000);   /* 5 V I/O (digital v3r4) */
+    CHECK(la_mv_of("{\"la_mv\":5000}") == 5000);   /* 5 V I/O (digital v4) */
     CHECK(la_mv_of("{\"la_mv\":2500}") == 0);
     CHECK(la_mv_of("{\"efuse\":1}") == 0);
     CHECK(la_mv_of("") == 0);

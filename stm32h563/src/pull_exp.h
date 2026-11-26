@@ -5,14 +5,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "la_pull.h"   /* pull_str_t; this is its digital v3r4 backend */
+#include "la_pull.h"   /* pull_str_t; this is its digital v4 backend */
 
 /* ============================================================================
- * pull_exp — the LA pull resistors of digital v3r4: two TCA6416A expanders on the main I2C bus.
+ * pull_exp — the LA pull resistors of digital v4: two TCA6416A expanders on the main I2C bus.
  *
  *   Each channel has a 10k and a 2.2k, both on one expander: U54 at 0x21 serves LA1-LA7 and LA9
  *   (all 16 ports), U18 at 0x20 serves LA8 and LA10-LA14 (P00-P13; P14-P17 stay inputs).  The
- *   port of each resistor follows the PCB layout (pull_exp_map, from the digital v3r4 netlist,
+ *   port of each resistor follows the PCB layout (pull_exp_map, from the digital v4 netlist,
  *   la-pulls.kicad_sch).  A port driven high pulls the line up to J1 pin 21 (vref_out.h), driven
  *   low pulls it down, an input is off.  Per channel: 10k, 2.2k or both (about 1.8k), up or down.
  *

@@ -4,7 +4,7 @@
   "revision": 21,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "89c0fa2f99831e707019a0c084c1b295e56270cdaec990c5e99b0db4c0b1877c",
+  "table_sha256": "bc29cf0ce4fd8d314c668a7be1f227fc5ce4d3dda9182dd69a8103d178df9a35",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -732,7 +732,7 @@
       "requires": [
         "vref_out"
       ],
-      "docs": "API.md#pull-resistors-on-digital-v3r4"
+      "docs": "API.md#pull-resistors-on-digital-v4"
     },
     "client_api": {
       "rev": 8,

@@ -591,7 +591,7 @@ void la_pins_emit_entry(bp_emit_t *e, unsigned la, uint16_t pull_mask) {
     const char *ohms = la_pull_ohms(la);
     if (ohms) {
         /* dir: the way it pulls when on; dirs: every way it can pull (pull "up"/"down"/"off").
-           Digital v3r4 leaves dirs out: every channel pulls both ways there, said once in the
+           Digital v4 leaves dirs out: every channel pulls both ways there, said once in the
            la_pins reply (pull_dirs), as 14 copies would not fit the cloud reply. */
         bp_emit(e, "{\"dir\":\"%s\",\"ohms\":\"%s\",\"on\":%s",
                 la_pull_dir_name(la_pull_dir(la)), ohms,
@@ -654,7 +654,7 @@ unsigned la_pins_emit_reply(bp_emit_t *e, uint16_t only, unsigned from, uint16_t
         first = false;
     }
     bp_emit_raw(e, "]");
-    /* Digital v3r4: every channel's pull goes both ways (the entries leave dirs out). */
+    /* Digital v4: every channel's pull goes both ways (the entries leave dirs out). */
     if (la_pull_both_ways()) bp_emit_raw(e, ",\"pull_dirs\":[\"up\",\"down\"]");
     if (next) bp_emit(e, ",\"next\":%u", next);
     if (have_levels) bp_emit(e, ",\"levels\":%u}}\n", (unsigned)levels);

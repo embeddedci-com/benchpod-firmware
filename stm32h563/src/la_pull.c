@@ -9,7 +9,7 @@
 /* ---- the channel tables: one per backend ----
    A board revision with other resistors gets a table (and a backend) of its own in la_pull_init. */
 
-/* Boards before digital v3r4: LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, LA7/LA8 10k down,
+/* Boards before digital v4: LA1/LA2 4.7k up, LA3/LA4 2.2k up, LA5/LA6 10k up, LA7/LA8 10k down,
    LA9..LA14 none.  On v3 the pull-ups go to the bank rail (v2: +3V3), the pull-downs to GND. */
 static const la_pull_caps_t s_caps_tca9554[LA_PULL_CHANNELS + 1] = {
     [1] = { LA_PULL_BIT(LA_PULL_UP),   LA_PULL_UP,   0, "4.7k" },
@@ -23,14 +23,14 @@ static const la_pull_caps_t s_caps_tca9554[LA_PULL_CHANNELS + 1] = {
     /* LA9..LA14: no resistor */
 };
 
-/* Digital v3r4: every channel up or down with 10k, 2.2k or both; the default direction is up
+/* Digital v4: every channel up or down with 10k, 2.2k or both; the default direction is up
    and the default strength 10k. */
-#define V3R4_PULL { LA_PULL_BIT(LA_PULL_UP) | LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_UP, \
+#define V4_PULL { LA_PULL_BIT(LA_PULL_UP) | LA_PULL_BIT(LA_PULL_DOWN), LA_PULL_UP, \
                     LA_PULL_STR_BIT(PULL_STR_10K) | LA_PULL_STR_BIT(PULL_STR_2K2) | LA_PULL_STR_BIT(PULL_STR_BOTH), "10k" }
 static const la_pull_caps_t s_caps_exp[LA_PULL_CHANNELS + 1] = {
-    [1] = V3R4_PULL, [2] = V3R4_PULL, [3] = V3R4_PULL, [4] = V3R4_PULL, [5] = V3R4_PULL,
-    [6] = V3R4_PULL, [7] = V3R4_PULL, [8] = V3R4_PULL, [9] = V3R4_PULL, [10] = V3R4_PULL,
-    [11] = V3R4_PULL, [12] = V3R4_PULL, [13] = V3R4_PULL, [14] = V3R4_PULL,
+    [1] = V4_PULL, [2] = V4_PULL, [3] = V4_PULL, [4] = V4_PULL, [5] = V4_PULL,
+    [6] = V4_PULL, [7] = V4_PULL, [8] = V4_PULL, [9] = V4_PULL, [10] = V4_PULL,
+    [11] = V4_PULL, [12] = V4_PULL, [13] = V4_PULL, [14] = V4_PULL,
 };
 
 /* Before la_pull_init: nothing engaged, nothing can be (no write reaches an expander that is

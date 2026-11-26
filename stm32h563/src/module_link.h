@@ -82,7 +82,7 @@ bool module_dac_io_5v(void);
    the DAC must not be driven.  Live: a `module id` write takes effect at once.  False off a
    two-board pod and without a module. */
 bool module_dac_pinout_mismatch(void);
-/* For the BP0080 refusal: the digital board's side ("v3r4+" or "v3r3") and the module's
+/* For the BP0080 refusal: the digital board's side ("v4+" or "v3r3") and the module's
    revision as its EEPROM gives it ("3.4", or "blank", "unreadable", ...). */
 const char *module_dac_pinout_digital(void);
 const char *module_dac_pinout_module(char *buf, size_t cap);

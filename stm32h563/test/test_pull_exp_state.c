@@ -1,5 +1,5 @@
 /*
- * test_pull_exp_state.c: the digital v3r4 pull expanders' state as the `la` replies report it
+ * test_pull_exp_state.c: the digital v4 pull expanders' state as the `la` replies report it
  * (pull_exp.c): what is on the wire and why a pull is held, through pin 21 dropping and coming
  * back, the pod switching the DUT off and on, and an expander write failing.
  *
@@ -74,7 +74,7 @@ static bool held_is(const char *want) {
 static void rail(bool up) { s_rail_up = up; if (s_hook) s_hook(up); }
 
 static void test_states(void) {
-    board_caps_init(BOARD_REV_V3R4);
+    board_caps_init(BOARD_REV_V4);
     s_rail_up = false;
     pull_exp_init();
     CHECK(pull_exp_present() && !pull_exp_live(), "init with pin 21 down: held in reset");
@@ -142,7 +142,7 @@ static void test_states(void) {
 /* Older boards: no expanders, nothing changes. */
 static void test_old_board(void) {
     board_caps_init(BOARD_REV_V3);
-    /* pull_exp_init returns at once; s_present is already true from the v3r4 run, so reset it as a
+    /* pull_exp_init returns at once; s_present is already true from the v4 run, so reset it as a
        fresh boot would. */
     s_present = false;
     pull_exp_init();

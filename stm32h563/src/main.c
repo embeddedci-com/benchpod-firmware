@@ -171,11 +171,11 @@ int main(void)
        few ADC conversions on the MCU's own ADC1. */
     (void)mcu_adc_init();   /* MCU ADC1: revision strap + USB-C CC sense */
     board_rev_init();       /* latches the revision and its board_caps() from the straps */
-    qspi_cs_init();         /* quad bus chip-selects: PE3/PE4, or PB6/PC11 on digital v3r4 */
+    qspi_cs_init();         /* quad bus chip-selects: PE3/PE4, or PB6/PC11 on digital v4 */
     cal_data_use(board_caps()->cal_set);   /* DAC/ADC fits for this revision (cal_data.h) */
     nrst_ctrl_init();       /* PF4 open-drain, released (no-op on v2)       */
     usb_cc_init();          /* CC1/CC2 analog pins   (no-op on v2)          */
-    vref_out_init();        /* J1 pin 21 on the bank, 5 V off (digital v3r4 only) */
+    vref_out_init();        /* J1 pin 21 on the bank, 5 V off (digital v4 only) */
     /* Bring the I2C bus + expander outputs up FIRST, before the slower SPI/XSPI
        init, so every TCA9554 output is driven to its safe (OFF) state as early as
        possible.  Both expanders power up with pins high-Z and output latch 0xFF,
@@ -186,7 +186,7 @@ int main(void)
        each EN / U53 IN net.) */
     i2c_bus_init();         /* I2C1 power/IO bus  */
     target_power_init();    /* eFuse EN driven OFF ASAP (glitch-sensitive) */
-    la_pull_init();         /* the LA pull backend; digital v3r4: expanders out of reset once pin 21 is up */
+    la_pull_init();         /* the LA pull backend; digital v4: expanders out of reset once pin 21 is up */
     efuse_flt_init();       /* FLT: a real fault, or reverse-current blocking */
     (void)ina_pod_present(); /* pod current monitor fitted? (cached for status/caps) */
     module_link_init();     /* digital v3r3: the analog module's link, I2C2 and its EEPROM */

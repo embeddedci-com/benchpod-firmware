@@ -86,7 +86,7 @@ static bool pod_pullup_or_error(int conn_id, unsigned la) {
         return false;
     }
     if (!la_pull_available()) {
-        if (la_pull_rail_is_pin21())   /* v3r4: pin 21 is down (they work at every voltage) */
+        if (la_pull_rail_is_pin21())   /* v4: pin 21 is down (they work at every voltage) */
             bp_err_pull_rail_down(conn_id, (int32_t)vref_out_last_mv());
         else
             send_error(conn_id, "this board's pull-ups go to 3.3 V and the LA bank is not at 3.3 V: pass "

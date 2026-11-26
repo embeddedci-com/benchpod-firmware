@@ -374,10 +374,10 @@ endif
 # linker script switch is further down):
 #   XIP_RAM=1        (the default, releases too) link the images over the adc_pool buffer (up to 64 KB
 #                    each, nothing taken from the heap) and copy one there at session start: runs on every board. The
-#                    pods shipped so far (before digital v3r4) cannot memory-map their W25Q.
-#                    XIP_RAM=0 builds the memory-mapped image (digital v3r4, or the PB6 bodge).
+#                    pods shipped so far (before digital v4) cannot memory-map their W25Q.
+#                    XIP_RAM=0 builds the memory-mapped image (digital v4, or the PB6 bodge).
 #   XIP_BODGE_PB6=1  the W25Q's chip-select is PB6 (a wire from PB6 to the W25Q's /CS, PE3 left an
-#                    input): the real memory-mapped mode on a board before digital v3r4 (with
+#                    input): the real memory-mapped mode on a board before digital v4 (with
 #                    XIP_RAM=0). Development only.
 # The EMC test build (EMI_TEST=1) has its own activity loop and no room for these: it keeps
 # building without USB host mode and with the memory-mapped image, as before (both can be set).

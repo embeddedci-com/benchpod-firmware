@@ -62,7 +62,7 @@ typedef struct {
     bool          nrst_pin;
     bool          usb_cc;         /* the USB-C CC monitor (rev3+): status caps[] only */
     bool          pod_current;
-    /* J1 pin 21 is switched and sensed, and 5 V I/O exists (digital v3r4, board_caps.h): the hw
+    /* J1 pin 21 is switched and sensed, and 5 V I/O exists (digital v4, board_caps.h): the hw
        fact vref_out. */
     bool          vref_out;
     /* No Wi-Fi to scan: no ESP32-C3 (digital v3r3) and no Wi-Fi bridge build. Drops wifi_scan. */

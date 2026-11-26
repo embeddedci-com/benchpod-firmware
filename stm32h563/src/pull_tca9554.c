@@ -1,4 +1,4 @@
-/* pull_tca9554.c: the LA pull backend of the boards before digital v3r4 (la_pull.h).
+/* pull_tca9554.c: the LA pull backend of the boards before digital v4 (la_pull.h).
  *
  * One TCA9554 at 0x20 (U54 on the schematic; older code called it pca9555): LA<n> (1..8) -> expander pin
  * (CTRL1=P2, CTRL2=P3, CTRL3=P1, CTRL4=P0, CTRL5=P7, CTRL6=P6, CTRL7=P5, CTRL8=P4).  Enabling drives

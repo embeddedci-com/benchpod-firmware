@@ -136,7 +136,7 @@ jobs:
           fi
 
       # W25Q code builds other than the default (XIP_RAM=1, the image copied to RAM): XIP_RAM=0 is
-      # the memory-mapped image (digital v3r4), XIP_BODGE_PB6=1 memory-mapped with the W25Q's
+      # the memory-mapped image (digital v4), XIP_BODGE_PB6=1 memory-mapped with the W25Q's
       # chip-select on PB6. Keep them compiling, warning-free.
       - name: XIP test builds, no compiler warnings
         run: |

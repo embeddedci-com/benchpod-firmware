@@ -7,7 +7,7 @@
 #include "bp_json.h"
 
 /* ============================================================================
- * vref_out — J1 pin 21 (VREF_OUT) on digital v3r4: the rail the pull resistors pull up to, and
+ * vref_out — J1 pin 21 (VREF_OUT) on digital v4: the rail the pull resistors pull up to, and
  * the reference a DUT can use.  board_pins.h has the wiring.
  *
  * Two sources: the LA bank (1.8 / 3.3 V, the default, also with no firmware running) or the

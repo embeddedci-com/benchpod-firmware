@@ -93,7 +93,7 @@ static void test_gate(void) {
     CHECK(!dac_quad_for_board(QUAD(BOARD_REV_V3), false, false), "digital board");
     CHECK(!dac_quad_for_board(QUAD(BOARD_REV_V3R2), false, false), "v3r2 strap without the analog section");
     CHECK(dac_quad_for_board(QUAD(BOARD_REV_V3R2), true, false), "analog v3r2");
-    CHECK(!dac_quad_for_board(QUAD(BOARD_REV_V3R4), true, false), "v3r4 strap");
+    CHECK(!dac_quad_for_board(QUAD(BOARD_REV_V4), true, false), "v4 strap");
     /* Digital v3r3 has the v3 strap; its analog module has the DAC8554. */
     CHECK(dac_quad_for_board(QUAD(BOARD_REV_V3), true, true), "digital v3r3 + analog module");
     CHECK(!dac_quad_for_board(QUAD(BOARD_REV_V3), false, false), "digital v3r3, no module");
@@ -142,16 +142,16 @@ static void test_range(void) {
               (int)keep[i].p, keep[i].keeps);
 }
 
-/* Analog module v3r5: current_in picks the low range by itself and gives it back. */
+/* Analog module v4: current_in picks the low range by itself and gives it back. */
 static void test_auto_range(void) {
     const adc_range_t N = ADC_RANGE_NORMAL, L = ADC_RANGE_LOW;
     bool a = true;
-    /* Modules before v3r5 (249 ohm, with or without K5): current_in leaves the range as it is. */
-    CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, false, true, N, false, &a) == N && !a, "v3r4 normal");
-    CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, false, true, L, false, &a) == L && !a, "v3r4 low kept");
+    /* Modules before v4 (249 ohm, with or without K5): current_in leaves the range as it is. */
+    CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, false, true, N, false, &a) == N && !a, "v4 normal");
+    CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, false, true, L, false, &a) == L && !a, "v4 low kept");
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, false, false, N, false, &a) == N && !a, "no K5");
-    /* v3r5: low, and marked as picked. */
-    CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, true, true, N, false, &a) == L && a, "v3r5 current_in");
+    /* v4: low, and marked as picked. */
+    CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, true, true, N, false, &a) == L && a, "v4 current_in");
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, true, true, L, true, &a) == L && a, "again");
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, true, true, L, false, &a) == L && !a, "user's low stays the user's");
     /* The next path that moves the relays gives a picked low range back... */
@@ -169,7 +169,7 @@ static void test_auto_range(void) {
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_OUT, false, true, true, L, true, &a) == L && a, "current_out");
     CHECK(analog_path_auto_range(ANALOG_PATH_CURRENT_IN, true, true, true, N, false, NULL) == L, "NULL auto_out");
 
-    /* Every module before v3r5 (249 ohm) gets exactly the rule of earlier firmware, on every path,
+    /* Every module before v4 (249 ohm) gets exactly the rule of earlier firmware, on every path,
        in both ranges, with or without K5: off and cal2 give normal, every other path leaves the
        range, and nothing is ever marked as picked (cur_auto is never true on such a module). */
     for (int p = 0; p < (int)ANALOG_PATH__COUNT; p++)

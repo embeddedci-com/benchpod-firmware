@@ -4,7 +4,7 @@
 /* qspi_cs — the chip-selects of the shared quad bus: the iCE40 config flash (/ICE_SS) and the
  * PSRAM (/ICE_SS_PSRAM).
  *
- * Up to digital v3r3 they are PE3 and PE4.  Digital v3r4 moves them to PB6 and PC11, the two
+ * Up to digital v3r3 they are PE3 and PE4.  Digital v4 moves them to PB6 and PC11, the two
  * free pins that can also carry OCTOSPI1_NCS (board_caps()->qspi_cs_ncs_pins), so a later driver
  * can let the controller frame a transfer itself (one memory at a time: the H563 has one NCS).
  * The firmware still drives both as GPIOs.

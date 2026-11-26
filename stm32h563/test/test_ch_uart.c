@@ -324,44 +324,44 @@ static void test_half_duplex(void) {
     uart_proxy_conn_closed(3);
 }
 
-/* Digital v3r4: the RX pull goes through the expanders.  A one-wire line asks for the 2.2k a
+/* Digital v4: the RX pull goes through the expanders.  A one-wire line asks for the 2.2k a
    half-duplex pin gets: it is engaged before the pin is claimed, so the default (0 = by the pin's
    function) would see an unclaimed pin and pick 10k. */
-static void test_v3r4_pulls(void) {
+static void test_v4_pulls(void) {
     g_gw = 58;
-    board_caps_init(BOARD_REV_V3R4);
+    board_caps_init(BOARD_REV_V4);
     la_pull_init();
     fake_pull_reset();
         start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":3,\"half_duplex\":true}");
-    CHECK(g_proto[3] == PROTO_UART, "v3r4 one wire: %s", g_reply);
+    CHECK(g_proto[3] == PROTO_UART, "v4 one wire: %s", g_reply);
     CHECK(g_pu_at_cfg && fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_2K2,
-          "v3r4 one wire: pull %d strength %d, want up 2.2k before the arm", (int)fake_pull_dir[3], fake_pull_str[3]);
+          "v4 one wire: pull %d strength %d, want up 2.2k before the arm", (int)fake_pull_dir[3], fake_pull_str[3]);
     uart_proxy_conn_closed(3);
-    CHECK(fake_pull_dir[3] == LA_PULL_NONE && !g_pullup_on(3), "v3r4 one wire: pull not restored (%d)", (int)fake_pull_dir[3]);
+    CHECK(fake_pull_dir[3] == LA_PULL_NONE && !g_pullup_on(3), "v4 one wire: pull not restored (%d)", (int)fake_pull_dir[3]);
 
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
     CHECK(g_proto[3] == PROTO_UART && fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_NONE,
-          "v3r4 two-wire RX: pull %d strength %d, want up by function", (int)fake_pull_dir[3], fake_pull_str[3]);
+          "v4 two-wire RX: pull %d strength %d, want up by function", (int)fake_pull_dir[3], fake_pull_str[3]);
     uart_proxy_conn_closed(3);
     /* what the channel did before comes back: a 2.2k pull-up the host set, say */
     CHECK(la_pull_set(3, LA_PULL_UP, PULL_STR_2K2) == 0, "LA3 up 2.2k");
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
     CHECK(fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_NONE,
-          "v3r4: RX not held by function (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
+          "v4: RX not held by function (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
     uart_proxy_conn_closed(3);
     CHECK(fake_pull_dir[3] == LA_PULL_UP && fake_pull_str[3] == PULL_STR_2K2,
-          "v3r4: the earlier pull-up not restored (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
+          "v4: the earlier pull-up not restored (%d, %d)", (int)fake_pull_dir[3], (int)fake_pull_str[3]);
     /* an engaged pull-down refuses RX on that pin (the line idles high), before anything moves */
     CHECK(la_pull_set(3, LA_PULL_DOWN, PULL_STR_10K) == 0, "LA3 down");
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4,\"entry\":{}}");
     CHECK(g_err_code == BP_E_LA_PULL_DOWN_ENGAGED && g_seq[0] == 0 && fake_pull_dir[3] == LA_PULL_DOWN,
-          "v3r4: RX over a pull-down: %s (seq '%s')", g_reply, g_seq);
-    CHECK(la_pins_fn(4) == LA_FN_NONE, "v3r4: the refused start claimed TX");
+          "v4: RX over a pull-down: %s (seq '%s')", g_reply, g_seq);
+    CHECK(la_pins_fn(4) == LA_FN_NONE, "v4: the refused start claimed TX");
     la_pull_set(3, LA_PULL_NONE, PULL_STR_NONE);
     /* no pull can be engaged (pin 21 down, say): the proxy runs without the hold */
     fake_pull_available = false;
     start(3, "{\"cmd\":\"uart_proxy_start\",\"rx\":3,\"tx\":4}");
-    CHECK(g_proto[3] == PROTO_UART && fake_pull_dir[3] == LA_PULL_NONE, "v3r4: hold without pulls: %s", g_reply);
+    CHECK(g_proto[3] == PROTO_UART && fake_pull_dir[3] == LA_PULL_NONE, "v4: hold without pulls: %s", g_reply);
     uart_proxy_conn_closed(3);
     fake_pull_available = true;
     board_caps_init(BOARD_REV_V3);
@@ -546,7 +546,7 @@ int main(void) {
     test_teardown_and_rearm();
     test_frame();
     test_half_duplex();
-    test_v3r4_pulls();
+    test_v4_pulls();
     test_entry();
     test_de();
     test_cfg_parse();

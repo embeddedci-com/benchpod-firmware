@@ -1,6 +1,6 @@
 /*
  * ice40_flash.c — reprogram the iCE40 config flash (W25Q64) from the STM32 over
- * the shared OCTOSPI bus (single-SPI, GPIO chip-select: PE3, PB6 on digital v3r4).  Ported from the
+ * the shared OCTOSPI bus (single-SPI, GPIO chip-select: PE3, PB6 on digital v4).  Ported from the
  * RP2350 ice40_flash.c; the SPI transport is now the H5 OCTOSPI (reusing the
  * handle from psram.c) and the chip-select / iCE40 control are GPIOs.
  *

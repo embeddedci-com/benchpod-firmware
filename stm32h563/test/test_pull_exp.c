@@ -1,4 +1,4 @@
-/* Host unit test for the digital v3r4 pull expanders (pull_exp_logic.c): the register map, the
+/* Host unit test for the digital v4 pull expanders (pull_exp_logic.c): the register map, the
  * netlist pin map, the write plan (no channel ever pulls two ways, at any step), suspended pull-ups, and the names. */
 #include "pull_exp.h"
 
@@ -10,7 +10,7 @@ static int fails = 0, checks = 0;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { \
         printf("FAIL: "); printf(__VA_ARGS__); printf("\n"); fails++; } } while (0)
 
-/* The digital v3r4 netlist (la-pulls.kicad_sch): channel -> { expander, 10k port, 2.2k port }.
+/* The digital v4 netlist (la-pulls.kicad_sch): channel -> { expander, 10k port, 2.2k port }.
    Written out as port names so a typo in the table does not hide in the same arithmetic. */
 static void test_netlist_map(void)
 {

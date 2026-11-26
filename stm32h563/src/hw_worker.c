@@ -480,8 +480,8 @@ static void worker_task(void *arg) {
         command_handler_poll();   /* async captures + paced bulk sends -> conn_tx rings */
         signal_engine_poll();     /* stop timed waveforms when their duration expires  */
         target_power_poll();      /* deferred eFuse enable + fault/EN change events     */
-        vref_out_poll(HAL_GetTick()); /* J1 pin 21 sense (digital v3r4 only)            */
-        la_pull_poll();           /* pull-ups follow the pod's target power (v3r4 only) */
+        vref_out_poll(HAL_GetTick()); /* J1 pin 21 sense (digital v4 only)            */
+        la_pull_poll();           /* pull-ups follow the pod's target power (v4 only) */
         status_led_service();     /* the RGB status LED follows the pod's state         */
 #if !defined(BENCHPOD_EMI_TEST)
         ice40_idle_check(HAL_GetTick());   /* an iCE40 that stopped answering (recovery.h) */

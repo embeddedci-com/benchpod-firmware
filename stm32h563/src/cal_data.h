@@ -68,7 +68,7 @@ float cal_adc_low_ratio(void);
 void cal_data_use(board_cal_set_t set);
 
 /* The set of a board revision: cal_data_use(board_caps_for_rev(board_rev).cal_set), where the
-   revision-to-set mapping lives (v3 and v3r4 -> rev3, v3r2 -> v3r2, anything else -> v2).  For host
+   revision-to-set mapping lives (v3 and v4 -> rev3, v3r2 -> v3r2, anything else -> v2).  For host
    tests. */
 void cal_data_select(int board_rev);
 

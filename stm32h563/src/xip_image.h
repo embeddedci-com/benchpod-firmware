@@ -11,7 +11,7 @@
  *   prog    .xip_prog   xip_prog   the pin programmers of prog_flash (xip_prog_mod.c, prog_<proto>.c) and
  *                                  the sensor definition compiler (sensor_def_compile.c, sensor_def_expr.c)
  *
- * Memory-mapped (XIP_RAM=0, digital v3r4): OCTOSPI1 maps the W25Q at 0x90000000. The usb image runs
+ * Memory-mapped (XIP_RAM=0, digital v4): OCTOSPI1 maps the W25Q at 0x90000000. The usb image runs
  * at 0x90201000 (slot "xip", W25Q 0x200000 + the 4 KB header) and the prog image at 0x90241000
  * (slot "xip_prog", W25Q 0x240000), each at its own address, no copy.
  * RAM (XIP_RAM=1, the release default): both images are linked at the SAME RAM region (an
@@ -104,7 +104,7 @@ const xip_hash_t *xip_image_expected(void);
 const xip_hash_t *xip_image_expected_of(xip_img_t img);
 
 /* This board can run code from the W25Q: its chip-select is on an OCTOSPI1 NCS pin
-   (board_caps()->qspi_cs_ncs_pins, digital v3r4), or the build runs the images from RAM. The xip
+   (board_caps()->qspi_cs_ncs_pins, digital v4), or the build runs the images from RAM. The xip
    and xip_prog blob slots are listed only then. */
 bool xip_supported(void);
 

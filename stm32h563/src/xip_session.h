@@ -8,7 +8,7 @@
  * (heavy_in_flight() reports it, BP0048). It runs on the hw worker task only.
  *
  * Modes:
- *  - mapped: the W25Q's chip-select is on an OCTOSPI1 NCS pin (digital v3r4 PB6, or a dev build with
+ *  - mapped: the W25Q's chip-select is on an OCTOSPI1 NCS pin (digital v4 PB6, or a dev build with
  *    XIP_BODGE_PB6=1 on a board with a wire to PB6). The controller maps the W25Q at 0x90000000 and
  *    the CPU runs the image in place. Indirect commands meanwhile go through xspi_guard, which
  *    unmaps and maps again around them.

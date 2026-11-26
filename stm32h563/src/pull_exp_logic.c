@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-/* digital v3r4, from the netlist of la-pulls.kicad_sch (U54 placed at 90 deg, U18 at 270 deg):
+/* digital v4, from the netlist of la-pulls.kicad_sch (U54 placed at 90 deg, U18 at 270 deg):
    { expander, 10k port, 2.2k port }, port bit 0-7 = P00-P07, 8-15 = P10-P17. */
 #define P0(n) (n)
 #define P1(n) (8 + (n))
