@@ -20,6 +20,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "bp_errors.h"
+#include "bp_json.h"
+#include "wiring_doc.h"
 
 /* Samples per frame.  25 B/sample worst case ("600000000," "-5460000," "21800,") + the frame
    header and the final frame's stats (~330 B) stay under the 1600 B frame buffer. */
@@ -205,6 +208,13 @@ void handle_power_profile(int conn_id, const char *json) {
         return;
     }
     uint32_t efuse, rate, dur, keep, oneshot_ms = 0;
+    {   /* "rail":"j1_3v3"|"j1_1v8": the J1 supplies have no current monitor */
+        char rail[16];
+        if (bp_json_get_fit(json, "rail", rail, sizeof(rail)) == 1 && wiring_rail_is_j1(rail)) {
+            bp_err_power_no_meter(conn_id, rail);
+            return;
+        }
+    }
     if (!get_u32(conn_id, json, "efuse", 1u, 2u, &efuse)) return;
     if (!get_u32(conn_id, json, "sample_rate_hz", PP_RATE_DEFAULT_HZ, 1000000u, &rate)) return;
     if (!get_u32(conn_id, json, "max_duration_ms", PP_DURATION_DEFAULT_MS, 0x7FFFFFFFu, &dur)) return;

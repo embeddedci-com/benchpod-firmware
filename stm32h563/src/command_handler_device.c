@@ -103,12 +103,16 @@ void handle_target_power(int conn_id, const char *json) {
             send_error(conn_id, "rail must be j1_3v3 or j1_1v8");
             return;
         }
-        if (dut_rails_set((dut_rail_t)r, on) != 0) {
+        uint32_t rd = 0;
+        if (json_get_value(json, "delay_ms", delay_s, sizeof(delay_s)))
+            rd = (uint32_t)strtoul(delay_s, NULL, 0);
+        if (dut_rails_schedule((dut_rail_t)r, on, rd) != 0) {
             send_error(conn_id, "this board has no switchable J1 supplies (digital v4 only)");
             return;
         }
-        char rp[56];
-        snprintf(rp, sizeof(rp), "{\"rail\":\"%s\",\"enabled\":%s}", dut_rail_name((dut_rail_t)r), on ? "true" : "false");
+        char rp[72];
+        snprintf(rp, sizeof(rp), "{\"rail\":\"%s\",\"enabled\":%s,\"delay_ms\":%u}", dut_rail_name((dut_rail_t)r),
+                 on ? "true" : "false", (unsigned)rd);
         send_ok_str(conn_id, rp);
         return;
     }

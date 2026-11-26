@@ -2792,7 +2792,13 @@ which boards can switch them.
 | `j1_3v3` | J1 pin 17, +3V3_DUT |
 | `j1_1v8` | J1 pin 18, +1V8_DUT |
 
-The reply is `{"rail":"j1_3v3","enabled":false}`; `delay_ms` and `profile` do not apply to a rail.
+The reply is `{"rail":"j1_3v3","enabled":false,"delay_ms":0}`. `delay_ms` works as for an eFuse (the
+command acks at once and the pin switches later), so a power cycle with a delayed power-on works on
+a J1 supply too; `profile` does not apply to a rail.
+The J1 supplies have no current monitor: `power_status` reads the two eFuse rails only, and
+`power_profile` with `"rail":"j1_3v3"` or `"j1_1v8"` is refused with `BP0090`. A profile can name a J1
+rail as its target-power rail (`efuse` key, [wiring profiles](#wiring-profiles-wiring_list-wiring_get-wiring_put-wiring_delete-wiring_default)):
+tools that switch power without naming a rail then switch that pin.
 
 #### Request
 
@@ -5130,8 +5136,15 @@ letters, digits and dashes, not starting with a dash. The SDK, CLI, MCP server a
 write them for you (`bp.load_wiring`, `bp.save_wiring`, `benchpod wiring`); this is the protocol
 underneath.
 
-The pod treats a profile as opaque JSON: it only checks that it is one JSON object. The tools
-validate the contents. Every save gives the profile the next revision number.
+The pod treats a profile as opaque JSON: it checks that it is one JSON object and, with firmware
+4.0.7 and later, the profile's target-power rail; the tools validate the rest. Every save gives the
+profile the next revision number.
+
+The rail is the profile's `efuse` key: `1` (internal 5 V), `2` (external), and on digital v4 the
+strings `"j1_3v3"` and `"j1_1v8"` (the switched J1 pins 17 and 18, see
+[`target_power`](#target_power--enabledisable-a-target-power-efuse)). Tools that switch power
+without naming a rail use the profile's. Any other value, and a J1 rail on a board without them
+(hw fact `dut_rails`), is refused at save time with `BP0089`.
 
 ```json
 {"cmd":"wiring_list"}
@@ -5170,7 +5183,7 @@ touches the pod's flash bus. Saving, deleting and changing the default do, so th
 `BP0016` while the DAC runs or a capture holds the bus; stop the DAC first. A save survives a power
 loss: the pod keeps two copies and writes the older one. Refusals: `BP0006` (a missing value),
 `BP0007` (no such profile), `BP0008` (bad name), `BP0009` (revision conflict), `BP0010` (full),
-`BP0011` (too large), `BP0012` (not a JSON object), `BP0014` (piece out of order), `BP0015`
+`BP0011` (too large), `BP0012` (not a JSON object), `BP0089` (a rail this pod does not have), `BP0014` (piece out of order), `BP0015`
 (storage failed), see [error codes](https://embeddedci.com/docs/errors).
 
 ### `emi_log` — the EMI test build's run log

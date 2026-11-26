@@ -9,6 +9,7 @@
 
 static bool s_present;
 static bool s_on[2];
+static struct { bool armed, on; uint32_t at; } s_pend[2];
 
 int dut_rail_from_name(const char *name)
 {
@@ -50,8 +51,34 @@ bool dut_rails_present(void) { return s_present; }
 int dut_rails_set(dut_rail_t r, bool on)
 {
     if (!s_present || (r != DUT_RAIL_3V3 && r != DUT_RAIL_1V8)) return -1;
+    s_pend[r].armed = false;
     drive(r, on);
     return 0;
+}
+
+int dut_rails_schedule(dut_rail_t r, bool on, uint32_t delay_ms)
+{
+    if (!s_present || (r != DUT_RAIL_3V3 && r != DUT_RAIL_1V8)) return -1;
+    if (delay_ms == 0) {
+        s_pend[r].armed = false;
+        drive(r, on);
+        return 0;
+    }
+    s_pend[r].on = on;
+    s_pend[r].at = HAL_GetTick() + delay_ms;
+    s_pend[r].armed = true;
+    return 0;
+}
+
+void dut_rails_poll(void)
+{
+    if (!s_present) return;
+    for (int i = 0; i < 2; i++) {
+        if (s_pend[i].armed && (int32_t)(HAL_GetTick() - s_pend[i].at) >= 0) {
+            s_pend[i].armed = false;
+            drive((dut_rail_t)i, s_pend[i].on);
+        }
+    }
 }
 
 bool dut_rails_get(dut_rail_t r)

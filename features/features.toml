@@ -1044,4 +1044,4 @@ firmware = "4.0.7"
 requires = ["dut_rails"]
 dated = "code"
 docs = "API.md#target_power--enabledisable-a-target-power-efuse"
-note = "target_power takes rail (j1_3v3 or j1_1v8) in place of efuse: it switches J1 pin 17 (+3V3_DUT) or pin 18 (+1V8_DUT) on digital v4. Both are on from boot. target_status has j1_rails (v3v3, v1v8, true when on) on those boards only."
+note = "target_power takes rail (j1_3v3 or j1_1v8) in place of efuse: it switches J1 pin 17 (+3V3_DUT) or pin 18 (+1V8_DUT) on digital v4. Both are on from boot. target_status has j1_rails (v3v3, v1v8, true when on) on those boards only. A wiring profile's rail (efuse key) may be \"j1_3v3\" or \"j1_1v8\" there; wiring_put refuses an unknown rail, and a J1 rail without dut_rails, with BP0089. power_profile refuses a J1 rail with BP0090 (no current monitor)."

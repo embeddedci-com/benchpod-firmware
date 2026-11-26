@@ -24,6 +24,8 @@ void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pin, GPIO_PinState s)
     s_writes++;
     if (s == GPIO_PIN_SET) s_level |= pin; else s_level &= ~pin;
 }
+static uint32_t s_tick;
+uint32_t HAL_GetTick(void) { return s_tick; }
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init)
 {
     (void)port;
@@ -59,6 +61,23 @@ int main(void)
     CHECK(!(s_level & GPIO_PIN_3));
     CHECK(dut_rails_set(DUT_RAIL_3V3, true) == 0 && (s_level & GPIO_PIN_3));
     CHECK(dut_rails_set((dut_rail_t)5, true) == -1);
+
+    /* A delayed switch waits for its time, and a newer command replaces it. */
+    CHECK(dut_rails_set(DUT_RAIL_1V8, true) == 0);
+    CHECK(dut_rails_schedule(DUT_RAIL_1V8, false, 500) == 0);
+    CHECK(dut_rails_get(DUT_RAIL_1V8));
+    s_tick = 499; dut_rails_poll();
+    CHECK(dut_rails_get(DUT_RAIL_1V8));
+    s_tick = 500; dut_rails_poll();
+    CHECK(!dut_rails_get(DUT_RAIL_1V8) && !(s_level & GPIO_PIN_4));
+    CHECK(dut_rails_schedule(DUT_RAIL_1V8, true, 100) == 0);
+    CHECK(dut_rails_set(DUT_RAIL_1V8, false) == 0);          /* now: cancels the pending on */
+    s_tick = 700; dut_rails_poll();
+    CHECK(!dut_rails_get(DUT_RAIL_1V8));
+    CHECK(dut_rails_schedule(DUT_RAIL_3V3, false, 0) == 0 && !dut_rails_get(DUT_RAIL_3V3));
+    CHECK(dut_rails_schedule(DUT_RAIL_3V3, true, 10) == 0);
+    s_tick = 0xFFFFFFF0u; dut_rails_poll();                   /* a wrapping tick must not fire early */
+    CHECK(!dut_rails_get(DUT_RAIL_3V3));
 
     /* Names. */
     CHECK(dut_rail_from_name("j1_3v3") == DUT_RAIL_3V3);

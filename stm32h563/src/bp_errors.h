@@ -106,9 +106,11 @@ typedef enum {
     BP_E_USB_SERIAL_BUSY = 86,
     BP_E_USB_CHECK_REFUSED = 87,
     BP_E_USB_CHECK_NO_EFUSE_POWER = 88,
+    BP_E_WIRING_BAD_RAIL = 89,
+    BP_E_POWER_NO_METER = 90,
 } bp_errcode_t;
 
-#define BP_E_LAST 88
+#define BP_E_LAST 90
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1198,6 +1200,32 @@ static inline const char *bp_note_usb_check_no_efuse_power(char *buf, size_t cap
 }
 static inline const char *bp_tag_usb_check_no_efuse_power(const char *text) {
     return bp_err_tag(text, BP_E_USB_CHECK_NO_EFUSE_POWER, 0, 0);
+}
+/* BP0089: {rail} is not a target-power rail this pod has */
+static inline void bp_err_wiring_bad_rail(int conn_id, const char *rail) {
+    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+    bp_error_send(conn_id, BP_E_WIRING_BAD_RAIL, a, 1);
+}
+static inline const char *bp_note_wiring_bad_rail(char *buf, size_t cap, const char *rail) {
+    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_WIRING_BAD_RAIL, a, 1);
+}
+static inline const char *bp_tag_wiring_bad_rail(const char *text, const char *rail) {
+    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+    return bp_err_tag(text, BP_E_WIRING_BAD_RAIL, a, 1);
+}
+/* BP0090: {rail} has no current monitor */
+static inline void bp_err_power_no_meter(int conn_id, const char *rail) {
+    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+    bp_error_send(conn_id, BP_E_POWER_NO_METER, a, 1);
+}
+static inline const char *bp_note_power_no_meter(char *buf, size_t cap, const char *rail) {
+    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_POWER_NO_METER, a, 1);
+}
+static inline const char *bp_tag_power_no_meter(const char *text, const char *rail) {
+    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+    return bp_err_tag(text, BP_E_POWER_NO_METER, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

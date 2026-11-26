@@ -2,6 +2,7 @@
 #define DUT_RAILS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* ============================================================================
  * dut_rails — the two switched DUT supplies on J1 of digital v4: pin 17 (+3V3_DUT) and pin 18
@@ -25,5 +26,10 @@ bool dut_rails_present(void);
 /* 0, or -1 without the hardware or for a bad rail. */
 int  dut_rails_set(dut_rail_t r, bool on);
 bool dut_rails_get(dut_rail_t r);
+/* Switch after delay_ms (0 = now); a new schedule for the same rail replaces a pending one.  Same
+   returns as dut_rails_set. */
+int  dut_rails_schedule(dut_rail_t r, bool on, uint32_t delay_ms);
+/* Apply the schedules whose delay elapsed; the hw worker calls it with target_power_poll(). */
+void dut_rails_poll(void);
 
 #endif /* DUT_RAILS_H */
