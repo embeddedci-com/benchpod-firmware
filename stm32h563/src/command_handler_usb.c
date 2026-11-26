@@ -253,7 +253,8 @@ void handle_usb_serial(int conn_id, const char *json)
  *   {"cmd":"usb_check","test":"replug","count":10,"off_ms":[5,20,100,500]}
  *   {"cmd":"usb_check"}                  the state and the last result
  *   {"cmd":"usb_check","abort":true}
- * Refusals: BP0087 (usb_check_refused), BP0088 (not powered from eFuse 1).
+ * Refusals: BP0087 (usb_check_refused), BP0088 (not powered from eFuse 1), BP0083 (the W25Q code:
+ * the check's steps run from the usb image in an XIP session).
  */
 
 static void usb_check_reply_send(int conn_id)
@@ -277,6 +278,7 @@ void handle_usb_check(int conn_id, const char *json)
     const char *w = NULL;
     int rc = usb_check_start(&a, &w);
     if (rc == -2) { bp_err_usb_check_no_efuse_power(conn_id); return; }
+    if (rc == -3) { bp_err_xip_unavailable(conn_id, w ? w : "the xip blob is missing"); return; }
     if (rc != 0) { bp_err_usb_check_refused(conn_id, w ? w : "refused"); return; }
     usb_check_reply_send(conn_id);
 }

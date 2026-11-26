@@ -14,6 +14,7 @@
  */
 #include "esp_rom_flash.h"
 #include "esp_rom_job.h"
+#include "esp_rom_run.h"
 #include "esp_part_table.h"
 #include "board_pins.h"
 #include "watchdog.h"
@@ -201,7 +202,7 @@ static void rom_enter(void)
 /* Run a job to its end on the calling task (short jobs only: sync, the NVS erase). */
 static int run_blocking(esp_rom_job_t *j)
 {
-    while (esp_rom_job_step(j)) {
+    while (esp_rom_run_step(j)) {
         watchdog_heartbeat(WD_TASK_WORKER, "worker");
         sleep_ms_rtos(1);
     }
@@ -236,18 +237,40 @@ static int slot_read_held(void *ctx, uint32_t off, uint8_t *buf, uint32_t n)
     return blob_store_read(ctx, off, buf, n);
 }
 
+/* ---- the usb image (the ROM-loader code) -------------------------------------- */
+
+static char s_why[112];   /* why the last session could not be opened */
+static bool s_xip_busy;   /* ... and whether trying again shortly can work */
+
+/* Open the session the job runs in. false = refused (s_why says why, and it is logged). */
+static bool open_session(esp_rom_work_t **w)
+{
+    int e = esp_rom_run_open(w);
+    if (e == 0) return true;
+    esp_rom_run_why(e, s_why, sizeof(s_why));
+    s_xip_busy = esp_rom_run_transient(e);
+    LOG_E("[espflash] C3 not touched: %s\n", s_why);
+    return false;
+}
+
+const char *esp_rom_flash_start_why(void) { return s_why; }
+
 /* ---- public: wiring test -------------------------------------------------- */
 
 int esp_rom_flash_sync(uint32_t *chip_magic_out)
 {
     if (esp_rom_flash_busy() || !esp_wifi_ctrl_module_present()) return -1;
+    esp_rom_work_t *w;
+    if (!open_session(&w)) return -1;     /* before the straps move */
     log_printf("[espflash] entering C3 download mode (BOOT=0, EN pulse)...\n");
     rom_enter();
     static esp_rom_io_t io;
     io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL, NULL };
     static esp_rom_job_t j;
-    esp_rom_job_start_sync(&j, &io);
+    esp_rom_job_prepare(&j, w, &io, 0, 0, NULL, true);
+    esp_rom_run_begin(&j);
     int rc = run_blocking(&j);
+    esp_rom_run_close(&w);
     uart_deinit();
     if (rc != ESP_ROM_OK) {
         LOG_E("[espflash] SYNC failed — no response from C3 ROM (check EN/BOOT/UART wiring)\n");
@@ -261,6 +284,7 @@ int esp_rom_flash_sync(uint32_t *chip_magic_out)
 /* ---- public: background flash from the W25Q slot ------------------------------- */
 
 static esp_rom_job_t     s_job;
+static esp_rom_work_t   *s_work;        /* the job's buffers; non-NULL = its XIP session is open */
 static esp_rom_io_t      s_io;
 static volatile bool     s_active;
 static esp_flash_done_fn s_done;
@@ -292,6 +316,7 @@ int esp_rom_flash_start(esp_flash_done_fn done)
         log_printf("[espflash] slot esp does not match its checksum: not flashed\n");
         return ESP_FLASH_START_BAD_SLOT;
     }
+    if (!open_session(&s_work)) return s_xip_busy ? ESP_FLASH_START_XIP_BUSY : ESP_FLASH_START_NO_XIP;
     s_active = true;       /* from here the busy gate holds off every PSRAM-bus user */
     s_done = done;
     s_t0 = HAL_GetTick();
@@ -299,7 +324,8 @@ int esp_rom_flash_start(esp_flash_done_fn done)
     rom_enter();
     s_from_slot = true;
     s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, slot_read, (void *)(uintptr_t)BLOB_ESP, NULL };
-    esp_rom_job_start(&s_job, &s_io, blob_store_info(BLOB_ESP)->len, 0);
+    esp_rom_job_prepare(&s_job, s_work, &s_io, blob_store_info(BLOB_ESP)->len, 0, NULL, false);
+    esp_rom_run_begin(&s_job);
     return 0;
 }
 
@@ -308,6 +334,7 @@ int esp_rom_flash_start_staged(uint32_t len, esp_flash_done_fn done)
     if (s_active) return ESP_FLASH_START_BUSY;
     if (!esp_wifi_ctrl_module_present()) return ESP_FLASH_START_NO_MODULE;
     if (len == 0) return ESP_FLASH_START_NO_IMAGE;
+    if (!open_session(&s_work)) return s_xip_busy ? ESP_FLASH_START_XIP_BUSY : ESP_FLASH_START_NO_XIP;
     s_active = true;       /* from here the busy gate holds off every PSRAM-bus user */
     s_done = done;
     s_t0 = HAL_GetTick();
@@ -315,7 +342,8 @@ int esp_rom_flash_start_staged(uint32_t len, esp_flash_done_fn done)
     rom_enter();
     s_from_slot = false;   /* c3_update.c records what it wrote */
     s_io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, staged_read, NULL, NULL };
-    esp_rom_job_start(&s_job, &s_io, len, 0);
+    esp_rom_job_prepare(&s_job, s_work, &s_io, len, 0, NULL, false);
+    esp_rom_run_begin(&s_job);
     return 0;
 }
 
@@ -327,8 +355,9 @@ bool esp_rom_flash_staged_nvs(uint32_t *off, uint32_t *size)
 void esp_rom_flash_poll(void)
 {
     if (!s_active) return;
-    if (esp_rom_job_step(&s_job)) return;
+    if (esp_rom_run_step(&s_job)) return;
     int rc = s_job.result;
+    esp_rom_run_close(&s_work);
     uart_deinit();
     unsigned secs = (unsigned)((HAL_GetTick() - s_t0) / 1000u);
     if (rc >= 0) {
@@ -363,6 +392,7 @@ int esp_rom_flash_erase_nvs(void)
 {
     uint32_t off = 0, size = 0;
     int rc = -1;
+    esp_rom_work_t *w = NULL;
     if (esp_rom_flash_busy()) {
         log_printf("[espflash] a C3 flash is running: NVS not erased\n");
         return -1;           /* the C3 is the flash's: leave its straps alone */
@@ -388,14 +418,17 @@ int esp_rom_flash_erase_nvs(void)
         log_printf("[espflash] no usable NVS partition in the W25Q C3 image's partition table\n");
         goto out;
     }
+    if (!open_session(&w)) goto out;      /* before the straps move: the wipe did not happen */
     rom_enter();
     {
         static esp_rom_io_t io;
         io = (esp_rom_io_t){ uart_send, uart_rx_byte, now_ms, NULL, NULL, NULL };   /* NULL: erase */
         static esp_rom_job_t j;
-        esp_rom_job_start(&j, &io, size, off);
+        esp_rom_job_prepare(&j, w, &io, size, off, NULL, false);
+        esp_rom_run_begin(&j);
         rc = run_blocking(&j) == ESP_ROM_OK ? 0 : -1;   /* an unverified erase is not "blank" */
     }
+    esp_rom_run_close(&w);
     uart_deinit();
     if (rc == 0) log_printf("[espflash] C3 NVS erased and verified blank (0x%06lx, %lu bytes)\n",
                             (unsigned long)off, (unsigned long)size);

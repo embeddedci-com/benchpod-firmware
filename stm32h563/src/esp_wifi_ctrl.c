@@ -290,6 +290,11 @@ const char *esp_wifi_ctrl_state_str(void) {
 
 void esp_wifi_ctrl_pause(bool paused) { s_paused = paused; }
 
+static char s_flash_why[C3_RESTART_REASON_LEN];
+void esp_wifi_ctrl_flash_refused(const char *why) {
+    snprintf(s_flash_why, sizeof(s_flash_why), "%s", why ? why : "");
+}
+
 void esp_wifi_ctrl_flash_done(bool ok) {
     s_flash_ok   = ok;
     s_flash_done = true;
@@ -696,7 +701,8 @@ void esp_wifi_ctrl_poll(void) {
             log_printf("[wifi] ESP32-C3 flashed — starting it\n");
             s_state = WC_DOWN;              /* s_started is false: the next poll releases reset */
         } else {
-            to_backoff(C3_RESTART_FLASH, "ESP32-C3 flash failed");
+            to_backoff(C3_RESTART_FLASH, s_flash_why[0] ? s_flash_why : "ESP32-C3 flash failed");
+            s_flash_why[0] = '\0';
         }
         return;
     }

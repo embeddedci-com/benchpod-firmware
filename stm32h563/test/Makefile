@@ -98,7 +98,7 @@ BOARDVAR_SRCS := test_board_variant.c ../src/board_variant.c ../src/board_caps.c
 BOARDCAPS_SRCS := test_board_caps.c ../src/board_caps.c
 USBHOST_SRCS  := test_usb_host_desc.c ../src/usb_host_desc.c ../src/usb_host_reply.c
 USBSERCON_SRCS := test_usb_serial_con.c ../src/usb_serial_con.c ../src/bp_json.c ../src/b64url.c
-USBCHECK_SRCS := test_usb_check.c ../src/usb_check_core.c ../src/bp_json.c
+USBCHECK_SRCS := test_usb_check.c ../src/usb_check_core.c ../src/xip_mod_usb_check.c ../src/bp_json.c
 GWCAPS_SRCS := test_gw_caps.c ../src/gw_caps.c
 LAIO_SRCS := test_la_io.c ../src/la_io.c ../src/board_caps.c
 VREF_SRCS     := test_vref.c ../src/vref_logic.c ../src/bp_json.c
@@ -188,8 +188,8 @@ BENCHTLS_CFLAGS_ABS := -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"' -I$(absp
 BENCHTLS_CFLAGS := -DMBEDTLS_CONFIG_FILE='"mbedtls_bench_config.h"' -I../config -I$(MBEDTLS)/include -I$(MBEDTLS)/library
 CLOUDEXTRAS_SRCS := test_cloud_extras.c ../src/cloud_ca.c ../src/blob_store.c mocks/mock_w25q.c
 MBEDTLS_ALL := $(wildcard $(MBEDTLS)/library/*.c)
-# The ESP32-C3 ROM-loader write job (src/esp_rom_job.c) checks its write with the C3's MD5.
-ESPROMJOB_SRCS := test_esp_rom_job.c ../src/esp_rom_job.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
+# The ESP32-C3 ROM-loader write job (src/xip_mod_esp_rom.c) checks its write with the C3's MD5.
+ESPROMJOB_SRCS := test_esp_rom_job.c ../src/xip_mod_esp_rom.c ../src/esp_rom_names.c $(MBEDTLS)/library/md5.c $(MBEDTLS)/library/platform_util.c
 ifneq ($(HAVE_MBEDTLS),)
 OTA_TARGET := build/test_ota build/test_blob_store build/test_c3_image build/test_cloud_extras build/test_esp_rom_job
 endif

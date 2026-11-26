@@ -83,6 +83,7 @@ bool heavy_or_claimed(void) { return false; }
 int  esp_rom_flash_start(esp_flash_done_fn done) { if (done) done(0); return 0; }
 void esp_rom_flash_poll(void) {}
 void esp_wifi_ctrl_flash_done(bool ok) { (void)ok; }
+void esp_wifi_ctrl_flash_refused(const char *why) { (void)why; }
 int  ota_target_from_name(const char *n) { (void)n; return 0; }
 void ota_refuse_for(ota_owner_t who, const char *why) { (void)who; (void)why; }
 const char *ota_begin_gate(ota_owner_t who) { (void)who; return NULL; }

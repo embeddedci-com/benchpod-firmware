@@ -53,6 +53,9 @@ void esp_wifi_ctrl_pause(bool paused);
 /* Worker task: the C3 flash that Wi-Fi control asked for has finished (ok = flashed and
    verified).  Safe to call from any task. */
 void esp_wifi_ctrl_flash_done(bool ok);
+/* Worker task, before esp_wifi_ctrl_flash_done(false): why the flash did not start (at most 39
+   characters), for the restart record instead of "flash failed". */
+void esp_wifi_ctrl_flash_refused(const char *why);
 
 /* Human-readable state for the `status` command. */
 const char *esp_wifi_ctrl_state_str(void);

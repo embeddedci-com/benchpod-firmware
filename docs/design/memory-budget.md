@@ -25,7 +25,7 @@ The `_min` / `_max` values are since boot. Read them after the workload you care
 
 | Region | Size | Use |
 |---|---|---|
-| Code (`.text` + `.rodata` + vectors) | 865,572 B of 896 KB (94.3%, 51,932 B left) in a release build (2026-11-25); 871,800 B (95.0%) in a dev build | Firmware only. `0x08000000`-`0x080DFFFF`, cached by the ICACHE. |
+| Code (`.text` + `.rodata` + vectors) | 832,988 B of 896 KB (90.8%, 84,516 B left) in a release build (2026-11-25, with the small wins, the images over the adc_pool, the sensor compiler and the ESP/`usb_check` code in the images); 846,220 B (92.2%, 71,284 B left) in a dev build | Firmware only. `0x08000000`-`0x080DFFFF`, cached by the ICACHE. |
 | Persistence records | top 128 KB of the chip | Config, cloud config, identity, ADC calibration, DAC limits, pod policy, LAN TLS certificate, OTA self-test scratch. Not cached (MPU); `flash_compat` refuses writes anywhere else. |
 
 Measured 2026-11-19 on main `a594c0e` (firmware 3.10.13): the release build is
@@ -69,8 +69,8 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
 
 | Image | Section | Slot (W25Q) | Code | Size (release = dev build) | Of the 64 KB region |
 |---|---|---|---|---|---|
-| usb | `.xip` | `xip` (0x200000) | the USB flash protocols (`xip_mod_*.c`) | 17,700 B | 27.0% |
-| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`), the sensor definition compiler (`sensor_def_compile.c`, `sensor_def_expr.c`) and the dispatch (`xip_prog_mod.c`) | 53,064 B (16,340 B before the compiler) | 81.0% |
+| usb | `.xip` | `xip` (0x200000) | the USB flash protocols, the ESP32 ROM-loader protocol (`xip_mod_esp_rom.c`) and the `usb_check` steps (`xip_mod_usb_check.c`) (`xip_mod_*.c`) | 24,056 B | 36.7% |
+| prog | `.xip_prog` | `xip_prog` (0x240000) | the six `prog_flash` pin programmers (`prog_updi.c`, `prog_pic.c`, `prog_c2.c`, `prog_tpi.c`, `prog_pdi.c`, `prog_sbw.c`), the sensor definition compiler (`sensor_def_compile.c`, `sensor_def_expr.c`) and the dispatch (`xip_prog_mod.c`) | 46,320 B (16,340 B before the compiler) | 70.7% |
 
 - **XIP_RAM=1 (the release default, every board shipped so far):** both images are linked over
   `adc_pool` (the 64 KB shared sample buffer, below), an overlay of all three. From 2026-11-25 the
@@ -143,6 +143,35 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
   or upload runs answers busy; a pod without the matching `xip_prog` blob cannot compile a
   definition at all (BP0083: install the blobs). Every emulated sensor, the library's included, is a
   definition, so such a pod cannot start one.
+
+- ESP ROM flashing and `usb_check` into the usb image (2026-11-25, on top of the images over the
+  adc_pool; `XIP_ABI` 2 to 3; numbers below measured without the sensor compiler move): the usb image grew from 17,700 B to 24,056 B (36.7% of the pool).
+  Moved: `esp_rom_job.c` (now `xip_mod_esp_rom.c`: the SLIP framing, the ROM command sequence and the MD5 check,
+  3.5 KB) and the step of the `usb_check` job (`uc_job_step` and its helpers, now
+  `xip_mod_usb_check.c`, 3.3 KB). Stayed internal: the hardware halves (`esp_rom_flash.c`: USART1
+  ISR, straps; `esp_dut_flash.c`: the FPGA soft UART, pins; `usb_flash.c`'s esp glue), the name
+  tables (`esp_rom_names.c`), and for `usb_check` the argument parser, statistics, verdicts, reply
+  and names (`usb_check_core.c`: the command handler calls them outside a session). `usb_hid_core.c`
+  and `usb_serial_con.c` stay too: they are the rings TinyUSB callbacks fill and the JSON of
+  commands, not a job that runs to completion. Each ESP job (the C3 flash, the wiring sync, the NVS
+  erase, `esp_flash`, `usb_flash` mode `esp`) and each `usb_check` run holds a usb-image session
+  from before it touches a pin until it ends; the ESP jobs' buffers (`esp_rom_work_t`, 3.4 KB) are
+  allocated on the heap per job, so static RAM went down by that much.
+
+| Build | Internal flash left before | after | Static RAM before | after |
+|---|---|---|---|---|
+| release (`make RELEASE=1`) | 21,508 B | 26,172 B (+4,664 B) | 584,616 B | 581,288 B |
+| dev (`make`) | 7,844 B | 12,404 B (+4,560 B) | | |
+
+  Per step, release: refactor into context structs 21,276 B (-232 B, the names file and the run
+  helper), ESP ROM loader into the image 23,484 B, `usb_check` 26,172 B.
+- All four together (2026-11-25, main with the small wins, the images over the adc_pool, the
+  sensor compiler in the prog image and the ESP/`usb_check` code in the usb image): internal flash
+  left 84,516 B release (832,988 B used, 90.79%) and 71,284 B dev (846,220 B used, 92.23%), from
+  21,684 B and about 8,020 B on main `4b3d6cd`. Static RAM 581,280 B release (98.55% of 576 KB).
+  Images: usb 24,056 B (36.7% of the pool), prog 46,320 B (70.7%; the compiler's step above
+  measured 53,064 B before the cold files were built with `-Os`). The section sizes above are each
+  step's own measurement, on its own base.
 - What stays in internal flash: the protocol metadata (`prog_flash.c`: name, uart, uses_nrst,
   mems), `prog_job.c`, `prog_wire.c` (its functions are the callbacks the job stores in
   `prog_wire_ops_t`, and internal code may not hold pointers to XIP functions) and the command.

@@ -7,7 +7,7 @@
  * images, each with its own table, expected hash and blob slot:
  *
  *   image   section     slot       code
- *   usb     .xip        xip        the USB flash protocols (src/xip_mod_*.c)
+ *   usb     .xip        xip        the USB flash protocols and the ESP32 ROM loader (src/xip_mod_*.c)
  *   prog    .xip_prog   xip_prog   the pin programmers of prog_flash (xip_prog_mod.c, prog_<proto>.c) and
  *                                  the sensor definition compiler (sensor_def_compile.c, sensor_def_expr.c)
  *
@@ -46,7 +46,7 @@
 typedef enum { XIP_IMG_USB = 0, XIP_IMG_PROG, XIP_IMG_COUNT } xip_img_t;
 
 #define XIP_TABLE_MAGIC  0x50495842u   /* "BXIP" */
-#define XIP_ABI          2u            /* the usb image: bump when its table's entries change meaning */
+#define XIP_ABI          3u            /* the usb image: bump when its table's entries change meaning */
 #define XIP_PROG_ABI     2u            /* the prog image */
 
 /* The usb image's entries, by index. */
@@ -55,6 +55,9 @@ enum {
     XIP_FN_MSC_FLASH_STEP, /* int (*)(void *ctx): msc_flash_step, a USB drive flash (msc_flash.h) */
     XIP_FN_CTRL_FLASH_STEP,/* int (*)(void *ctx): ctrl_flash_step, DFU/DfuSe and Teensy (ctrl_flash.h) */
     XIP_FN_SER_FLASH_STEP, /* int (*)(void *ctx): ser_flash_step, Arduino AVR and SAMD bootloaders (ser_flash.h) */
+    XIP_FN_ESP_ROM_BEGIN,  /* int (*)(void *job): esp_rom_job_begin, the ESP32 ROM loader write (esp_rom_job.h) */
+    XIP_FN_ESP_ROM_STEP,   /* int (*)(void *job): esp_rom_job_step */
+    XIP_FN_USB_CHECK_STEP, /* int (*)(void *job): uc_job_step, a usb_check run (usb_check_core.h); 0 in a USB_HOST=0 build */
     XIP_FN_COUNT
 };
 

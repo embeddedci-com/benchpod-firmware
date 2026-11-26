@@ -36,6 +36,11 @@ void blob_store_on_installed(blob_id_t id)
     case BLOB_ESP:
         esp_wifi_ctrl_image_installed();
         break;
+    case BLOB_XIP:
+        /* The ESP32-C3's ROM-loader code is in the xip image: an automatic C3 flash that was
+           refused for lack of it earns another try now (esp_wifi_ctrl.c). */
+        esp_wifi_ctrl_image_installed();
+        break;
     case BLOB_CA:
         cloud_extras_ca_changed();   /* reload it and reconnect the cloud with it */
         break;
