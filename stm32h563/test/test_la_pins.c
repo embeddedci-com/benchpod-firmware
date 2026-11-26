@@ -15,9 +15,9 @@
 
 /* Sizes (with the newline) of the replies listed as over budget in budget_la_pins, when listed.
    la_pins pages itself (LA_PINS_PAGE_MAX), so only the gpio read is listed. */
-#define KNOWN_V3R4_GPIO_GPIO      1762
+#define KNOWN_V4_GPIO_GPIO      1762
 #define KNOWN_V3_SENSOR_GPIO      2288
-#define KNOWN_V3R4_SENSOR_GPIO    2392
+#define KNOWN_V4_SENSOR_GPIO    2392
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -398,8 +398,8 @@ static void test_voltage_refusal(void) {
     CHECK(noted(err) == BP_E_LA_VOLTAGE_PINS_IN_USE);
     CHECK(la_pins_check_voltage_change(3300, 3300, err, sizeof(err)));   /* re-set is allowed */
     CHECK(la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));   /* invalid: caller's error */
-    /* Digital v3r4 (5 V I/O): 5000 is a voltage there, so it is a change like any other. */
-    board(BOARD_REV_V3R4);
+    /* Digital v4 (5 V I/O): 5000 is a voltage there, so it is a change like any other. */
+    board(BOARD_REV_V4);
     CHECK(!la_pins_check_voltage_change(3300, 5000, err, sizeof(err)));
     CHECK(la_pins_check_voltage_change(5000, 5000, err, sizeof(err)));   /* re-set is allowed */
     board(BOARD_REV_V3);
@@ -417,9 +417,9 @@ static void test_voltage_refusal(void) {
     CHECK(len > 15 && strcmp(err + len - 15, "LA14 (step_dir)") == 0);
 }
 
-/* Digital v3r4: every channel pulls up or down; the strength follows the pin's function; the
+/* Digital v4: every channel pulls up or down; the strength follows the pin's function; the
    engaged direction and ohms are what the driver noted.  Older boards keep their table. */
-static void test_pull_v3r4(void) {
+static void test_pull_v4(void) {
     la_pins_reset();
     board(BOARD_REV_V3);
     CHECK(la_pull_supports(1, LA_PULL_UP) && !la_pull_supports(1, LA_PULL_DOWN));
@@ -430,7 +430,7 @@ static void test_pull_v3r4(void) {
     CHECK_STR(la_pull_ohms(1), "4.7k");
     la_pull_set(1, LA_PULL_NONE, PULL_STR_NONE);
 
-    board(BOARD_REV_V3R4);
+    board(BOARD_REV_V4);
     for (unsigned la = 1; la <= 14; la++) {
         CHECK(la_pull_supports(la, LA_PULL_UP) && la_pull_supports(la, LA_PULL_DOWN));
         CHECK(la_pull_dir(la) == LA_PULL_UP);
@@ -613,17 +613,17 @@ static size_t emit_gpio_read(char *buf, size_t cap) {
 /* The worst cases. la_pins pages itself: every page keeps the margin and the pages cover all 14
    pins once (read_paged); `pages` is how many the full listing takes. The gpio read reply has no
    paging: replies known to be over budget (reply_budget.h) with the size measured when listed,
-   0 = must keep the margin; hosts use la_pins there. The v3 and v3r4 tables differ only in the
+   0 = must keep the margin; hosts use la_pins there. The v3 and v4 tables differ only in the
    pull table, so v2 and v3r2 are v3. */
 static const struct { int rev; worst_t w; const char *what; int pages; size_t gpio; } s_known[] = {
     { BOARD_REV_V2,   WORST_GPIO,   "v2, every pin gpio",       1, 0    },
     { BOARD_REV_V3,   WORST_GPIO,   "v3, every pin gpio",       1, 0    },
     { BOARD_REV_V3R2, WORST_GPIO,   "v3r2, every pin gpio",     1, 0    },
-    { BOARD_REV_V3R4, WORST_GPIO,   "v3r4, every pin gpio",     2, KNOWN_V3R4_GPIO_GPIO },
+    { BOARD_REV_V4, WORST_GPIO,   "v4, every pin gpio",     2, KNOWN_V4_GPIO_GPIO },
     { BOARD_REV_V2,   WORST_SENSOR, "v2, every pin a sensor",   2, KNOWN_V3_SENSOR_GPIO },
     { BOARD_REV_V3,   WORST_SENSOR, "v3, every pin a sensor",   2, KNOWN_V3_SENSOR_GPIO },
     { BOARD_REV_V3R2, WORST_SENSOR, "v3r2, every pin a sensor", 2, KNOWN_V3_SENSOR_GPIO },
-    { BOARD_REV_V3R4, WORST_SENSOR, "v3r4, every pin a sensor", 2, KNOWN_V3R4_SENSOR_GPIO },
+    { BOARD_REV_V4, WORST_SENSOR, "v4, every pin a sensor", 2, KNOWN_V4_SENSOR_GPIO },
 };
 
 static void budget_la_pins(void) {
@@ -850,7 +850,7 @@ int main(void) {
     test_step_plans();
     test_step_args();
     test_voltage_refusal();
-    test_pull_v3r4();
+    test_pull_v4();
     test_sensor_owner();
     test_query_mask();
     test_query_from();

@@ -1,4 +1,4 @@
-/* vref_out.c — see vref_out.h.  Digital v3r4 only (board_caps()->vref_out). */
+/* vref_out.c — see vref_out.h.  Digital v4 only (board_caps()->vref_out). */
 #include "vref_out.h"
 #include "board_caps.h"
 #include "board_pins.h"

@@ -26,7 +26,7 @@
  * its 2.05 V common mode into a differential offset, about 8x larger referred to the input. So
  * one offset, measured where the input is a known 0 V, corrects every source.
  *
- * J8 pin 1 goes through R81 (249 ohm; 100 ohm from module v3r5) to pod GND, so with nothing connected the terminal is
+ * J8 pin 1 goes through R81 (249 ohm; 100 ohm from module v4) to pod GND, so with nothing connected the terminal is
  * exactly 0 V and the pod needs no reference: `calibrate` reads `current_in` with J8 open and stores
  * what it reads as the offset. Every source's fit is then its cal_data.h fit with that offset
  * taken out of `a` (adc_cal_fit), and every reader uses that fit: adc_read, the capabilities
@@ -77,19 +77,19 @@
 
 /* R81, the sense resistor from J8 pin 1 to pod GND: `current_in` reads the voltage across it.
  *
- * Up to analog module v3r4 it is 249 ohm, straight on J8.  From v3r5 it is 100 ohm 0.1 %, behind a
+ * Up to analog module v3r4 it is 249 ohm, straight on J8.  From v4 it is 100 ohm 0.1 %, behind a
  * series diode (D23) and a 30 mA current limiter (U62, 28.5 to 31.5 mA in its datasheet), so the
  * loop sees about 4.3 V at 20 mA instead of the 7.2 V the limiter would cost with 249 ohm (both
- * calculated; no v3r5 module is measured yet).  The ADC taps the top of
+ * calculated; no v4 module is measured yet).  The ADC taps the top of
  * R81 (after the limiter), so the drop across D23 and U62 does not enter the reading.
  *
  * K3 puts that node into the same 910k divider as the BNC input, and the divider's current comes
  * from the loop too: the loop current is V / (R81 || divider).  With 249 ohm that is 251 ppm and
- * was never counted (kept so, so old modules read exactly as before).  From v3r5 the conversion
+ * was never counted (kept so, so old modules read exactly as before).  From v4 the conversion
  * uses R81 in parallel with the divider of the range in use: 992.5k in the normal range (101 ppm),
  * 1.82M in the low range (55 ppm). */
 #define CURRENT_IN_SENSE_MOHM_249    249000u   /* module up to v3r4 */
-#define CURRENT_IN_SENSE_MOHM_100    100000u   /* module v3r5 and later */
+#define CURRENT_IN_SENSE_MOHM_100    100000u   /* module v4 and later */
 #define CURRENT_IN_DIV_NORMAL_OHMS   992500.0  /* R90 + R91 */
 #define CURRENT_IN_DIV_LOW_OHMS     1820000.0  /* R90 + R182 (K5) */
 
@@ -199,7 +199,7 @@ cal_lin_t adc_cal_source_fit(int src);
 cal_lin_t adc_cal_current_in_fit(void);
 
 /* The resistance a `current_in` voltage is turned into the loop current with, in milliohms:
-   249000 on a module before v3r5 (R81 alone, as before), else 100 ohm in parallel with the ADC
+   249000 on a module before v4 (R81 alone, as before), else 100 ohm in parallel with the ADC
    divider of the range (99990 normal, 99995 low).  Pure. */
 static inline uint32_t current_in_sense_mohm(bool shunt_100r, bool low_range) {
     if (!shunt_100r) return CURRENT_IN_SENSE_MOHM_249;

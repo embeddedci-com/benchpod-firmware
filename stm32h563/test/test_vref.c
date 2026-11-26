@@ -1,4 +1,4 @@
-/* Host unit test for J1 pin 21 on digital v3r4 (vref_logic.c): the setpoint, the state bands,
+/* Host unit test for J1 pin 21 on digital v4 (vref_logic.c): the setpoint, the state bands,
  * the rail-up hysteresis the pull expanders use, and the JSON fields. */
 #include "vref_out.h"
 

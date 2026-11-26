@@ -2,7 +2,7 @@
  * w25q.c — single-SPI access to the iCE40 config flash (see w25q.h).
  *
  * Commands go out on the PSRAM's OCTOSPI1 handle (psram.c set it up), one line wide, framed by
- * the flash chip-select as a GPIO (qspi_cs.h: PE3, PB6 on digital v3r4). Moved here from ice40_flash.c, which now uses these calls.
+ * the flash chip-select as a GPIO (qspi_cs.h: PE3, PB6 on digital v4). Moved here from ice40_flash.c, which now uses these calls.
  */
 #include "w25q.h"
 #include "psram.h"

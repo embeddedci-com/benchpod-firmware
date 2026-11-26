@@ -220,8 +220,8 @@ void handle_current_out(int conn_id, const char *json) {
    returns "offset_mv", this pod's calibration offset that was taken out of `mv`
    (adc_cal.h; 0 when the pod was never calibrated), "ua", the loop current in
    microamps, and "sense_mohm", the resistance `ua` was computed with (249 ohm up to
-   analog module v3r4; from v3r5 100 ohm in parallel with the ADC divider, current_in_sense_mohm).
-   On v3r5 current_in reads in the low range unless "range" says otherwise.  `count` stays raw.  A short
+   analog module v3r4; from v4 100 ohm in parallel with the ADC divider, current_in_sense_mohm).
+   On v4 current_in reads in the low range unless "range" says otherwise.  `count` stays raw.  A short
    16-sample burst, averaged ON THE 16-BIT CIRCLE and then unwrapped — see
    adc_scale.h.  Averaging the RAW counts first (what this did until 2026-07-29)
    returns a plausible-looking number that is wrong by tens of volts whenever the
@@ -244,7 +244,7 @@ void handle_adc_read(int conn_id, const char *json) {
     bool want = false;
     if (!range_arg(conn_id, json, p, &want_r, &want)) return;
     if (!heavy_begin(conn_id)) return;
-    /* Without "range", current_in on analog module v3r5 reads in the low range (analog_path_set). */
+    /* Without "range", current_in on analog module v4 reads in the low range (analog_path_set). */
     if ((want ? analog_path_set_ranged(p) : analog_path_set(p)) != 0) {
         heavy_release(conn_id); send_error(conn_id, "route failed"); return;
     }

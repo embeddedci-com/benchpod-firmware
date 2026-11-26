@@ -24,7 +24,7 @@ const xip_hash_t *xip_image_expected_of(xip_img_t img) { return img < XIP_IMG_CO
 bool xip_supported(void)
 {
 #if defined(BENCHPOD_XIP_RAM) || defined(BENCHPOD_XIP_BODGE_PB6)
-    return true;    /* dev builds that run the image on boards without the v3r4 chip-select */
+    return true;    /* dev builds that run the image on boards without the v4 chip-select */
 #else
     return board_caps()->qspi_cs_ncs_pins;
 #endif

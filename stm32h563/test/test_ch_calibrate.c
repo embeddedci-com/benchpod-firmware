@@ -298,7 +298,7 @@ static long field(const char *key) {
 }
 
 /* The 4-20 mA input by module revision: 249 ohm in the range in use up to v3r4, 100 ohm and the
-   low range by default from v3r5. */
+   low range by default from v4. */
 static void test_current_in_by_revision(void) {
     mock_flash_reset();
     cal_data_select(3);
@@ -317,20 +317,20 @@ static void test_current_in_by_revision(void) {
     handle_calibrate(0, "{\"cmd\":\"calibrate\"}");
     CHECK(field("sense_mohm") == 249000, "v3r4 calibration: %s", g_reply);
 
-    /* v3r5: the low range by itself, 100 ohm || 1.82M. */
+    /* v4: the low range by itself, 100 ohm || 1.82M. */
     g_shunt_100r = true;
     handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"current_in\"}");
     CHECK(strstr(g_reply, "\"range\":\"low\"") && field("sense_mohm") == 99995 && strstr(g_reply, "\"fullscale_mv\":54"),
-          "v3r5 read: %s", g_reply);
-    CHECK(labs(field("ua") - lround(field("uv") * 1000.0 / 99995.0)) <= 1, "v3r5 ua: %s", g_reply);
+          "v3r4 read: %s", g_reply);
+    CHECK(labs(field("ua") - lround(field("uv") * 1000.0 / 99995.0)) <= 1, "v3r4 ua: %s", g_reply);
     handle_calibrate(0, "{\"cmd\":\"calibrate\"}");
-    CHECK(field("sense_mohm") == 99995 && strstr(g_reply, "\"range\":\"low\""), "v3r5 calibration in the low range: %s", g_reply);
+    CHECK(field("sense_mohm") == 99995 && strstr(g_reply, "\"range\":\"low\""), "v4 calibration in the low range: %s", g_reply);
     /* The next source gets the normal range back: the +-12 V output stays free. */
     handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"ext\"}");
     CHECK(strstr(g_reply, "\"range\":\"normal\"") && g_range == ADC_RANGE_NORMAL, "ext after current_in: %s", g_reply);
     /* Asked for: the normal range on current_in, 100 ohm || 992.5k, and it stays. */
     handle_adc_read(0, "{\"cmd\":\"adc_read\",\"source\":\"current_in\",\"range\":\"normal\"}");
-    CHECK(strstr(g_reply, "\"range\":\"normal\"") && field("sense_mohm") == 99990, "v3r5 normal: %s", g_reply);
+    CHECK(strstr(g_reply, "\"range\":\"normal\"") && field("sense_mohm") == 99990, "v4 normal: %s", g_reply);
     /* A low range the user chose stays when another source is routed. */
     handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"current_in\",\"range\":\"low\"}");
     handle_analog_path(0, "{\"cmd\":\"analog_path\",\"path\":\"ext\"}");

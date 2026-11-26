@@ -1164,7 +1164,7 @@ encoding and can't wire a path two different ways.
 | `adc_ext` (`ext`, `sma`) | ADC ← front-panel input SMA | ~1 MΩ high-Z, ÷12 (low range: 1.82 MΩ, ÷2) |
 | `cal1` | Internal 5 V DAC → ADC loopback | 5 V path |
 | `cal2` | Internal ±12 V differential DAC → ADC loopback | ±12 V path |
-| `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground; 100 Ω behind a 30 mA limiter from analog module v3r5, which also takes the low range by default, see [`adc_read`](#adc_read--route-a-source-and-return-a-calibrated-reading)) | J8 |
+| `current_in` | ADC ← 4-20 mA measurement terminal (249 Ω to ground; 100 Ω behind a 30 mA limiter from analog module v4, which also takes the low range by default, see [`adc_read`](#adc_read--route-a-source-and-return-a-calibrated-reading)) | J8 |
 | `current_out` | DAC → 4-20 mA output terminal (J9) only: the DAC voltage outputs are switched off, the ADC relays stay as they are | unchanged |
 
 The DAC output paths also open all ADC relays (the ADC returns to the external
@@ -1289,7 +1289,7 @@ regulated, so nothing else in the loop may connect to pod ground.
 - Use a supply whose output is isolated from pod ground and from earth. The pod's own 5 V and
   0-20 V outputs cannot power the loop.
 - Do not connect supply minus, or the low side of the receiver, to pod ground.
-- J9 cannot be wired to the pod's own measurement terminal J8, because J8 is a resistor to pod ground (249 Ω, or 100 Ω from analog module v3r5).
+- J9 cannot be wired to the pod's own measurement terminal J8, because J8 is a resistor to pod ground (249 Ω, or 100 Ω from analog module v4).
 - A target whose loop input is referenced to a ground it shares with the pod (through SWD or
   UART wiring) cannot be driven either. Use an isolated loop input on the target.
 - If the loop does touch pod ground, the current bypasses the sense resistor, is no longer
@@ -1361,9 +1361,9 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 
 - `ua`: the loop current in µA. The pod reads the voltage across its sense resistor, so
   `ua = uv × 1000 / sense_mohm`. On analog modules up to v3r4 that is 249 Ω: 4 mA is 996 mV
-  and 20 mA is 4980 mV. From analog module v3r5 it is 100 Ω: 4 mA is 400 mV and 20 mA is 2 V.
+  and 20 mA is 4980 mV. From analog module v4 it is 100 Ω: 4 mA is 400 mV and 20 mA is 2 V.
 - `sense_mohm` (firmware 3.10.13+): the resistance `ua` was computed with, in milliohms.
-  249000 up to module v3r4. From v3r5 it is 100 Ω in parallel with the ADC input divider, whose
+  249000 up to module v3r4. From v4 it is 100 Ω in parallel with the ADC input divider, whose
   current also comes from the loop: 99990 in the normal range, 99995 in the low range.
 - `offset_mv`: this pod's calibration offset, which is already taken out of `mv` and `ua`
   (see [`calibrate`](#calibrate--calibrate-the-adc-offset-on-the-current_in-input-j8)). It is 0 on a pod that was
@@ -1371,9 +1371,9 @@ a whole millivolt, which hides most of what the low range resolves (about 167 µ
 
 `count` is always raw.
 
-**From analog module v3r5** (firmware 3.10.13+) the 4-20 mA input changes. No v3r5 module is built yet: the v3r5 values in this table and the next paragraph are calculated from the design and the part datasheets, not measured.
+**From analog module v4** (firmware 3.10.13+) the 4-20 mA input changes. No v4 module is built yet: the v4 values in this table and the next paragraph are calculated from the design and the part datasheets, not measured.
 
-| | Module up to v3r4 | Module v3r5 and later |
+| | Module up to v3r4 | Module v4 and later |
 |---|---|---|
 | Sense resistor | 249 Ω | 100 Ω, 0.1 % |
 | Protection | none in series | series diode and a 30 mA current limiter |
@@ -1389,7 +1389,7 @@ not follow the loop is the limiter, not the transmitter. The diode blocks a reve
 should read 0. The ADC reads at the resistor, after the diode and the limiter, so their drop does not enter
 the reading.
 
-On a v3r5 module, routing `current_in` without a `range` (here, in `analog_path` and in a
+On a v4 module, routing `current_in` without a `range` (here, in `analog_path` and in a
 capture) switches the ADC to the [low range](#adc_range--the-adc-input-range-analog-module-v3r4)
 by itself: 31.5 mA is 3.15 V, well inside its ±5.46 V. The next path that moves the relays (any
 source or output but `current_out`) puts the range back to normal, so the ±12 V output is not
@@ -1402,7 +1402,7 @@ ID EEPROM (see [`module`](#module--the-analog-module-and-its-eeprom)), read at b
 → {"status":"ok","data":{"source":"current_in","mv":3985,"uv":3985402,"count":61562,"span":6,"range":"normal",
    "fullscale_mv":32856,"overrange":false,"offset_mv":10,"ua":16004,"sense_mohm":249000}}
 
-{"cmd":"adc_read","source":"current_in"}   // analog module v3r5: the low range by default
+{"cmd":"adc_read","source":"current_in"}   // analog module v4: the low range by default
 → {"status":"ok","data":{"source":"current_in","mv":1600,"uv":1600212,"count":55938,"span":5,"range":"low",
    "fullscale_mv":5462,"overrange":false,"offset_mv":10,"ua":16003,"sense_mohm":99995}}
 ```
@@ -1424,7 +1424,7 @@ The low range gives about 6x the resolution on signals up to ±5 V. **Use 1x lea
 1.82 MΩ input does not match a 10x scope probe, which expects 1 MΩ.
 
 The divider is in front of every ADC source, so the range applies to `ext`, `cal1` and
-`current_in` (4-20 mA is 0.996 to 4.98 V, inside the low range; 0.4 to 2 V from module v3r5, which
+`current_in` (4-20 mA is 0.996 to 4.98 V, inside the low range; 0.4 to 2 V from module v4, which
 reads `current_in` in the low range by default). `cal2` (±12 V) has no low range.
 The range stays until it is changed, `analog_path` `off` or `cal2` is routed, or the pod restarts;
 each of those puts it back to `normal`. Older boards (and modules before v3r4, whose EEPROM says a
@@ -1513,7 +1513,7 @@ tunnels) has `adc_range` and `adc_range_fs_mv`. `cal_switch` reports K5 as `low_
 
 `current_in` is the 4-20 mA terminal J8: pin 1 goes through a 249 Ω resistor to pod ground and
 pin 2 is ground. The pod reads the voltage across that resistor, so 4 mA is 996 mV and
-20 mA is 4980 mV. From analog module v3r5 the resistor is 100 Ω behind a series diode and a
+20 mA is 4980 mV. From analog module v4 the resistor is 100 Ω behind a series diode and a
 30 mA current limiter: 4 mA is 400 mV and 20 mA is 2 V (see [`adc_read`](#adc_read--route-a-source-and-return-a-calibrated-reading)). The
 calibration is the same on both: the offset is measured with J8 open, at 0 V.
 
@@ -1559,7 +1559,7 @@ reference.
 | `offset_mv` | The offset in mV, rounded. `adc_read` reports the same value |
 | `offset_uv` | The offset in µV, as stored |
 | `a_uv`, `b_nv` | The fit the pod now uses for `current_in`: `a` in µV and `b` in nV per count, the same units as `adc_cal_a_uv` / `adc_cal_b_nv` in the [capabilities frame](#capabilities-frame--adc-calibration-fields). Unwrap the count first, as for every source |
-| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v3r5 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware 3.10.13+) |
+| `sense_mohm` | The resistance a `current_in` voltage is turned into the loop current with, in milliohms, for the range in use: 249000 up to analog module v3r4, from v4 99990 (normal) or 99995 (low). Loop current = volts × 1000 / `sense_mohm` (firmware 3.10.13+) |
 | `count`, `span` | Raw mean count and peak-to-peak spread of the measurement (calibrate only) |
 | `samples` | Samples averaged (calibrate only) |
 | `dac`, `adc_gain_ppm`, `dmm` | The DMM-guided parts (firmware 3.9.4+), see [below](#dmm-guided-calibration-firmware-394) |
@@ -1827,9 +1827,9 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `c3_restarts` | number | Boards with the built-in Wi-Fi (ESP32-C3) only: how many times the pod restarted the C3 since power-on (firmware 3.10.1+). The count survives software and watchdog resets and OTA updates; a power-on or the reset pin sets it to 0. The causes are in [`wifi_status`](#wifi_status). |
 | `usb` | object | The [USB network adapter](usb-serial-interface.md#usb-network-adapter) (firmware 3.9.0+): `net` is `true`, or `false` with `off_reason` `"setting"` (the [`usb_network`](#usb_network--the-usb-network-adapter-on-or-off) setting is off; the pod then enumerates as its console only) or `"wifi"` (Wi-Fi credentials are stored); `enabled` is the stored `usb_network` setting (up to firmware 3.10.13 `net` and `setting` were `"on"`/`"off"`); `link` is `true` when a computer has the adapter up; `ip` is the pod's address on it and `host_ip` the one its DHCP server gives the computer. Not counted in `net` or `ip`. `source` and `source_ma` are what the USB-C port powering the pod advertises (as [`usb_cc`](#usb_cc--usb-c-cc-line-state) `advertised`, `null` on a v2 pod): `"default"` (500 mA, a typical computer port) can be too little for the pod plus a DUT on the internal 5 V rail, so clients warn about it. |
 | `adc_bits`, `adc_fullscale_mv`, `adc_channels` | integer | ADC format. |
-| `la_vccio_mv` | integer | LA I/O voltage, `0` while unset: the bank (1800 or 3300), or `5000` in the 5 V mode of digital v3r4 (the bank is then at 3.3 V). |
+| `la_vccio_mv` | integer | LA I/O voltage, `0` while unset: the bank (1800 or 3300), or `5000` in the 5 V mode of digital v4 (the bank is then at 3.3 V). |
 | `adc_cal_a_uv`, `adc_cal_b_nv`, `adc_cal_unwrap` | integer, integer, bool | The front-SMA ADC fit captures are scaled with, this pod's calibrated offset included (analog board, firmware 3.9.3+). Same fields as the [capabilities frame](#capabilities-frame--adc-calibration-fields). Full form only: cloud clients read the fit from the capabilities. |
-| `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v3r4"` (digital v3r4, firmware 3.10.13+), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v3r4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
+| `board_rev` | string | PCB revision, detected at boot from the revision straps: `"v2"`, `"v3"`, `"v3r2"` (analog v3r2), `"v4"` (digital v4, firmware 4.0.7+; firmware 3.10.13 to 4.0.6 reported it as `"v3r4"`), or `"unknown"`. Gates the LA-bank 1.8 V setting, the dedicated NRST pin, and USB-C CC monitoring. Digital v3r3 carries the v3 strap and reports `"v3"`; the `module` field tells it apart. Digital v4 is reported only when both straps agree; otherwise the board runs as `"v3"`, exactly as older firmware runs it. |
 | `nrst_pin` | boolean | `true` when the pod has the dedicated target-reset pin (v3+). When `false`, `nrst` and CMSIS-DAP `SWJ_PINS` reset requests are no-ops. |
 | `flash_kb` | integer | The MCU's internal flash: `2048` or `1024`. Updaters check it before sending an image. |
 | `sig_policy`, `sig_keys` | string, integer | The [signature policy](#sig_policy--which-firmware-and-blob-updates-the-pod-accepts) and how many release keys the firmware trusts. |
@@ -1854,7 +1854,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `api` | integer | Firmware 4.0.0+: the [client API level](#client-compatibility) this firmware speaks. |
 | `min_client_api` | integer | Firmware 4.0.0+: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
 | `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v3r4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
+| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
 
 #### Removed in firmware 4.0.0
 
@@ -1972,7 +1972,7 @@ Older firmware answers `BP0002` (unknown command): read them from its `status` t
 | `malloc_failures` | integer | Allocations that failed since boot. |
 | `rx_dropped`, `tx_dropped` | integer | Console bytes dropped because a ring was full. |
 | `board_rev_mv` | integer | Raw revision-strap voltage in millivolts (`-1` if not measured). |
-| `board_rev2_mv` | integer | The second revision strap in millivolts. Only on boards whose first strap reads the digital v3r4 band (firmware 3.10.13+); absent on every older board. |
+| `board_rev2_mv` | integer | The second revision strap in millivolts. Only on boards whose first strap reads the digital v4 band (firmware 3.10.13+); absent on every older board. |
 
 ---
 
@@ -2026,7 +2026,7 @@ reset line had to borrow an LA channel) and did not bring the bank rail out.
 - **`LA_VCCIO` (pin 21):** the same rail that feeds the LA bank buffers, so a DUT
   can be referenced to it. Select it with
   [`la_voltage`](#la_voltage--select-the-la-io-bank-voltage) *before* connecting a
-  DUT — on a v3 pod it comes up at 3.3 V. On digital v3r4 pin 21 is also the pull-up rail, the
+  DUT — on a v3 pod it comes up at 3.3 V. On digital v4 pin 21 is also the pull-up rail, the
   pod measures it, and it goes to 5 V in [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io).
 
 ---
@@ -2075,8 +2075,8 @@ Engages or releases the pull resistor on an LA channel, in a direction: `up`, `d
 on boards with more than one value per channel the firmware picks it from the pin's
 function. Which channels have a resistor, and which way each one can pull, depends on
 the board. The reply and [`la_pins`](#la_pins--report-every-la-pin) say it per channel
-(`dirs`). On boards before digital v3r4 each resistor pulls one way only (digital v3r4 pulls
-both ways on every channel, see [below](#pull-resistors-on-digital-v3r4)):
+(`dirs`). On boards before digital v4 each resistor pulls one way only (digital v4 pulls
+both ways on every channel, see [below](#pull-resistors-on-digital-v4)):
 
 | LA pin | Resistor | | LA pin | Resistor |
 |---|---|---|---|---|
@@ -2128,9 +2128,9 @@ Firmware up to 3.10.13 also replied `pullup` (`1` when engaged), `ohms` (the res
 and `pull` (the channel's default direction); [`la_pins`](#la_pins--report-every-la-pin) has the
 resistor's value and direction. Firmware before the `la_pull_dir` feature takes `pullup` only.
 
-#### Pull resistors on digital v3r4
+#### Pull resistors on digital v4
 
-Digital v3r4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware 3.10.13+;
+Digital v4 (feature `la_pull_strength`, hardware fact `vref_out`; firmware 3.10.13+;
 designed, not built yet) has two resistors on **every** channel, LA1-LA14: a 10k and a 2.2k, each switched by an I2C
 expander that can pull up or down. So every channel pulls `up` or `down`, with 10k, 2.2k
 or both (about 1.8k). The pull-ups go to J1 pin 21, which follows the I/O voltage (1.8 V,
@@ -2151,7 +2151,7 @@ The pod picks the strength from the pin's function unless the host names one:
   "dirs": ["up","down"], "strength": "both", "strengths": ["10k","2.2k","both"], "pullups_available": true}}
 ```
 
-- `strength` (optional, digital v3r4): `"10k"`, `"2.2k"` or `"both"`. Without it the pod picks
+- `strength` (optional, digital v4): `"10k"`, `"2.2k"` or `"both"`. Without it the pod picks
   from the table above. Other boards ignore it, as older firmware does.
 - The reply adds `strength` (`"none"` when off) and `strengths`.
 - [`la_pins`](#la_pins--report-every-la-pin) entries leave `dirs` out on this board (every
@@ -2171,7 +2171,7 @@ The pod picks the strength from the pin's function unless the host names one:
   the setting the pod puts back. In [`la_pins`](#la_pins--report-every-la-pin), `gpio` and
   `la_dir` entries, `on` is what is on the wire. Other boards never hold a pull, and their
   replies have no `held`.
-- As on the other v3 boards, the pulls stay on when the bank switches; on v3r4 that includes
+- As on the other v3 boards, the pulls stay on when the bank switches; on v4 that includes
   switching to and from 5 V (pin 21 moves with it).
 
 #### Read all pulls as a bitmask
@@ -2192,9 +2192,9 @@ Response:
 pulls (here `0b00000101` = LA1 and LA3). `pullups_available` reports whether a pull can be engaged at
 the current bank voltage (`true` = yes, at 1.8 V or 3.3 V; firmware before `la_pull_1v8`: 3.3 V only).
 
-On digital v3r4 (firmware 3.10.13+), while the pod holds pulls off, the mask is what is on
+On digital v4 (firmware 3.10.13+), while the pod holds pulls off, the mask is what is on
 the wire and the reply adds `held` (the reason, as in [the pull resistors on digital
-v3r4](#pull-resistors-on-digital-v3r4)) and `asked_mask`, the pulls the host set, which the pod
+v4](#pull-resistors-on-digital-v4)) and `asked_mask`, the pulls the host set, which the pod
 puts back:
 
 ```json
@@ -2219,9 +2219,9 @@ puts back:
 | a direction the channel's resistor can't pull | BP0024 `"LA7 supports pull-down only on this board"` (args `la`, `want`, `have`) |
 | `up`/`down` with the LA bank at 1.8 V on a v2 board (pull-ups on 3.3 V) | `"this board's pull-ups go to 3.3 V; set the LA bank to 3.3 V first"` (firmware before `la_pull_1v8` refused this on every board) |
 | pull-**down** enable on a pin whose function needs the line high | `BP0033` (`la_pull_down_conflict`; see [pin ownership](#la-pin-ownership-functions-and-conflicts)) |
-| `strength` not `10k`, `2.2k` or `both` (digital v3r4) | `"strength must be 10k, 2.2k or both"` |
-| `up`/`down` while J1 pin 21 is down (digital v3r4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
-| `up`/`down` before an I/O voltage is set (digital v3r4) | `BP0001` (`la_voltage_not_set`) |
+| `strength` not `10k`, `2.2k` or `both` (digital v4) | `"strength must be 10k, 2.2k or both"` |
+| `up`/`down` while J1 pin 21 is down (digital v4) | BP0029 `"pin 21 is down (120 mV): the pull resistors are off until it is back"` |
+| `up`/`down` before an I/O voltage is set (digital v4) | `BP0001` (`la_voltage_not_set`) |
 | the I2C write to a pull expander failed | `"pull expander write failed"` |
 
 The step train also participates in **pin ownership**: a free step / `dir_la` pin is claimed
@@ -2287,9 +2287,9 @@ Setting a level on a pin that is not a gpio output is refused with `BP0036`
 
 Engaged pulls are checked against pin functions in **both** directions: when claiming a function
 on a pin whose pull is engaged, and when engaging a pull on a pin that already has a function.
-On boards before digital v3r4 the resistors are fixed (LA1/LA2 4.7k up, LA3/LA4 2.2k up,
+On boards before digital v4 the resistors are fixed (LA1/LA2 4.7k up, LA3/LA4 2.2k up,
 LA5/LA6 10k up, **LA7/LA8 10k down**, LA9-LA14 none), so only LA7/LA8 can have a pull-down
-engaged. On digital v3r4 every channel can pull down, and the table applies to any channel
+engaged. On digital v4 every channel can pull down, and the table applies to any channel
 with its pull-down engaged.
 
 | Function | Pull-up engaged | Pull-down engaged |
@@ -2350,7 +2350,7 @@ Response:
 | `dir` | only when set with [`la_dir`](#la_dir--which-way-each-pins-dut-signal-goes): `dut_input`, `dut_output` or `bidir` |
 | `warn` | only when non-zero, bits: 1 = a pull is on under a push-pull output (it only costs current; use `open_drain` or switch the pull off), 2 = the pod's target power is off while the pin is driven high or pulled up (this powers an unpowered DUT through its I/O pins; ignore it when the DUT has its own supply) |
 | `levels` | live pin levels, bit `la-1`, read back from the gateware; `null` when the running image is older than **v35** |
-| `pull_dirs` | digital v3r4 only: `["up","down"]`, every channel's pull directions (the entries leave `dirs` out) |
+| `pull_dirs` | digital v4 only: `["up","down"]`, every channel's pull directions (the entries leave `dirs` out) |
 | `next` | only when the reply could not carry every pin asked for (firmware 4.0.1+): the first pin it left out. Ask again with `"from":<next>` (and the same `la`, if any) for the rest |
 
 The full reply is about 1.3 kB. With a `dir` and a `warn` on every pin it can reach about
@@ -2503,12 +2503,12 @@ applied at boot.
 A bare `{"cmd": "la_voltage"}` reports `{"mv": 0, …}` before any voltage is
 set (it does not take the profile's). `status` also carries the current selection as `la_vccio_mv` (0 = unset).
 
-#### 5 V and pin 21 (digital board v3r4)
+#### 5 V and pin 21 (digital board v4)
 
-On digital v3r4 (feature `la_5v`, hardware fact `vref_out`; firmware 3.10.13+) `mv` also
+On digital v4 (feature `la_5v`, hardware fact `vref_out`; firmware 3.10.13+) `mv` also
 takes **`5000`**: 5 V I/O. In short, the bank stays at 3.3 V, J1 pin 21 (the pull-up rail) goes
 to 5 V, and outputs reach 5 V through their pull-up. What it means for your wiring is on the
-[5 V page](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io). This section is the protocol. No v3r4 board is built yet, so its numbers come
+[5 V page](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io). This section is the protocol. No v4 board is built yet, so its numbers come
 from the design and the datasheets.
 
 The pod checks pin 21 after switching. Below 4.3 V it goes back to the previous voltage and
@@ -2523,7 +2523,7 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 
 - `mv`: the DUT's I/O voltage (`5000` in 5 V mode); `readback_mv` stays the bank (3300).
   `status.la_vccio_mv` reports the same `mv`.
-- `vref_out` (digital v3r4 only): pin 21. `source` `bank` (follows the bank, 1.8 or 3.3 V, also
+- `vref_out` (digital v4 only): pin 21. `source` `bank` (follows the bank, 1.8 or 3.3 V, also
   at power-up) or `5v`; `set_mv` what it should be; `mv` what the pod measures (`-1` without a
   reading); `up` pin 21 is high enough for the pull resistors to work. `state`:
   - `ok`: within the band of its setting (5 V mode: 4.3 to 5.3 V).
@@ -2548,10 +2548,10 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 > `3300` works on both. The boot default is also different: on v3 the mux comes up
 > at **3.3 V**, on v2 it comes up **unpowered**.
 
-> **Pulls at 1.8 V.** On v3 boards before digital v3r4 the LA1-LA6 pull-ups go to the bank rail
-> and the LA7/LA8 pull-downs to ground; on digital v3r4 every channel pulls both ways and the
+> **Pulls at 1.8 V.** On v3 boards before digital v4 the LA1-LA6 pull-ups go to the bank rail
+> and the LA7/LA8 pull-downs to ground; on digital v4 every channel pulls both ways and the
 > pull-ups go to J1 pin 21, which follows the I/O voltage (see
-> [Pull resistors on digital v3r4](#pull-resistors-on-digital-v3r4)). So pulls work at every
+> [Pull resistors on digital v4](#pull-resistors-on-digital-v4)). So pulls work at every
 > I/O voltage and engaged pulls stay on when the bank switches (firmware with the `la_pull_1v8`
 > feature; older firmware refused pulls at 1.8 V and released them on the switch to 1.8 V). The
 > pre-production v2 boards had their pull-ups on 3.3 V and cannot run the bank at 1.8 V anyway.
@@ -2560,8 +2560,8 @@ refuses `5000` as before (`"la voltage must be 1800 or 3300 (mv)"`).
 
 | Condition | Message |
 |---|---|
-| `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` (digital v3r4: `"la voltage must be 1800, 3300 or 5000 (mv)"`) |
-| `mv: 5000` and pin 21 stayed below 4.3 V (digital v3r4) | `BP0028`: `"5 V did not come up on pin 21 (4120 mV); check the USB supply"` |
+| `mv` not 1800 or 3300 | `"la voltage must be 1800 or 3300 (mv)"` (digital v4: `"la voltage must be 1800, 3300 or 5000 (mv)"`) |
+| `mv: 5000` and pin 21 stayed below 4.3 V (digital v4) | `BP0028`: `"5 V did not come up on pin 21 (4120 mV); check the USB supply"` |
 | `mv: 1800` on a v2 pod | `"1.8 V needs a v3 pod; this board is v2 (its TPS2116 has no 1.8 V setting)"` |
 | any LA op before a voltage is set | `BP0001` (`la_voltage_not_set`) |
 | a **change** while any LA pin has a function | `BP0037` (`la_voltage_pins_in_use`, args `pins`: `"LA3 (uart_rx), LA4 (uart_tx)"`) |
@@ -2635,10 +2635,10 @@ Which port:
 
 | Pod | Port | How the board connects |
 |---|---|---|
-| digital v3r4 and later | `usb_a` (the default) | its normal USB cable in the pod's USB-A host port |
+| digital v4 and later | `usb_a` (the default) | its normal USB cable in the pod's USB-A host port |
 | older pods only (no USB-A host port) | `usb_c` | the pod's own USB-C connector, through a breakout: D+, D- and GND to the board, 5 V from a supply into the pod's VBUS (the pod gives the board no VBUS: a board powered from USB gets the same 5 V) |
 
-`status` `board_rev` tells them apart (`"v3r4"` has the USB-A host port).
+`status` `board_rev` tells them apart (`"v4"` has the USB-A host port).
 
 ```json
 {"cmd": "usb_host", "enabled": true, "port": "usb_c", "timeout_s": 120}
@@ -2925,7 +2925,7 @@ inrush at power-on, sleep-current floors, the energy of one duty cycle.
 The eFuses auto-retry after ~110 ms and blank faults for ~2.8 ms, so **a fast trip (< 1 ms)
 will not appear in a ~1 kHz profile** — `stats.fault` is the reliable indicator that one
 happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `current_in` input is a
-4–20 mA terminal, 249 Ω or 100 Ω from analog module v3r5, *not* the DUT supply — do not use it for this.)
+4–20 mA terminal, 249 Ω or 100 Ω from analog module v4, *not* the DUT supply — do not use it for this.)
 
 #### Start
 
@@ -3031,7 +3031,7 @@ The [features table](#features-table) has `power_profile`.
 
 ### `uart_proxy_start` — transparent UART bridge
 
-Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins run at the I/O voltage: 1.8 V or 3.3 V, and on digital v3r4 also 5 V (feature `la_5v`, see [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io)). On older boards a 5 V UART needs a level shifter between the pod and the device. An RS-485 bus (Modbus RTU) needs an external RS-485 transceiver between the pod and the bus. The MCU forwards bytes both ways over SPI.
+Bridges a DUT UART through two LA channels, turning the connection into a serial-over-TCP pipe (the network equivalent of the console's `uart-proxy`). The iCE40 gateware runs a soft UART on the chosen channels (**8N1** by default; 8E1, 8O1, 8N2 and the other parity and stop-bit combinations with gateware v56+). The LA pins run at the I/O voltage: 1.8 V or 3.3 V, and on digital v4 also 5 V (feature `la_5v`, see [5 V I/O](https://embeddedci.com/docs/benchpod-targets/5v-rs485#5v-io)). On older boards a 5 V UART needs a level shifter between the pod and the device. An RS-485 bus (Modbus RTU) needs an external RS-485 transceiver between the pod and the bus. The MCU forwards bytes both ways over SPI.
 
 Like `dap_start`, this is **connection-scoped** and changes how the connection's bytes are interpreted:
 
@@ -3146,7 +3146,7 @@ There is **no inactivity timeout** — an idle serial console stays open.
 | parity or two stop bits on gateware older than v56 | `BP0017` (feature `parity and stop_bits`, min 56) |
 | a UART proxy is already active (console or another connection) | `BP0049` (`uart_session_open`) |
 | `rx` or `tx` belongs to another function | `BP0031` (see [pin ownership](#la-pin-ownership)) |
-| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v3r4) | `BP0032`: the UART idles high |
+| `rx`/`tx` on a channel with its pull-**down** engaged (LA7 or LA8 before digital v4) | `BP0032`: the UART idles high |
 | the iCE40 does not answer after arming | `"uart proxy failed: FPGA not responding (check gateware)"` |
 
 `rx` and `tx` are **claimed** for the session (functions `uart_rx` / `uart_tx`, or `uart_hd` for the one pin of a half-duplex UART, and `uart_de` for `de`) and released
@@ -3154,11 +3154,11 @@ when the proxy ends, so nothing else can be armed onto them meanwhile.
 
 > **RX pull hold.** The proxy holds the RX line high for the session so a DUT's floating TX
 > pin does not decode as a flood of `0x00` before its firmware brings the UART up. On digital
-> v3r4 this works on every channel (a 10k pull-up to J1 pin 21). On older boards it only
+> v4 this works on every channel (a 10k pull-up to J1 pin 21). On older boards it only
 > happens on **LA1-LA6**, whose resistors pull **up** (to the bank rail, so at 1.8 V too;
 > firmware before `la_pull_1v8` skipped it at a 1.8 V bank): LA7/LA8 pull *down* (engaging theirs
 > would guarantee the very flood it prevents) and LA9-LA14 have no resistor. On the digital
-> v3r4 board every channel pulls up (10k, 2.2k on a one-wire line). The previous state
+> v4 board every channel pulls up (10k, 2.2k on a one-wire line). The previous state
 > is restored when the proxy ends, and a failure to restore it is logged on the console.
 
 ---
@@ -4351,10 +4351,10 @@ The one-piece analog boards (analog v3r1, v3r2) and the earlier digital boards a
 <a id="dac-pinout-on-the-flat-cable"></a>
 ### DAC pinout on the flat cable
 
-The DAC's clock and data lines cross the flat cable. Digital v3r4 and analog module 3.5 swapped
+The DAC's clock and data lines cross the flat cable. Digital v4 and analog module v4 swapped
 them, so the clock sits next to a ground pin:
 
-| Pin | Digital v3r3, analog module 3.4 and earlier | Digital v3r4+, analog module 3.5+ |
+| Pin | Digital v3r3, analog module 3.4 and earlier | Digital v4+, analog module v4+ |
 |---|---|---|
 | 7 | DAC data | DAC clock |
 | 8 | DAC clock | DAC data |

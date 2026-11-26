@@ -55,7 +55,7 @@
  * Shared quad-SPI bus (XSPI) — iCE40 cfg-flash (W25Q64, U2) + PSRAM (APS6404L,
  * U7) + iCE40 (U1).  Two chip-selects.   [/ICE_SCLK, /ICE_SPI_SO/SI, /ICE_IO2/3]
  *   PF10 SCLK, PF8 IO0, PF9 IO1, PF7 IO2, PF6 IO3
- *   /ICE_SS (cfg-flash CS) and /ICE_SS_PSRAM (PSRAM CS): PE3 and PE4, on digital v3r4 PB6 and
+ *   /ICE_SS (cfg-flash CS) and /ICE_SS_PSRAM (PSRAM CS): PE3 and PE4, on digital v4 PB6 and
  *   PC11.  Chosen per revision at boot (qspi_cs.h), so the macros below read RAM variables.
  *   PF13 = /ICE_CRESET,  PF14 = /ICE_CDONE
  * ------------------------------------------------------------------------- */
@@ -70,9 +70,9 @@
 #define XSPI_IO3_PORT                GPIOF
 #define XSPI_IO3_PIN                 GPIO_PIN_6
 #include "qspi_cs.h"
-#define ICE_FLASH_CS_PORT            (qspi_cs.flash_port)   /* /ICE_SS: PE3, v3r4 PB6 */
+#define ICE_FLASH_CS_PORT            (qspi_cs.flash_port)   /* /ICE_SS: PE3, v4 PB6 */
 #define ICE_FLASH_CS_PIN             (qspi_cs.flash_pin)
-#define PSRAM_CS_PORT                (qspi_cs.psram_port)   /* /ICE_SS_PSRAM: PE4, v3r4 PC11 */
+#define PSRAM_CS_PORT                (qspi_cs.psram_port)   /* /ICE_SS_PSRAM: PE4, v4 PC11 */
 #define PSRAM_CS_PIN                 (qspi_cs.psram_pin)
 #define ICE_CRESET_PORT              GPIOF         /* /ICE_CRESET (PF13) */
 #define ICE_CRESET_PIN               GPIO_PIN_13
@@ -213,14 +213,14 @@
 #define BOARD_REV_V3_NOMINAL_MV      3000
 /* Analog v3r2: R164 2.2k over R163 10k: 3300 * 10k/(10k+2.2k). */
 #define BOARD_REV_V3R2_NOMINAL_MV    2705
-/* Digital v3r4: R164 1k over R163 100k: 3300 * 100k/(100k+1k). */
-#define BOARD_REV_V3R4_NOMINAL_MV    3267
+/* Digital v4: R164 1k over R163 100k: 3300 * 100k/(100k+1k). */
+#define BOARD_REV_V4_NOMINAL_MV    3267
 
 /* ---------------------------------------------------------------------------
- * Second revision strap (digital v3r4+)   [/BOARD_REV2, PF12, MCU pin 50]
- *   R226 10 k to +3V3 over R227 10 k to GND: 1.65 V on digital v3r4. The first
- *   strap (PA3) sits at the top of its range on v3r4, so later revisions change
- *   this divider instead. Read only when PA3 says v3r4 or later: on every older
+ * Second revision strap (digital v4+)   [/BOARD_REV2, PF12, MCU pin 50]
+ *   R226 10 k to +3V3 over R227 10 k to GND: 1.65 V on digital v4. The first
+ *   strap (PA3) sits at the top of its range on v4, so later revisions change
+ *   this divider instead. Read only when PA3 says v4 or later: on every older
  *   board PF12 is something else (ESP32_BOOT on v3r2 and older) and is never
  *   touched. See board_rev.c.
  *   PF12 = ADC1_INP6 (datasheet pin table, pin 50).
@@ -229,11 +229,11 @@
 #define BOARD_REV2_PIN               GPIO_PIN_12
 #define BOARD_REV2_CLK_EN()          __HAL_RCC_GPIOF_CLK_ENABLE()
 #define BOARD_REV2_ADC_CH            ADC_CHANNEL_6
-/* Digital v3r4: 10k/10k, half the rail. */
-#define BOARD_REV2_V3R4_NOMINAL_MV   1650
+/* Digital v4: 10k/10k, half the rail. */
+#define BOARD_REV2_V4_NOMINAL_MV   1650
 
 /* ---------------------------------------------------------------------------
- * J1 pin 21 VREF_OUT (digital v3r4 only: board_caps()->vref_out)
+ * J1 pin 21 VREF_OUT (digital v4 only: board_caps()->vref_out)
  *   U67 (TPS2116, manual mode) feeds pin 21 and the pull expanders' VCCP from VIN1 = LA_VCCIO
  *   (the bank, 1.8 or 3.3 V) or VIN2 = VREF_5V (U68 SY6280 switch from +5V).
  *   PG5 VREF_SEL  -> U67 PR1, R208 100 k to +3V3: high or released = VIN1 (follow the bank),
@@ -257,10 +257,10 @@
 #define VREF_SENSE_MUL               3
 
 /* ---------------------------------------------------------------------------
- * LA pull expanders' reset (digital v3r4 only: board_caps()->pull_expanders)
+ * LA pull expanders' reset (digital v4 only: board_caps()->pull_expanders)
  *   PG7 PULL_RST -> U18 and U54 /RESET, R64 10 k to GND: both TCA6416A held in reset (every
  *   port an input, every pull off) until firmware drives it high.  pull_exp.c.  [MCU pin 92]
- * USB switch (digital v3r4 only: board_caps()->usb_sel)
+ * USB switch (digital v4 only: board_caps()->usb_sel)
  *   PC9 USB_SEL -> U64 S, R202 10 k to GND: low = USB-C (the default), high = the USB-A host
  *   port.  Driven only by the USB host role (usb_device.c, USB_HOST=1).  [MCU pin 99]
  * ------------------------------------------------------------------------- */

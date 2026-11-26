@@ -1,11 +1,11 @@
 /*
  * test_ch_pins.c: host tests for the LA pull commands (src/command_handler_pins.c: `la` with a
  * pull, the pull-mask query, `la_voltage`) and the pull driver under them, on every board
- * revision: the TCA9554 switch per channel before digital v3r4, the two pull expanders on v3r4
+ * revision: the TCA9554 switch per channel before digital v4, the two pull expanders on v4
  * (pull_exp.c), through the pull layer (la_pull.c).  The replies are compared whole: clients match their fields and texts.
  *
  * Real code: the handlers, la_pull.c and both backends (pull_tca9554.c, pull_exp.c), the pin table.  Fakes: the
- * TCA9554 pin writes, the I2C bus under the v3r4 expanders, pin 21, target power, the LA bank
+ * TCA9554 pin writes, the I2C bus under the v4 expanders, pin 21, target power, the LA bank
  * voltage, the FPGA and the reply path.
  */
 #include <stdio.h>
@@ -79,7 +79,7 @@ int  la_vccio_set_mv(int mv) { if (g_set_rc == 0) g_vccio = g_io = mv; return g_
 int  la_vccio_status_pin(void) { return 1; }
 int  la_vccio_readback_mv(void) { return 3290; }
 
-/* TCA9554 at 0x20 (boards before v3r4): the output and direction bits the driver wrote. */
+/* TCA9554 at 0x20 (boards before v4): the output and direction bits the driver wrote. */
 static uint8_t g_tca_out, g_tca_dir;
 static bool    g_tca_fail;
 int tca9554_set_dir(uint8_t addr, uint8_t pin, bool out) {
@@ -93,7 +93,7 @@ int tca9554_write_pin(uint8_t addr, uint8_t pin, bool v) {
     return 0;
 }
 
-/* Digital v3r4: the expanders' reset line, their I2C writes, pin 21, target power. */
+/* Digital v4: the expanders' reset line, their I2C writes, pin 21, target power. */
 GPIO_TypeDef shim_gpiog;
 static bool g_in_reset = true, g_i2c_fail, g_rail_up = true, g_power_on = true;
 static int  g_vref_mv = 3300;
@@ -133,7 +133,7 @@ static void board(int rev) {
     g_vccio = g_io = LA_VCCIO_3V3;
 }
 
-/* ---- boards before digital v3r4: one TCA9554 switch per channel ---------------------- */
+/* ---- boards before digital v4: one TCA9554 switch per channel ---------------------- */
 static void test_tca9554_board(int rev, const char *name) {
     printf("  %s\n", name);
     board(rev);
@@ -170,7 +170,7 @@ static void test_tca9554_board(int rev, const char *name) {
     REPLY("err:pull must be up, down or off");
     la("{\"cmd\":\"la_pull\",\"la\":15}");
     REPLY("err:LA15 is not a pin (use 1..14)");
-    /* "strength" is a v3r4 argument: older boards ignore it, as older firmware does */
+    /* "strength" is a v4 argument: older boards ignore it, as older firmware does */
     la("{\"cmd\":\"la_pull\",\"la\":3,\"pull\":\"up\",\"strength\":\"5k\"}");
     REPLY("ok:{\"la\":3,\"state\":\"up\",\"dirs\":[\"up\"],\"pullups_available\":true}");
 
@@ -214,14 +214,14 @@ static void test_tca9554_board(int rev, const char *name) {
     REPLY("ok:{\"la_pullup_mask\":0,\"pullups_available\":true}");
 }
 
-/* ---- digital v3r4: the two pull expanders -------------------------------------------- */
-static void test_v3r4(void) {
-    printf("  v3r4\n");
+/* ---- digital v4: the two pull expanders -------------------------------------------- */
+static void test_v4(void) {
+    printf("  v4\n");
     g_rail_up = true; g_vref_mv = 3300; g_power_on = true;
-    board(BOARD_REV_V3R4);
+    board(BOARD_REV_V4);
     la_pull_init();   /* the expanders out of reset: pin 21 is up */
     la_pull_poll();
-    CHECK(la_pull_available(), "v3r4: pulls available with pin 21 up");
+    CHECK(la_pull_available(), "v4: pulls available with pin 21 up");
 
     la("{\"cmd\":\"la_pull\",\"la\":12,\"pull\":\"down\",\"strength\":\"2.2k\"}");
     REPLY("ok:{\"la\":12,\"state\":\"down\",\"dirs\":[\"up\",\"down\"],"
@@ -235,18 +235,18 @@ static void test_v3r4(void) {
           "\"strength\":\"both\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"pullups_available\":true}");
     la("{\"cmd\":\"la_pull\",\"la\":3,\"pull\":\"up\",\"strength\":\"5k\"}");
     REPLY("err:strength must be 10k, 2.2k or both");
-    CHECK(la_pull_asked_str(3) == PULL_STR_BOTH, "v3r4: a refused strength changes nothing");
+    CHECK(la_pull_asked_str(3) == PULL_STR_BOTH, "v4: a refused strength changes nothing");
     /* the function picks 2.2k for an open-drain line */
     uint8_t p = 5;
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OPEN_DRAIN, 1, &p, 1);
-    CHECK(la_pull_set(5, LA_PULL_UP, PULL_STR_NONE) == 0 && la_pull_asked_str(5) == PULL_STR_2K2, "v3r4: open drain gets 2.2k");
-    CHECK(la_pull_set(5, LA_PULL_NONE, PULL_STR_NONE) == 0 && !(la_pull_asked(5) != LA_PULL_NONE), "v3r4: LA5 off");
+    CHECK(la_pull_set(5, LA_PULL_UP, PULL_STR_NONE) == 0 && la_pull_asked_str(5) == PULL_STR_2K2, "v4: open drain gets 2.2k");
+    CHECK(la_pull_set(5, LA_PULL_NONE, PULL_STR_NONE) == 0 && !(la_pull_asked(5) != LA_PULL_NONE), "v4: LA5 off");
     la_pins_release(5);
     /* 5 V mode: a pod output gets 2.2k (it lifts a 3.3 V high to 5 V) */
     g_io = LA_VCCIO_5V0;
     la_pins_claim(LA_FN_GPIO, LA_GPIO_OUTPUT, 1, &p, 1);
-    CHECK(la_pull_set(5, LA_PULL_UP, PULL_STR_NONE) == 0 && la_pull_asked_str(5) == PULL_STR_2K2, "v3r4 5 V: output gets 2.2k");
-    CHECK(la_pull_set(5, LA_PULL_NONE, PULL_STR_NONE) == 0, "v3r4: LA5 off");
+    CHECK(la_pull_set(5, LA_PULL_UP, PULL_STR_NONE) == 0 && la_pull_asked_str(5) == PULL_STR_2K2, "v4 5 V: output gets 2.2k");
+    CHECK(la_pull_set(5, LA_PULL_NONE, PULL_STR_NONE) == 0, "v4: LA5 off");
     la_pins_release(5);
     g_io = LA_VCCIO_3V3;
 
@@ -260,32 +260,32 @@ static void test_v3r4(void) {
           "\"strength\":\"both\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"held\":\"dut_off\",\"pullups_available\":true}");
     la("{\"cmd\":\"la_pull\"}");
     REPLY("ok:{\"la_pullup_mask\":2048,\"pullups_available\":true,\"held\":\"dut_off\",\"asked_mask\":2052}");
-    CHECK((la_pull_asked(3) != LA_PULL_NONE) && !la_pull_live(3) && la_pull_live(12), "v3r4: LA3 asked, not live");
+    CHECK((la_pull_asked(3) != LA_PULL_NONE) && !la_pull_live(3) && la_pull_live(12), "v4: LA3 asked, not live");
     power(true);
     la("{\"cmd\":\"la_pull\"}");
     REPLY("ok:{\"la_pullup_mask\":2052,\"pullups_available\":true}");
 
     /* pin 21 down: everything held off, a new pull refused with BP0029 */
     rail(false);
-    CHECK(!la_pull_available(), "v3r4: no pulls with pin 21 down");
+    CHECK(!la_pull_available(), "v4: no pulls with pin 21 down");
     la("{\"cmd\":\"la_pull\",\"la\":12}");
     REPLY("ok:{\"la\":12,\"state\":\"off\",\"dirs\":[\"up\",\"down\"],"
           "\"strength\":\"2.2k\",\"strengths\":[\"10k\",\"2.2k\",\"both\"],\"held\":\"pin21_down\",\"pullups_available\":false}");
     la("{\"cmd\":\"la_pull\"}");
     REPLY("ok:{\"la_pullup_mask\":0,\"pullups_available\":false,\"held\":\"pin21_down\",\"asked_mask\":2052}");
     la("{\"cmd\":\"la_pull\",\"la\":6,\"pull\":\"up\"}");
-    CHECK(g_code == BP_E_PULL_RAIL_DOWN && strcmp(g_arg0, "120") == 0, "v3r4: BP0029 (%d %s)", g_code, g_arg0);
-    CHECK(la_pull_set(6, LA_PULL_UP, PULL_STR_NONE) == LA_PULL_ERR_RAIL, "v3r4: rail error");
-    CHECK(la_pull_set(6, LA_PULL_NONE, PULL_STR_NONE) == 0, "v3r4: off is allowed with pin 21 down");
+    CHECK(g_code == BP_E_PULL_RAIL_DOWN && strcmp(g_arg0, "120") == 0, "v4: BP0029 (%d %s)", g_code, g_arg0);
+    CHECK(la_pull_set(6, LA_PULL_UP, PULL_STR_NONE) == LA_PULL_ERR_RAIL, "v4: rail error");
+    CHECK(la_pull_set(6, LA_PULL_NONE, PULL_STR_NONE) == 0, "v4: off is allowed with pin 21 down");
     rail(true);
     la("{\"cmd\":\"la_pull\"}");
     REPLY("ok:{\"la_pullup_mask\":2052,\"pullups_available\":true}");
 
     /* no I/O voltage yet: BP0001 */
     g_vccio = g_io = LA_VCCIO_UNSET;
-    CHECK(!la_pull_available(), "v3r4: no pulls without an I/O voltage");
+    CHECK(!la_pull_available(), "v4: no pulls without an I/O voltage");
     la("{\"cmd\":\"la_pull\",\"la\":6,\"pull\":\"up\"}");
-    CHECK(g_code == BP_E_LA_VOLTAGE_NOT_SET, "v3r4: BP0001 (%d)", g_code);
+    CHECK(g_code == BP_E_LA_VOLTAGE_NOT_SET, "v4: BP0001 (%d)", g_code);
     g_vccio = g_io = LA_VCCIO_3V3;
 
     /* a write that fails: held ("fault") until the next pull turned on retries */
@@ -293,10 +293,10 @@ static void test_v3r4(void) {
     la("{\"cmd\":\"la_pull\",\"la\":6,\"pull\":\"up\"}");
     REPLY("err:pull expander write failed");
     la("{\"cmd\":\"la_pull\",\"la\":12}");
-    CHECK(strstr(g_reply, "\"held\":\"fault\"") != NULL, "v3r4: held fault: %s", g_reply);
+    CHECK(strstr(g_reply, "\"held\":\"fault\"") != NULL, "v4: held fault: %s", g_reply);
     g_i2c_fail = false;
     la("{\"cmd\":\"la_pull\",\"la\":6,\"pull\":\"up\"}");
-    CHECK(strstr(g_reply, "ok:{\"la\":6,\"state\":\"up\",") == g_reply, "v3r4: the retry: %s", g_reply);
+    CHECK(strstr(g_reply, "ok:{\"la\":6,\"state\":\"up\",") == g_reply, "v4: the retry: %s", g_reply);
     la("{\"cmd\":\"la_pull\"}");
     REPLY("ok:{\"la_pullup_mask\":2084,\"pullups_available\":true}");
 
@@ -339,7 +339,7 @@ static void test_la_voltage(void) {
     la_voltage("{\"cmd\":\"la_voltage\",\"mv\":2500}");
     REPLY("err:la voltage must be 1800 or 3300 (mv)");
 
-    board(BOARD_REV_V3R4);
+    board(BOARD_REV_V4);
     la_voltage("{\"cmd\":\"la_voltage\",\"mv\":2500}");
     REPLY("err:la voltage must be 1800, 3300 or 5000 (mv)");
     /* 5 V that does not come up on pin 21: BP0028 */
@@ -387,7 +387,7 @@ int main(void) {
     test_tca9554_board(BOARD_REV_V3R2, "v3r2");
     test_step();
     test_la_voltage();
-    test_v3r4();   /* last: pull_exp_init latches the expanders for the rest of the run */
+    test_v4();   /* last: pull_exp_init latches the expanders for the rest of the run */
     printf("test_ch_pins: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

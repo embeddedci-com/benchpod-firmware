@@ -217,7 +217,7 @@ bool module_dac_pinout_mismatch(void)
                              module_ee_has_cn1_dac_swap(s_id_rc, &s_id));
 }
 
-const char *module_dac_pinout_digital(void) { return board_caps()->cn1_dac_swap ? "v3r4+" : "v3r3"; }
+const char *module_dac_pinout_digital(void) { return board_caps()->cn1_dac_swap ? "v4+" : "v3r3"; }
 
 const char *module_dac_pinout_module(char *buf, size_t cap)
 {

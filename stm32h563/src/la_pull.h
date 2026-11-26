@@ -6,9 +6,9 @@
  * the host asked for, what is on the wire now, and the one place that switches them.
  *
  * Two backends, picked once by la_pull_init() from board_caps():
- *   pull_tca9554.c  the boards before digital v3r4: one TCA9554 at 0x20 closes a switch per
+ *   pull_tca9554.c  the boards before digital v4: one TCA9554 at 0x20 closes a switch per
  *                   channel (LA1-LA8), each with one fixed resistor and direction.
- *   pull_exp.c      digital v3r4: two TCA6416A expanders, every channel up or down with 10k,
+ *   pull_exp.c      digital v4: two TCA6416A expanders, every channel up or down with 10k,
  *                   2.2k or both, pulling to J1 pin 21 (pull_exp.h).
  * Nothing outside this module and the backends asks which board it runs on for a pull: callers
  * read la_pull_caps() and the state functions below.  The asked-for state lives in the backend
@@ -27,7 +27,7 @@
 typedef enum { LA_PULL_NONE = 0, LA_PULL_UP, LA_PULL_DOWN } la_pull_dir_t;
 #define LA_PULL_BIT(d) ((uint8_t)(1u << (unsigned)(d)))
 
-/* Strength: which resistors a channel engages (digital v3r4; the older boards have one fixed
+/* Strength: which resistors a channel engages (digital v4; the older boards have one fixed
    resistor per channel and no choice). */
 typedef enum { PULL_STR_NONE = 0, PULL_STR_10K = 1, PULL_STR_2K2 = 2, PULL_STR_BOTH = 3 } pull_str_t;
 #define LA_PULL_STR_BIT(s) ((uint8_t)(1u << (unsigned)(s)))
@@ -45,25 +45,25 @@ typedef struct {
     const char *ohms;        /* the value shown while off ("4.7k"), NULL without a resistor */
 } la_pull_caps_t;
 
-/* Pick the backend for board_caps() and start it (digital v3r4: the expanders out of reset once
+/* Pick the backend for board_caps() and start it (digital v4: the expanders out of reset once
    pin 21 is up).  Once at boot, after board_caps_init(), vref_out_init() and i2c_bus_init().
    Before it runs no pull is on and none can be engaged (the table is the older boards'). */
 void           la_pull_init(void);
-/* The backend's periodic work (v3r4: pull-ups follow the pod's target power).  hw worker loop. */
+/* The backend's periodic work (v4: pull-ups follow the pod's target power).  hw worker loop. */
 void           la_pull_poll(void);
 
 la_pull_caps_t la_pull_caps(unsigned la);      /* all zero for an out-of-range channel */
 /* Can the channel's resistor pull in direction d (UP or DOWN)? */
 bool           la_pull_supports(unsigned la, la_pull_dir_t d);
-/* Every channel pulls both ways (digital v3r4): listings say so once instead of per pin. */
+/* Every channel pulls both ways (digital v4): listings say so once instead of per pin. */
 bool           la_pull_both_ways(void);
-/* The pulls go to J1 pin 21 (digital v3r4), not to the bank rail: they are off while it is down. */
+/* The pulls go to J1 pin 21 (digital v4), not to the bank rail: they are off while it is down. */
 bool           la_pull_rail_is_pin21(void);
 
 /* The direction the channel reports: the one engaged when the host asked for one, else its
    default; LA_PULL_NONE without a resistor. */
 la_pull_dir_t  la_pull_dir(unsigned la);
-/* The resistor's value as text: what is engaged ("1.8k" for both on v3r4), else the default
+/* The resistor's value as text: what is engaged ("1.8k" for both on v4), else the default
    ("4.7k"); NULL on a channel without one. */
 const char    *la_pull_ohms(unsigned la);
 
@@ -71,8 +71,8 @@ const char    *la_pull_ohms(unsigned la);
 
 /* Errors of la_pull_set (0 = done). */
 #define LA_PULL_ERR_IO       (-1)   /* bad channel, no resistor, or the expander write failed */
-#define LA_PULL_ERR_VOLTAGE  (-2)   /* digital v3r4: no I/O voltage selected yet */
-#define LA_PULL_ERR_RAIL     (-3)   /* digital v3r4: pin 21 is down, the expanders are held in reset */
+#define LA_PULL_ERR_VOLTAGE  (-2)   /* digital v4: no I/O voltage selected yet */
+#define LA_PULL_ERR_RAIL     (-3)   /* digital v4: pin 21 is down, the expanders are held in reset */
 #define LA_PULL_ERR_BANK     (-4)   /* older boards: no bank voltage yet, or a v2 board at 1.8 V
                                        (its pull-ups go to +3V3) */
 #define LA_PULL_ERR_NOT_HERE (-5)   /* la_pull_hold: the channel can't pull that way, or no pull can
@@ -87,11 +87,11 @@ la_pull_dir_t  la_pull_asked(unsigned la);
 /* The strength asked for (PULL_STR_NONE when off or on a fixed resistor). */
 pull_str_t     la_pull_asked_str(unsigned la);
 /* The pull is on the wire now.  The same as la_pull_asked() != LA_PULL_NONE everywhere but
-   digital v3r4, where a pull the host asked for is off while pin 21 is down, after a failed
+   digital v4, where a pull the host asked for is off while pin 21 is down, after a failed
    write, or while pull-ups are suspended (pull_exp.h). */
 bool           la_pull_live(unsigned la);
 /* A pull can be engaged right now: older boards need a bank voltage, and 3.3 V on v2 (v3 pulls go
-   to the bank rail and work at 1.8 V too); v3r4 needs an I/O voltage and the expanders live. */
+   to the bank rail and work at 1.8 V too); v4 needs an I/O voltage and the expanders live. */
 bool           la_pull_available(void);
 /* Every channel off (always allowed). */
 void           la_pull_all_off(void);

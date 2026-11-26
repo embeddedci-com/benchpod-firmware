@@ -100,7 +100,7 @@ static void test_loop_current(void) {
         CHECK(current_in_ua(v, r249) == lroundf(v * 1000000.0f / 249.0f), "%.3f V differs from before", v);
     }
 
-    /* Module v3r5: 100 ohm in parallel with the ADC divider (992.5k normal, 1.82M low). */
+    /* Module v4: 100 ohm in parallel with the ADC divider (992.5k normal, 1.82M low). */
     uint32_t rn = current_in_sense_mohm(true, false), rl = current_in_sense_mohm(true, true);
     CHECK(rn == 99990 && rl == 99995, "100 ohm: normal %lu, low %lu mohm", (unsigned long)rn, (unsigned long)rl);
     CHECK(current_in_ua(0.4f, rl) == 4000 && current_in_ua(2.0f, rl) == 20001, "4 / 20 mA low: %ld %ld",
@@ -227,11 +227,11 @@ static void test_revision_selects_the_fits(void) {
     cal_lin_t fit = adc_cal_current_in_fit();
     CHECK(fit.a == ADC_CAL_CAL1.a && fit.b == ADC_CAL_CAL1.b, "current_in must follow the selected cal1 fit");
 
-    /* Digital v3r4 (BOARD_REV_V3R4 = 5) is a v3 board: the same set as rev3, never v2. */
+    /* Digital v4 (BOARD_REV_V4 = 5) is a v3 board: the same set as rev3, never v2. */
     cal_lin_t v3_cal1 = ADC_CAL_CAL1, v3_dac5 = DAC_CAL[1];
     cal_data_select(5);
     CHECK(ADC_CAL_CAL1.a == v3_cal1.a && ADC_CAL_CAL1.b == v3_cal1.b && DAC_CAL[1].b == v3_dac5.b,
-          "digital v3r4 did not get the rev3 fits");
+          "digital v4 did not get the rev3 fits");
     cal_data_select(3);
 
     cal_data_select(2);

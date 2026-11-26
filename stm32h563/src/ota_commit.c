@@ -83,7 +83,7 @@ static uint32_t s_sector_crc[OTA_MAX_SECTORS];
 /* ---- RAM-resident primitives (no flash access, no libcalls) --------------- */
 
 /* Tight PSRAM quad-read of `n` (<= OTA_RD_BURST) bytes at `addr` into `buf`,
-   framed by the PSRAM CS (PE4, PC11 on digital v3r4: qspi_cs.h) as a GPIO.  The pin is read
+   framed by the PSRAM CS (PE4, PC11 on digital v4: qspi_cs.h) as a GPIO.  The pin is read
    from qspi_cs, which is in RAM, so nothing here touches the flash being erased.  The OCTOSPI is already configured (QPI,
    50 MHz) by psram_init(); this reuses that state.  Returns nothing (the
    self-test validates correctness). */

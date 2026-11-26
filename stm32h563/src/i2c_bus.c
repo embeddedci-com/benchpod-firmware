@@ -338,7 +338,7 @@ int i2c_bus_write_read(uint8_t addr, const uint8_t *wbuf, size_t wlen,
 
 bool i2c_bus_probe(uint8_t addr) { return i2c_bus_probe_on(I2C_BUS_MAIN, addr); }
 
-/* The LA pull resistors (TCA9554 at 0x20 and the digital v3r4 expanders): la_pull.c and its
+/* The LA pull resistors (TCA9554 at 0x20 and the digital v4 expanders): la_pull.c and its
    backends, pull_tca9554.c and pull_exp.c. */
 
 /* ---- Analog path switching: U55 @ 0x24 (DAC mux) + U58 @ 0x26 (cal) -------
@@ -354,7 +354,7 @@ static uint8_t s_u58_out;       /* ANASW  shadow */
 static bool    s_ana14;         /* analog v3r2: the +-14 V supply is on (U58 P4) */
 static bool    s_low_hw;        /* analog module v3r4: K5 on U58 P5 (board_caps, latched in analog_switch_init) */
 static bool    s_low;           /* K5 energised: the ADC low range */
-static bool    s_shunt_100r;    /* analog module v3r5: R81 is 100 ohm (board_caps, latched in analog_switch_init) */
+static bool    s_shunt_100r;    /* analog module v4: R81 is 100 ohm (board_caps, latched in analog_switch_init) */
 static bool    s_low_auto;      /* the low range was picked by a current_in route (analog_path_auto_range) */
 static analog_path_t s_path = ANALOG_PATH_OFF;   /* the last path that moved the relays */
 /* Where U55/U58 sit: the main bus on the one-piece analog boards, the module bus (I2C2) when the
@@ -518,7 +518,7 @@ static int path_set(analog_path_t path, bool ranged)
     if (analog_path_switches(path, quad, &sw) != 0) return -1;
     int r = 0;
     /* off and cal2 put the range back to normal; calsw_set below writes K5 with the relays.
-       current_out does not move the relays: K5 has nothing to change there.  On module v3r5
+       current_out does not move the relays: K5 has nothing to change there.  On module v4
        current_in takes the low range by itself and the next relay path gives it back
        (analog_path_auto_range); with `ranged` the caller sets the range next, so only off and
        cal2 act here. */

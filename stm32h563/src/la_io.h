@@ -1,7 +1,7 @@
 #ifndef LA_IO_H
 #define LA_IO_H
 
-/* la_io: the LA I/O bank (TPS2116 mux), 5 V I/O and pin 21 (digital v3r4).
+/* la_io: the LA I/O bank (TPS2116 mux), 5 V I/O and pin 21 (digital v4).
 
    The LA bank VCCIO (iCE40 bank 0 — supplies ALL of LA1..LA14) is switched
    between 3.3 V and 1.8 V by a TPS2116 power-mux (U8): PG3 (LA_VCCIO_SWITCH)
@@ -31,7 +31,7 @@
    tracked in software (LA_VCCIO_UNSET at boot) and enforced independently of the
    hardware default so the host makes an explicit choice.
 
-   Two voltages, and they differ only in 5 V mode (digital v3r4, board_caps()->la_5v), where
+   Two voltages, and they differ only in 5 V mode (digital v4, board_caps()->la_5v), where
    the bank stays at 3.3 V and pin 21 goes to 5 V:
      la_vccio_get_mv()  the bank: what the FPGA pins, the clamps and the pull gates see
                         (UNSET, 1V8 or 3V3).  Ask this for "is a voltage chosen" and for the
@@ -44,7 +44,7 @@
 #define LA_VCCIO_UNSET 0
 #define LA_VCCIO_1V8   1800
 #define LA_VCCIO_3V3   3300
-/* 5 V I/O, digital v3r4 only (board_caps()->la_5v): the bank at 3.3 V, pin 21 at 5 V. */
+/* 5 V I/O, digital v4 only (board_caps()->la_5v): the bank at 3.3 V, pin 21 at 5 V. */
 #define LA_VCCIO_5V0   5000
 /* After a bank change on a board with the LA clamps (board_caps()->la_clamps).  Calculated from the
    clamp reference's filter; to be checked on the first board. */
@@ -56,7 +56,7 @@ void la_vccio_init(void);
 /* Select the LA bank voltage; mv must be LA_VCCIO_1V8 or LA_VCCIO_3V3.
    Drives PG3 with the revision's polarity and settles the rail.
    Returns 0 on success, -1 on an invalid millivolt value, -2 for 1800 on a v2
-   board (the mux cannot produce 1.8 V there — see above).  Digital v3r4 also takes
+   board (the mux cannot produce 1.8 V there — see above).  Digital v4 also takes
    LA_VCCIO_5V0 (-3: 5 V did not come up on pin 21; the previous setting is restored);
    every other board refuses 5000 with -1, as before. */
 int  la_vccio_set_mv(int mv);
@@ -71,7 +71,7 @@ int  la_vccio_status_pin(void);
    where ST low is ambiguous between "1.8 V" and "shut down". */
 int  la_vccio_readback_mv(void);
 
-/* 5 V I/O (digital v3r4): the bank to 3.3 V, then pin 21 to 5 V, checked on the pin 21 sense.
+/* 5 V I/O (digital v4): the bank to 3.3 V, then pin 21 to 5 V, checked on the pin 21 sense.
    0 ok (also when it already is), -3 5 V did not come up (the previous setting is restored), or
    la_vccio_set_mv()'s error for the 3.3 V step.  la_vccio_set_mv(LA_VCCIO_5V0) calls it on a
    board with board_caps()->la_5v; exposed for the host test. */

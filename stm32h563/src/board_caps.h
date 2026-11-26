@@ -31,7 +31,7 @@
 /* The calibration set a revision's analog section was fitted on (cal_data.h). */
 typedef enum {
     BOARD_CAL_V2 = 0,   /* v2, and any revision this firmware does not know */
-    BOARD_CAL_V3,       /* v3, analog-v3r1, the digital boards (v3r4 included) */
+    BOARD_CAL_V3,       /* v3, analog-v3r1, the digital boards (v4 included) */
     BOARD_CAL_V3R2,     /* analog v3r2 (and the analog module, set by main.c) */
 } board_cal_set_t;
 
@@ -72,7 +72,7 @@ typedef struct {
        front end is the module. */
     board_cal_set_t cal_set;
 
-    /* ---- digital v3r4 ---- */
+    /* ---- digital v4 ---- */
     /* J1 pin 21 is VREF_OUT: PG5 VREF_SEL (follow the bank / 5 V input), PG6 VREF_5V_EN (the 5 V
        switch) and the PF11 VREF_SENSE divider (one third of pin 21).  vref_out.h. */
     bool vref_out;

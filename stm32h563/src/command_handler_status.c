@@ -181,7 +181,7 @@ static void status_emit(bp_emit_t *e, const status_in_t *in, bool brief) {
 #endif
     bp_emit(e, "\"adc_bits\":%d,\"adc_fullscale_mv\":%d,\"adc_channels\":%d,\"la_vccio_mv\":%d,",
             ADC_BITS, ADC_FULLSCALE_MV, ADC_CHANNELS, la_io_get_mv());
-    /* la_vccio_mv is the DUT's I/O voltage: 5000 in the 5 V mode of digital v3r4.  Pin 21 itself
+    /* la_vccio_mv is the DUT's I/O voltage: 5000 in the 5 V mode of digital v4.  Pin 21 itself
        is in the la_voltage reply (the status reply has no room for it; the hw fact vref_out). */
     /* The front-SMA fit captures are scaled with, this pod's offset included (adc_cal.h): the
        same values the cloud capabilities carry, so a LAN client scales like the server does.
@@ -326,7 +326,7 @@ void handle_diag(int conn_id, const char *json) {
     bp_emit(&e, "\"malloc_failures\":%lu,\"rx_dropped\":%lu,\"tx_dropped\":%lu,\"board_rev_mv\":%d,",
             (unsigned long)g_malloc_failures, (unsigned long)console_rx_dropped(),
             (unsigned long)console_tx_dropped(), board_rev_strap_mv());
-    /* The second strap: digital v3r4 and later only, so older boards report what they did. */
+    /* The second strap: digital v4 and later only, so older boards report what they did. */
     if (board_rev2_strap_mv() >= 0) bp_emit(&e, "\"board_rev2_mv\":%d,", board_rev2_strap_mv());
     sys_health_task_t t[SYS_HEALTH_MAX_TASKS];
     int n = sys_health_tasks(t, SYS_HEALTH_MAX_TASKS);

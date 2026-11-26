@@ -20,13 +20,14 @@ static const module_case_t k_modules[] = {
     { "2.9",       MOD_EE_OK,        2, 9, false },
     { "3.3",       MOD_EE_OK,        3, 3, false },
     { "3.4",       MOD_EE_OK,        3, 4, false },
-    { "3.5",       MOD_EE_OK,        3, 5, true  },
-    { "3.6",       MOD_EE_OK,        3, 6, true  },
+    { "3.5",       MOD_EE_OK,        3, 5, false },
+    { "3.6",       MOD_EE_OK,        3, 6, false },
     { "4.0",       MOD_EE_OK,        4, 0, true  },
-    { "blank",     MOD_EE_BLANK,     3, 5, false },   /* rev fields ignored: never written */
-    { "bad crc",   MOD_EE_BAD_CRC,   3, 5, false },
-    { "bad magic", MOD_EE_BAD_MAGIC, 3, 5, false },
-    { "no chip",   -10,              3, 5, false },   /* MOD_EE_NO_CHIP (module_link.h) */
+    { "4.1",       MOD_EE_OK,        4, 1, true  },
+    { "blank",     MOD_EE_BLANK,     4, 0, false },   /* rev fields ignored: never written */
+    { "bad crc",   MOD_EE_BAD_CRC,   4, 0, false },
+    { "bad magic", MOD_EE_BAD_MAGIC, 4, 0, false },
+    { "no chip",   -10,              4, 0, false },   /* MOD_EE_NO_CHIP (module_link.h) */
 };
 
 static void test_module_revision(void)
@@ -39,14 +40,14 @@ static void test_module_revision(void)
               "module %s: clock on pin %d", k_modules[i].name, k_modules[i].swap ? 7 : 8);
     }
     module_id_t other = { 0 };
-    other.type = 7; other.rev_major = 3; other.rev_minor = 5;
+    other.type = 7; other.rev_major = 4; other.rev_minor = 0;
     CHECK(!module_ee_has_cn1_dac_swap(MOD_EE_OK, &other), "not an analog module: older pinout");
     CHECK(!module_ee_has_cn1_dac_swap(MOD_EE_OK, NULL), "no header: older pinout");
 }
 
 static void test_digital_side(void)
 {
-    CHECK(board_caps_for_rev(BOARD_REV_V3R4).cn1_dac_swap, "digital v3r4: clock on pin 7");
+    CHECK(board_caps_for_rev(BOARD_REV_V4).cn1_dac_swap, "digital v4: clock on pin 7");
     const int older[] = { BOARD_REV_V2, BOARD_REV_V3, BOARD_REV_V3R2, BOARD_REV_UNKNOWN };
     for (size_t i = 0; i < sizeof(older) / sizeof(older[0]); i++)
         CHECK(!board_caps_for_rev(older[i]).cn1_dac_swap, "rev %d: clock on pin 8", older[i]);
@@ -56,7 +57,7 @@ static void test_digital_side(void)
 static void test_pairs(void)
 {
     const struct { const char *name; int rev; } digital[] = {
-        { "v3r3", BOARD_REV_V3 }, { "v3r4", BOARD_REV_V3R4 },
+        { "v3r3", BOARD_REV_V3 }, { "v4", BOARD_REV_V4 },
     };
     for (size_t d = 0; d < 2; d++) {
         bool dswap = board_caps_for_rev(digital[d].rev).cn1_dac_swap;
@@ -65,7 +66,7 @@ static void test_pairs(void)
             id.type = MOD_TYPE_ANALOG;
             id.rev_major = k_modules[m].major; id.rev_minor = k_modules[m].minor;
             bool mswap = module_ee_has_cn1_dac_swap(k_modules[m].rc, &id);
-            bool want = (d == 1) != k_modules[m].swap;   /* new digital needs a 3.5+ module */
+            bool want = (d == 1) != k_modules[m].swap;   /* new digital needs a v4+ module */
             CHECK(dac_link_mismatch(true, true, dswap, mswap) == want,
                   "digital %s + module %s: %s", digital[d].name, k_modules[m].name,
                   want ? "refused" : "allowed");

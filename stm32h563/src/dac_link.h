@@ -5,12 +5,12 @@
  * dac_link — the DAC's two lines on the module flat cable (pure, host-tested).
  *
  * On a two-board pod the DAC's serial clock and data cross the 24-pin flat cable (CN1) from
- * the digital board to the analog module.  Digital v3r4 and analog module 3.5 swapped them, so
+ * the digital board to the analog module.  Digital v4 and analog module v4 swapped them, so
  * the clock sits next to a ground pin:
  *
  *                       CN1 pin 7   CN1 pin 8
  *   older boards        DAC data    DAC clock    digital v3r3, analog module 3.4 and earlier
- *   newer boards        DAC clock   DAC data     digital v3r4+, analog module 3.5+
+ *   newer boards        DAC clock   DAC data     digital v4+, analog module v4+
  *
  * The gateware is the same for both: only the cable pins moved, on both boards.  A pair that
  * mixes the two clocks DAC frames on the data line, so the DAC latches garbage and its outputs
@@ -26,8 +26,8 @@
 #include <stdint.h>
 
 /* The first analog module revision with the DAC clock on CN1 pin 7. */
-#define DAC_LINK_SWAP_REV_MAJOR 3u
-#define DAC_LINK_SWAP_REV_MINOR 5u
+#define DAC_LINK_SWAP_REV_MAJOR 4u
+#define DAC_LINK_SWAP_REV_MINOR 0u
 
 /* The two boards put the DAC clock on different CN1 pins.  link_board: a two-board pod
    (module_link_board); present: its module was seen at boot; digital_swap: the digital board

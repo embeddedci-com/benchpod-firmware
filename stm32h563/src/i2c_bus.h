@@ -161,7 +161,7 @@ int  i2c_bus_write_read_on(i2c_bus_id_t bus, uint8_t addr, const uint8_t *wbuf, 
                            uint8_t *rbuf, size_t rlen);
 bool i2c_bus_probe_on(i2c_bus_id_t bus, uint8_t addr);
 
-/* The LA pull resistors (the TCA9554 at 0x20 on the boards before digital v3r4) are in
+/* The LA pull resistors (the TCA9554 at 0x20 on the boards before digital v4) are in
    la_pull.h. */
 
 /* ---- Analog path switching (v2) -----------------------------------------
@@ -276,7 +276,7 @@ typedef struct {
 int analog_path_switches(analog_path_t path, bool quad, analog_switches_t *out);
 
 /* Apply a path (sets all needed switches atomically). Returns 0 / <0 on I2C err.
-   On analog module v3r5 (100 ohm sense resistor, current_in_shunt_100r) routing current_in also
+   On analog module v4 (100 ohm sense resistor, current_in_shunt_100r) routing current_in also
    picks the ADC low range by itself, and the next path that moves the relays puts it back
    (analog_path_auto_range).  analog_path_set_ranged is for a caller that sets the range itself
    right after (a request with "range"): no automatic switch then. */
@@ -308,7 +308,7 @@ const char *adc_range_name(adc_range_t r);
 int         adc_range_from_name(const char *name, adc_range_t *out);
 /* The path leaves the range as it is (true) or puts it back to normal (off, cal2).  Pure. */
 bool        analog_path_keeps_low_range(analog_path_t path);
-/* The ADC range after routing `path` (analog module v3r5's current_in default).  `relays`: the path
+/* The ADC range after routing `path` (analog module v4's current_in default).  `relays`: the path
    moves the relays (analog_switches_t), `shunt_100r` / `low_hw`: the module, `cur` / `cur_auto`:
    the range now and whether a current_in route picked it.  *auto_out: the range returned was
    picked that way.  current_in on a 100 ohm module takes the low range (0 to 31.5 mA is 0 to
@@ -320,7 +320,7 @@ adc_range_t  analog_path_auto_range(analog_path_t path, bool relays, bool shunt_
 
 /* This board has K5 (latched in analog_switch_init from the module EEPROM). */
 bool        adc_range_supported(void);
-/* The 4-20 mA input's sense resistor (R81) is 100 ohm: analog module v3r5 and later (latched in
+/* The 4-20 mA input's sense resistor (R81) is 100 ohm: analog module v4 and later (latched in
    analog_switch_init from the module EEPROM, like adc_range_supported).  False = 249 ohm. */
 bool        current_in_shunt_100r(void);
 /* The range in use (K5's state). */

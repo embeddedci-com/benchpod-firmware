@@ -347,7 +347,7 @@ static void handle_la_step(int conn_id, const char *json, const char *steps_s) {
 /* {"cmd":"la_pull"} -> the pull bitmask, bit (la-1) = LA<la>.
    pullups_available says whether a pull CAN be engaged right now (a bank voltage is set; on v2
    boards it must be 3.3 V); la_pullup_mask is always the truth about what is on the wire.  While
-   the pod holds pulls off (digital v3r4): why, and the mask the host asked for (put back by the
+   the pod holds pulls off (digital v4): why, and the mask the host asked for (put back by the
    pod).  Never on other boards, where the two masks are the same. */
 static void handle_la_pull_mask(int conn_id) {
     unsigned mask = la_pull_mask_live(), asked = la_pull_mask_now();
@@ -365,7 +365,7 @@ static void handle_la_pull_mask(int conn_id) {
 
 /* {"cmd":"la_pull","la":N} -> LA N's pull state (also the reply of a pull set).
    "state" is what the channel does now (up / down / off, from on) and "dirs" every way it can
-   pull. Digital v3r4 may hold a pull the host asked for off (pin 21 down, pull-ups suspended);
+   pull. Digital v4 may hold a pull the host asked for off (pin 21 down, pull-ups suspended);
    "held" then says why, and strength stays the setting the pod puts back. Elsewhere live and
    asked are the same. (Firmware up to 3.10.13 also sent "pullup", "pull" and "ohms".) */
 static void handle_la_pull_query(int conn_id, unsigned la) {
@@ -378,7 +378,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
     bp_emit_init(&e, payload, sizeof(payload));
     bp_emit(&e, "{\"la\":%u,\"state\":\"%s\",\"dirs\":", la, la_pull_dir_name(on ? dflt : LA_PULL_NONE));
     la_pull_emit_dirs(&e, la);
-    /* v3r4: the strength engaged ("none" when off) and every strength the channel has. */
+    /* v4: the strength engaged ("none" when off) and every strength the channel has. */
     if (caps.strengths) {
         bp_emit(&e, ",\"strength\":\"%s\",\"strengths\":[", pull_str_name(la_pull_asked_str(la)));
         const char *sep = "";
@@ -386,7 +386,7 @@ static void handle_la_pull_query(int conn_id, unsigned la) {
             if (caps.strengths & LA_PULL_STR_BIT(st)) { bp_emit(&e, "%s\"%s\"", sep, pull_str_name((pull_str_t)st)); sep = ","; }
         bp_emit_raw(&e, "]");
     }
-    if (asked_on && !on) {   /* digital v3r4 only: elsewhere asked and live are the same */
+    if (asked_on && !on) {   /* digital v4 only: elsewhere asked and live are the same */
         const char *held = la_pull_held();
         bp_emit(&e, ",\"held\":\"%s\"", held ? held : "fault");
     }
@@ -422,7 +422,7 @@ static bool handle_la_pull_set(int conn_id, const char *json, unsigned la, const
         send_error(conn_id, pull_err);
         return false;
     }
-    /* Digital v3r4: direction and strength per channel (without "strength" the pod picks from
+    /* Digital v4: direction and strength per channel (without "strength" the pod picks from
        the pin's function).  A fixed resistor (the older boards) ignores "strength", like older
        firmware does. */
     la_pull_caps_t caps = la_pull_caps(la);
@@ -519,7 +519,7 @@ void handle_la_voltage(int conn_id, const char *json) {
             return;
         }
     }
-    /* "mv" is the DUT's I/O voltage (5000 in 5 V mode).  Digital v3r4 adds pin 21 (vref_out_emit). */
+    /* "mv" is the DUT's I/O voltage (5000 in 5 V mode).  Digital v4 adds pin 21 (vref_out_emit). */
     char payload[200];
     bp_emit_t e;
     bp_emit_init(&e, payload, sizeof(payload));

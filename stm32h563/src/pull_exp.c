@@ -1,4 +1,4 @@
-/* pull_exp.c — see pull_exp.h.  Digital v3r4 only (board_caps()->pull_expanders). */
+/* pull_exp.c — see pull_exp.h.  Digital v4 only (board_caps()->pull_expanders). */
 #include "pull_exp.h"
 #include "board_caps.h"
 #include "board_pins.h"
@@ -184,7 +184,7 @@ const char *pull_exp_held(void)
 }
 
 /* ---- the la_pull backend (la_pull.h) ----
-   The pulls go to J1 pin 21, which follows the bank (or 5 V), so on v3r4 they work at every I/O
+   The pulls go to J1 pin 21, which follows the bank (or 5 V), so on v4 they work at every I/O
    voltage, but only while pin 21 is up. */
 
 static int be_set(unsigned la, la_pull_dir_t dir, pull_str_t str)

@@ -3,7 +3,7 @@
  *
  * The PSRAM and the iCE40 config flash share the quad bus (PF6..PF10); each has
  * its own GPIO chip-select straight to the chip (qspi_cs.h: PE4 = PSRAM, PE3 = flash;
- * PC11 and PB6 on digital v3r4).  PE4 is NOT an OCTOSPI hardware-NCS pin, so we cannot
+ * PC11 and PB6 on digital v4).  PE4 is NOT an OCTOSPI hardware-NCS pin, so we cannot
  * use memory-mapped mode (which auto-toggles the controller NCS); PC11 is, but this
  * driver treats every board the same.  The OCTOSPI drives only SCLK + IO0..3 and the
  * STM32 frames every transaction by toggling the PSRAM CS as a GPIO, breaking long

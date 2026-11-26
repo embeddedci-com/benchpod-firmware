@@ -1047,12 +1047,12 @@ area = "analog"
 since = "4.0.0"
 args = { cmd = "str", digital = "str", module = "str" }
 message = "{cmd} refused, the DAC is off: the digital board ({digital}) and the analog module ({module}) use different flat-cable pinouts"
-cause = "The flat cable between the two boards carries the DAC's clock and data. Digital board v3r4 and analog module 3.5 swapped those two lines, so a newer board paired with an older one would send the DAC scrambled data and its outputs could jump to any voltage. The pod refuses every command that drives the DAC and sends it nothing; everything else keeps working. The module's revision comes from its EEPROM, so a module that was never programmed counts as an older one."
+cause = "The flat cable between the two boards carries the DAC's clock and data. Digital board v4 and analog module v4 swapped those two lines, so a newer board paired with an older one would send the DAC scrambled data and its outputs could jump to any voltage. The pod refuses every command that drives the DAC and sends it nothing; everything else keeps working. The module's revision comes from its EEPROM, so a module that was never programmed counts as an older one."
 [BP0080.fix]
-sdk = "pair a digital v3r4 or later board with an analog module 3.5 or later (or both older), or, if the module's EEPROM revision is wrong, program the revision printed on its board and restart the pod"
-cli = "pair a digital v3r4 or later board with an analog module 3.5 or later (or both older); `benchpod status` shows both. If the module's revision is wrong, program the one printed on its board and restart the pod"
-mcp = "tell the user the digital board and the analog module do not belong together (status shows both revisions): a digital v3r4+ board needs an analog module 3.5+, and an older digital board an older module"
-web = "The digital board and the analog module do not belong together, so the analog outputs are off. A digital v3r4 or later board needs an analog module 3.5 or later."
+sdk = "pair a digital v4 or later board with an analog module v4 or later (or both older), or, if the module's EEPROM revision is wrong, program the revision printed on its board and restart the pod"
+cli = "pair a digital v4 or later board with an analog module v4 or later (or both older); `benchpod status` shows both. If the module's revision is wrong, program the one printed on its board and restart the pod"
+mcp = "tell the user the digital board and the analog module do not belong together (status shows both revisions): a digital v4+ board needs an analog module v4+, and an older digital board an older module"
+web = "The digital board and the analog module do not belong together, so the analog outputs are off. A digital v4 or later board needs an analog module v4 or later."
 
 [BP0081]
 name = "lan_not_paired"

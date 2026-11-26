@@ -1,5 +1,5 @@
 /* test_la_io.c: the LA I/O bank (la_io.c) on every board revision: the voltage selection, the
-   mux polarity, the ST readback, the settle, and 5 V I/O with pin 21 (digital v3r4), with host
+   mux polarity, the ST readback, the settle, and 5 V I/O with pin 21 (digital v4), with host
    stand-ins for the HAL (shim_la_io/), pin 21 (vref_out) and the pulls. */
 #include "la_io.h"
 #include "board_caps.h"
@@ -93,45 +93,45 @@ static void test_v3(int rev, const char *name) {
     CHECK(g_src_writes == 0, "%s: pin 21 never touched", name);
 }
 
-/* Digital v3r4: the clamps' settle, and 5 V I/O on pin 21. */
-static void test_v3r4(void) {
-    board(BOARD_REV_V3R4);
+/* Digital v4: the clamps' settle, and 5 V I/O on pin 21. */
+static void test_v4(void) {
+    board(BOARD_REV_V4);
     const unsigned settle = LA_VCCIO_SETTLE_CLAMPS_MS + 1u;
-    CHECK(la_vccio_set_mv(LA_VCCIO_1V8) == 0 && g_sleep_ms == settle && g_delay_ms == 0, "v3r4: the clamp settle");
+    CHECK(la_vccio_set_mv(LA_VCCIO_1V8) == 0 && g_sleep_ms == settle && g_delay_ms == 0, "v4: the clamp settle");
 
     /* 1.8 V -> 5 V: the bank to 3.3 V first, then pin 21 to 5 V */
     g_sleep_ms = 0;
-    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == 0, "v3r4: 5 V");
-    CHECK(la_vccio_get_mv() == LA_VCCIO_3V3 && la_io_get_mv() == LA_VCCIO_5V0, "v3r4: bank 3.3 V, I/O 5 V");
-    CHECK(g_src == VREF_SRC_5V && g_sel == GPIO_PIN_SET, "v3r4: pin 21 on 5 V, the bank at 3.3 V");
-    CHECK(g_src_at_bank_write == VREF_SRC_BANK, "v3r4: the bank moved before pin 21 went to 5 V");
-    CHECK(g_sleep_ms == 2 * settle, "v3r4: settled after the bank and after pin 21");
+    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == 0, "v4: 5 V");
+    CHECK(la_vccio_get_mv() == LA_VCCIO_3V3 && la_io_get_mv() == LA_VCCIO_5V0, "v4: bank 3.3 V, I/O 5 V");
+    CHECK(g_src == VREF_SRC_5V && g_sel == GPIO_PIN_SET, "v4: pin 21 on 5 V, the bank at 3.3 V");
+    CHECK(g_src_at_bank_write == VREF_SRC_BANK, "v4: the bank moved before pin 21 went to 5 V");
+    CHECK(g_sleep_ms == 2 * settle, "v4: settled after the bank and after pin 21");
 
     /* again: nothing moves */
     g_sleep_ms = 0; g_src_writes = 0;
-    CHECK(la_io_set_5v() == 0 && g_sleep_ms == 0 && g_src_writes == 0, "v3r4: 5 V again is a no-op");
+    CHECK(la_io_set_5v() == 0 && g_sleep_ms == 0 && g_src_writes == 0, "v4: 5 V again is a no-op");
 
     /* 5 V -> 3.3 V: pin 21 back on the bank before the bank moves */
-    CHECK(la_vccio_set_mv(LA_VCCIO_3V3) == 0 && g_src == VREF_SRC_BANK, "v3r4: back to the bank");
-    CHECK(g_src_at_bank_write == VREF_SRC_BANK, "v3r4: pin 21 left 5 V before the bank was written");
-    CHECK(la_vccio_get_mv() == LA_VCCIO_3V3 && la_io_get_mv() == LA_VCCIO_3V3, "v3r4: both 3.3 V");
+    CHECK(la_vccio_set_mv(LA_VCCIO_3V3) == 0 && g_src == VREF_SRC_BANK, "v4: back to the bank");
+    CHECK(g_src_at_bank_write == VREF_SRC_BANK, "v4: pin 21 left 5 V before the bank was written");
+    CHECK(la_vccio_get_mv() == LA_VCCIO_3V3 && la_io_get_mv() == LA_VCCIO_3V3, "v4: both 3.3 V");
 
     /* 5 V that does not come up: the previous setting comes back */
-    CHECK(la_vccio_set_mv(LA_VCCIO_1V8) == 0, "v3r4: 1.8 V");
+    CHECK(la_vccio_set_mv(LA_VCCIO_1V8) == 0, "v4: 1.8 V");
     g_vref_mv = VREF_5V_MIN_MV - 1;
-    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == -3, "v3r4: 5 V missing");
+    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == -3, "v4: 5 V missing");
     CHECK(g_src == VREF_SRC_BANK && la_vccio_get_mv() == LA_VCCIO_1V8 && la_io_get_mv() == LA_VCCIO_1V8,
-          "v3r4: back on 1.8 V");
+          "v4: back on 1.8 V");
     g_vref_mv = VREF_5V_MIN_MV;
-    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == 0 && la_io_get_mv() == LA_VCCIO_5V0, "v3r4: 5 V at the minimum");
+    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == 0 && la_io_get_mv() == LA_VCCIO_5V0, "v4: 5 V at the minimum");
 
     /* from nothing chosen: a failure leaves it unset */
-    board(BOARD_REV_V3R4);
+    board(BOARD_REV_V4);
     g_vref_mv = 4000;
-    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == -3, "v3r4: 5 V missing from unset");
+    CHECK(la_vccio_set_mv(LA_VCCIO_5V0) == -3, "v4: 5 V missing from unset");
     CHECK(la_vccio_get_mv() == LA_VCCIO_UNSET && la_io_get_mv() == LA_VCCIO_UNSET && g_src == VREF_SRC_BANK,
-          "v3r4: back to unset");
-    CHECK(g_pulls_off == 0, "v3r4: the pulls stay");
+          "v4: back to unset");
+    CHECK(g_pulls_off == 0, "v4: the pulls stay");
 }
 
 int main(void)
@@ -140,7 +140,7 @@ int main(void)
     test_v2();
     test_v3(BOARD_REV_V3, "v3");
     test_v3(BOARD_REV_V3R2, "v3r2");
-    test_v3r4();
+    test_v4();
     printf("test_la_io: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

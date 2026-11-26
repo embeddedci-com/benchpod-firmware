@@ -90,7 +90,7 @@ Rarely used code is linked into images that live in W25Q blob slots instead of i
   says "nothing to replay" or refuses. The pool does not feed the DAC or any DMA after the call
   that arms it (`fpga_load_wave` copies it into the FPGA BRAM with a blocking SPI write). Code that
   must survive a session may not keep data in the pool.
-- **XIP_RAM=0 (memory-mapped, digital v3r4):** each image at its own W25Q address (usb
+- **XIP_RAM=0 (memory-mapped, digital v4):** each image at its own W25Q address (usb
   `0x90201000`, prog `0x90241000`), no copy. The linker script keeps three regions for this: `XIP`,
   `XIP_PROG`, and the RAM build's sed swaps both for the pool's RAM region (and adds `POOL`).
 - Moving the protocols out of internal flash saved about 10 KB of code in both builds, and no static RAM:
