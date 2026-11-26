@@ -72,25 +72,28 @@ const char *module_ee_type_str(uint8_t type)
     return type == MOD_TYPE_ANALOG ? "analog" : "unknown";
 }
 
+/* major.minor >= want: compared as one number, so a .0 threshold does not trip -Wtype-limits. */
+static bool rev_at_least(const module_id_t *id, uint8_t major, uint8_t minor)
+{
+    return ((uint16_t)id->rev_major << 8 | id->rev_minor) >= ((uint16_t)major << 8 | minor);
+}
+
 bool module_ee_has_low_range(int rc, const module_id_t *id)
 {
     if (rc != MOD_EE_OK || !id || id->type != MOD_TYPE_ANALOG) return false;
-    return id->rev_major > MOD_LOW_RANGE_REV_MAJOR ||
-           (id->rev_major == MOD_LOW_RANGE_REV_MAJOR && id->rev_minor >= MOD_LOW_RANGE_REV_MINOR);
+    return rev_at_least(id, MOD_LOW_RANGE_REV_MAJOR, MOD_LOW_RANGE_REV_MINOR);
 }
 
 bool module_ee_has_100r_shunt(int rc, const module_id_t *id)
 {
     if (rc != MOD_EE_OK || !id || id->type != MOD_TYPE_ANALOG) return false;
-    return id->rev_major > MOD_SHUNT100_REV_MAJOR ||
-           (id->rev_major == MOD_SHUNT100_REV_MAJOR && id->rev_minor >= MOD_SHUNT100_REV_MINOR);
+    return rev_at_least(id, MOD_SHUNT100_REV_MAJOR, MOD_SHUNT100_REV_MINOR);
 }
 
 bool module_ee_has_cn1_dac_swap(int rc, const module_id_t *id)
 {
     if (rc != MOD_EE_OK || !id || id->type != MOD_TYPE_ANALOG) return false;
-    return id->rev_major > DAC_LINK_SWAP_REV_MAJOR ||
-           (id->rev_major == DAC_LINK_SWAP_REV_MAJOR && id->rev_minor >= DAC_LINK_SWAP_REV_MINOR);
+    return rev_at_least(id, DAC_LINK_SWAP_REV_MAJOR, DAC_LINK_SWAP_REV_MINOR);
 }
 
 size_t module_ee_chunk(uint16_t addr, size_t len)
