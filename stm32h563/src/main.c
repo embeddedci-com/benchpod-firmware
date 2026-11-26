@@ -25,6 +25,7 @@
 #include "board_caps.h"
 #include "qspi_cs.h"
 #include "vref_out.h"
+#include "dut_rails.h"
 #include "la_pull.h"
 #include "cal_data.h"
 #include "usb_cc.h"
@@ -176,6 +177,7 @@ int main(void)
     nrst_ctrl_init();       /* PF4 open-drain, released (no-op on v2)       */
     usb_cc_init();          /* CC1/CC2 analog pins   (no-op on v2)          */
     vref_out_init();        /* J1 pin 21 on the bank, 5 V off (digital v4 only) */
+    dut_rails_init();       /* J1 pins 17 (3.3 V) and 18 (1.8 V) on, as on older boards (v4 only) */
     /* Bring the I2C bus + expander outputs up FIRST, before the slower SPI/XSPI
        init, so every TCA9554 output is driven to its safe (OFF) state as early as
        possible.  Both expanders power up with pins high-Z and output latch 0xFF,

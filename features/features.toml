@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 21
+revision = 22
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -120,6 +120,10 @@ note = "The ADC low range (analog module v3r4+)."
 [facts.vref_out]
 hw = "vref_out"
 note = "J1 pin 21 is switched and measured, and 5 V I/O exists (digital board v4+). Older boards never announce it."
+
+[facts.dut_rails]
+hw = "dut_rails"
+note = "J1 pins 17 (3.3 V) and 18 (1.8 V) are switched (digital board v4+). Older boards have both always on and never announce it."
 
 [[releases]]
 firmware = "3.9.2"
@@ -1033,3 +1037,11 @@ firmware = "4.0.6"
 dated = "code"
 docs = "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
 note = "prog_flash takes the chip's protocol options as named fields (updi flash_base; pic cmd_set, pc, ee_erase, cp_high, q10, id_split, key_flip, cp_bit; tpi write_words, page_erase; c2 fpdat, no_setup) instead of the packed flags integer, which is still accepted but not together with a named field."
+
+[features.dut_rails]
+rev = 22
+firmware = "4.0.7"
+requires = ["dut_rails"]
+dated = "code"
+docs = "API.md#target_power--enabledisable-a-target-power-efuse"
+note = "target_power takes rail (j1_3v3 or j1_1v8) in place of efuse: it switches J1 pin 17 (+3V3_DUT) or pin 18 (+1V8_DUT) on digital v4. Both are on from boot. target_status has j1_rails (v3v3, v1v8, true when on) on those boards only."

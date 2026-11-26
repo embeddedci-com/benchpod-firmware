@@ -1854,7 +1854,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `api` | integer | Firmware 4.0.0+: the [client API level](#client-compatibility) this firmware speaks. |
 | `min_client_api` | integer | Firmware 4.0.0+: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
 | `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+). |
+| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+), `dut_rails` (digital v4: J1 pins 17 and 18 switched; firmware 4.0.7+). |
 
 #### Removed in firmware 4.0.0
 
@@ -2775,6 +2775,25 @@ example, enables an eFuse, lets the target boot, then connects over SWD).
 
 State is **not** persisted: after a reset both eFuses return to off.
 
+On digital v4 the same command also switches the two
+supply pins on the J1 header: pin 17 (`+3V3_DUT`, a switch with a current limit of about 1.45 A and
+reverse blocking) and pin 18 (`+1V8_DUT`, its own regulator). Send `rail` instead of `efuse`. Both
+pins come on at boot, so a DUT powered from J1 works as on older boards; they are independent of
+the eFuses and of every reset, so a target power cycle does not touch them. Older boards have
+both pins always on and answer `rail` with an error; the hw fact `dut_rails` (status `hw`) says
+which boards can switch them.
+
+```json
+{"cmd":"target_power","rail":"j1_3v3","enabled":false}
+```
+
+| `rail` | Pin |
+|---|---|
+| `j1_3v3` | J1 pin 17, +3V3_DUT |
+| `j1_1v8` | J1 pin 18, +1V8_DUT |
+
+The reply is `{"rail":"j1_3v3","enabled":false}`; `delay_ms` and `profile` do not apply to a rail.
+
 #### Request
 
 ```json
@@ -2867,6 +2886,9 @@ interval never misses a trip.
 From firmware 3.10.8 each eFuse object also has `"profile"`: the wiring profile named
 when that rail was switched on (`target_power` `profile`), or `null` when it is off or none was
 named.
+
+On digital v4 the reply also has `"j1_rails":{"v3v3":true,"v1v8":true}`: whether J1 pin 17 and
+pin 18 are on (boards where both are always on leave it out).
 
 ### `power_status` — one-shot rail measurement
 

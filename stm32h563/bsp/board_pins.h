@@ -270,6 +270,18 @@
 #define USB_SEL_PIN                  GPIO_PIN_9
 
 /* ---------------------------------------------------------------------------
+ * J1 pins 17 and 18, the switched DUT supplies (digital v4 only: board_caps()->dut_rails)
+ *   PD3 DUT_3V3_EN -> U69 SY6280AAC EN (pin 17 +3V3_DUT, ~1.45 A limit, reverse blocking),
+ *                     100 k to GND: off until firmware drives it high.
+ *   PD4 DUT_1V8_EN -> U70 AP2112K-1.8 EN (pin 18 +1V8_DUT, its own regulator), 100 k to GND.
+ *   On every older board pins 17 and 18 are always on and PD3/PD4 are never touched.
+ * ------------------------------------------------------------------------- */
+#define DUT_3V3_EN_PORT              GPIOD
+#define DUT_3V3_EN_PIN               GPIO_PIN_3
+#define DUT_1V8_EN_PORT              GPIOD
+#define DUT_1V8_EN_PIN               GPIO_PIN_4
+
+/* ---------------------------------------------------------------------------
  * USB-C CC monitoring (rev3+)   [/CC_SENSE1 PC0, /CC_SENSE2 PC2]
  *   The pod is a USB-C sink: R76/R75 are the 5.1 k Rd pull-downs on USBC1's
  *   CC1/CC2.  Each CC line is tapped into an ADC pin through 10 k (R178/R179)
