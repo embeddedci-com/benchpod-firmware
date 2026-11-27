@@ -27,6 +27,8 @@
 #define WBO_COME_BACK_MS   180000u   /* the bridge reboots, maybe runs a trial and rolls back */
 #define WBO_MANIFEST_LEN   128u
 #define WBO_TRIES          3u        /* attempts per version when the transfer fails on the way */
+#define WBO_NAME_HEAD      80u       /* image bytes wbo_image_name reads: through the app descriptor's version */
+#define WBO_NAME_LEN       16u       /* a version string, as wb_info_t.fw_version keeps it */
 
 typedef struct {
     /* Start a request with a borrowed body (wb_request_ext). 0 = sent, -1 = slot busy (try again
@@ -46,6 +48,9 @@ typedef struct {
     bool present;            /* an image with a manifest for target "bridge" of its size */
     uint32_t size;
     uint32_t version;        /* the manifest's, major << 16 | minor << 8 | patch */
+    /* The version the image reports itself (wbo_image_name), "" if unknown. It names the image:
+       an EMC build is signed with version 0 (installed only when forced) but runs as "0.1.3-emc". */
+    char name[WBO_NAME_LEN];
     uint8_t manifest[WBO_MANIFEST_LEN];
 } wbo_image_t;
 
@@ -63,6 +68,7 @@ typedef struct {
     wbo_state_t state;
     uint32_t size, off, want, failed, next_check, deadline;
     uint32_t tries_for;      /* the version `tries` counts attempts of */
+    char want_name[WBO_NAME_LEN];  /* the image's name (wbo_image_t.name) while it is installed */
     uint8_t tries;
     bool forced, resend;
     bool seen_new;           /* WAIT_BACK: HELLO showed the new version (on trial) */
@@ -86,5 +92,9 @@ bool wbo_is_emc_build(const char *fw_version);
 /* "X.Y.Z" -> X << 16 | Y << 8 | Z, 0 if it is not one. */
 uint32_t wbo_pack_version(const char *s);
 void wbo_version_str(uint32_t v, char out[16]);
+/* The version string an ESP-IDF image carries in its app descriptor (what the bridge's HELLO will
+   report once it runs it), from the image's first WBO_NAME_HEAD bytes; cut to WBO_NAME_LEN - 1
+   characters like wb_info_t.fw_version. false (out = "") when `head` is not such an image. */
+bool wbo_image_name(const uint8_t *head, size_t len, char out[WBO_NAME_LEN]);
 
 #endif /* WIFI_BRIDGE_OTA_H */

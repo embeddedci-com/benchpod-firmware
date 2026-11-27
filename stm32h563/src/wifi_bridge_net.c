@@ -413,8 +413,11 @@ static void refresh_image(void)
     if (s_img_read && memcmp(s_img_sha, bi->sha256, 32) == 0) return;
     if (bus_busy_reason()) return;   /* read it when the bus is free */
     uint8_t *m = s_img.manifest;
+    uint8_t head[WBO_NAME_HEAD];
     w25q_open();
     int rc = blob_store_read_extra(BLOB_BRIDGE, m, WBO_MANIFEST_LEN);
+    bool head_ok = bi->len >= sizeof(head) &&
+                   blob_store_read((void *)(uintptr_t)BLOB_BRIDGE, 0, head, sizeof(head)) == 0;
     w25q_close();
     s_img_read = true;
     memcpy(s_img_sha, bi->sha256, 32);
@@ -424,6 +427,8 @@ static void refresh_image(void)
                     le32(m + 8) == bi->len && memcmp(m + 12, bi->sha256, 32) == 0;
     s_img.size = bi->len;
     s_img.version = le32(m + 44);
+    /* The image's own version ("0.1.3-emc" for an EMC build, whose manifest says 0). */
+    if (!head_ok || !wbo_image_name(head, sizeof(head), s_img.name)) s_img.name[0] = 0;
 }
 
 void wifi_bridge_ota_poll(void)
@@ -450,7 +455,11 @@ void wifi_bridge_ota_poll(void)
 bool wifi_bridge_ota_busy(void) { return wbo_busy(&s_relay); }
 const char *wifi_bridge_ota_status(void) { return wbo_status(&s_relay); }
 void wifi_bridge_ota_force(void) { wbo_force(&s_relay); }
-bool wifi_bridge_image(uint32_t *version) {
-    if (version) *version = s_img.version;
+bool wifi_bridge_image(char version[WBO_NAME_LEN]) {
+    if (s_img.name[0]) {
+        memcpy(version, s_img.name, WBO_NAME_LEN);
+    } else {
+        wbo_version_str(s_img.version, version);
+    }
     return s_img.present;
 }
