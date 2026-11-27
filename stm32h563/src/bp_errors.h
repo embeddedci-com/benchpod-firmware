@@ -110,9 +110,10 @@ typedef enum {
     BP_E_POWER_NO_METER = 90,
     BP_E_POWER_SUPPLY_AND_EFUSE = 91,
     BP_E_POWER_SUPPLY_NOT_ON_POD = 92,
+    BP_E_REBOOT_HARD_NOT_ON_POD = 93,
 } bp_errcode_t;
 
-#define BP_E_LAST 92
+#define BP_E_LAST 93
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1251,6 +1252,16 @@ static inline const char *bp_note_power_supply_not_on_pod(char *buf, size_t cap,
 static inline const char *bp_tag_power_supply_not_on_pod(const char *text, const char *supply) {
     const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
     return bp_err_tag(text, BP_E_POWER_SUPPLY_NOT_ON_POD, a, 1);
+}
+/* BP0093: This pod cannot power-cycle itself */
+static inline void bp_err_reboot_hard_not_on_pod(int conn_id) {
+    bp_error_send(conn_id, BP_E_REBOOT_HARD_NOT_ON_POD, 0, 0);
+}
+static inline const char *bp_note_reboot_hard_not_on_pod(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_REBOOT_HARD_NOT_ON_POD, 0, 0);
+}
+static inline const char *bp_tag_reboot_hard_not_on_pod(const char *text) {
+    return bp_err_tag(text, BP_E_REBOOT_HARD_NOT_ON_POD, 0, 0);
 }
 
 #endif /* BP_ERRORS_H */

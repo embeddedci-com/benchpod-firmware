@@ -63,7 +63,7 @@
 # features/features.json (hosts) and stm32h563/src/bp_features.h (firmware).
 
 schema = 1
-revision = 22
+revision = 23
 api = 2
 min_client_api = 2
 floor = "3.9.2"
@@ -124,6 +124,10 @@ note = "J1 pin 21 is switched and measured, and 5 V I/O exists (digital board v4
 [facts.supply_3v3_1v8]
 hw = "supply_3v3_1v8"
 note = "The switched 3.3 V and 1.8 V supplies (J1 pins 17 and 18) exist (BenchPod v4+). Older boards have both always on and never announce it."
+
+[facts.power_cycle]
+hw = "power_cycle"
+note = "The pod can switch its own power off and on (reboot mode hard). No board has the circuit yet, so no pod announces it."
 
 [[releases]]
 firmware = "3.9.2"
@@ -1050,3 +1054,17 @@ requires = ["supply_3v3_1v8"]
 dated = "code"
 docs = "API.md#target-power-supplies"
 note = "target_power and power_profile take supply (\"5v\", \"external\", \"3v3\" or \"1v8\") in place of efuse (1 or 2, still accepted; both together is refused with BP0091). \"3v3\" and \"1v8\" switch J1 pin 17 and pin 18 on BenchPod v4; both are on from boot. target_status and power_status have a supplies map (target_status: 3v3 and 1v8 on those boards only). A wiring profile's supply key may be \"3v3\" or \"1v8\" there (efuse 1 or 2 is still read, and must agree); wiring_put refuses an unknown supply, a 3v3 or 1v8 without the feature, and a supply that disagrees with efuse, with BP0089. power_profile refuses 3v3 and 1v8 with BP0090 (no current monitor)."
+[features.reboot]
+rev = 23
+firmware = "next"
+dated = "code"
+docs = "API.md#reboot--restart-the-pod"
+note = "reboot restarts the pod: mode \"soft\" (the default) restarts the processor and reloads the gateware, the connection drops after the reply. It replaces psram_recover. Mode \"hard\" is refused with BP0093 on every pod today."
+
+[features.reboot_hard]
+rev = 23
+firmware = "next"
+requires = ["power_cycle"]
+dated = "code"
+docs = "API.md#reboot--restart-the-pod"
+note = "reboot mode \"hard\" switches the pod's own power off and on. Only a pod that lists power_cycle in hw has the circuit."
