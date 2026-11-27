@@ -117,7 +117,7 @@ void handle_target_power(int conn_id, const char *json) {
         if (json_get_value(json, "delay_ms", delay_s, sizeof(delay_s)))
             rd = (uint32_t)strtoul(delay_s, NULL, 0);
         if (dut_supply_schedule(sup == SUPPLY_3V3 ? DUT_SUPPLY_3V3 : DUT_SUPPLY_1V8, on, rd) != 0) {
-            bp_err_wiring_bad_supply(conn_id, supply_name(sup));
+            bp_err_power_supply_not_on_pod(conn_id, supply_name(sup));
             return;
         }
         char rp[72];

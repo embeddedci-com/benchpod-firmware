@@ -42,6 +42,7 @@ int main(void)
     CHECK(!dut_supply_present());
     CHECK(s_writes == 0 && s_inits == 0);
     CHECK(dut_supply_set(DUT_SUPPLY_3V3, false) == -1);
+    CHECK(dut_supply_schedule(DUT_SUPPLY_3V3, true, 0) == -1);   /* target_power answers BP0092 */
     CHECK(!dut_supply_get(DUT_SUPPLY_3V3));
 
     /* v4: both on, levels written before the pins become outputs. */
