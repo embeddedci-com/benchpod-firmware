@@ -94,6 +94,6 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0086 | `usb_serial_busy` | usb | 4.0.3 | The board's USB serial port is not free: {why} |
 | BP0087 | `usb_check_refused` | usb | 4.0.3 | The pod cannot run the USB check: {why} |
 | BP0088 | `usb_check_no_efuse_power` | usb | 4.0.3 | The board is not powered from target-power eFuse 1 |
-| BP0089 | `wiring_bad_supply` | wiring | next | The target-power supply is not valid on this pod: {supply} |
-| BP0090 | `power_no_meter` | power | next | The {supply} supply has no current monitor |
-| BP0091 | `power_supply_and_efuse` | power | next | Give either supply or efuse, not both |
+| BP0089 | `wiring_bad_supply` | wiring | 4.0.7 | The target-power supply is not valid on this pod: {supply} |
+| BP0090 | `power_no_meter` | power | 4.0.7 | The {supply} supply has no current monitor |
+| BP0091 | `power_supply_and_efuse` | power | 4.0.7 | Give either supply or efuse, not both |

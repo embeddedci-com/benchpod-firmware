@@ -4,7 +4,7 @@
   "revision": 22,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "7dbbc131f90885a2736ee7d7f85ade3128958eaee9daf1bada2777f0bc36284b",
+  "table_sha256": "624dad69d422489d574c0889ec11bc3fc1af7f4de57dfdc72860c1e06487590a",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -172,6 +172,11 @@
       "firmware": "4.0.6",
       "gateware": 68,
       "date": "2026-11-25"
+    },
+    {
+      "firmware": "4.0.7",
+      "gateware": 68,
+      "date": "2026-11-26"
     }
   ],
   "features": {
