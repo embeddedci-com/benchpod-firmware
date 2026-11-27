@@ -97,3 +97,4 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0089 | `wiring_bad_supply` | wiring | 4.0.7 | The target-power supply is not valid on this pod: {supply} |
 | BP0090 | `power_no_meter` | power | 4.0.7 | The {supply} supply has no current monitor |
 | BP0091 | `power_supply_and_efuse` | power | 4.0.7 | Give either supply or efuse, not both |
+| BP0092 | `power_supply_not_on_pod` | power | next | This pod has no {supply} supply |

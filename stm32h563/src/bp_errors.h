@@ -109,9 +109,10 @@ typedef enum {
     BP_E_WIRING_BAD_SUPPLY = 89,
     BP_E_POWER_NO_METER = 90,
     BP_E_POWER_SUPPLY_AND_EFUSE = 91,
+    BP_E_POWER_SUPPLY_NOT_ON_POD = 92,
 } bp_errcode_t;
 
-#define BP_E_LAST 91
+#define BP_E_LAST 92
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -1237,6 +1238,19 @@ static inline const char *bp_note_power_supply_and_efuse(char *buf, size_t cap) 
 }
 static inline const char *bp_tag_power_supply_and_efuse(const char *text) {
     return bp_err_tag(text, BP_E_POWER_SUPPLY_AND_EFUSE, 0, 0);
+}
+/* BP0092: This pod has no {supply} supply */
+static inline void bp_err_power_supply_not_on_pod(int conn_id, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
+    bp_error_send(conn_id, BP_E_POWER_SUPPLY_NOT_ON_POD, a, 1);
+}
+static inline const char *bp_note_power_supply_not_on_pod(char *buf, size_t cap, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_POWER_SUPPLY_NOT_ON_POD, a, 1);
+}
+static inline const char *bp_tag_power_supply_not_on_pod(const char *text, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
+    return bp_err_tag(text, BP_E_POWER_SUPPLY_NOT_ON_POD, a, 1);
 }
 
 #endif /* BP_ERRORS_H */

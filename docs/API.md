@@ -2777,7 +2777,7 @@ What the DUT gets from the pod has one name, `supply`, in every command, reply a
 `"3v3"` and `"1v8"` come on at boot, so a DUT powered from J1 works as on older boards. They are
 independent of the eFuses and of every reset, so a target power cycle does not touch them. Older
 boards have both pins always on: the hw fact `supply_3v3_1v8` (`status` `hw`) says which pods can
-switch them, and `target_power` for `"3v3"` or `"1v8"` on any other pod is refused with `BP0089`.
+switch them, and `target_power` for `"3v3"` or `"1v8"` on any other pod is refused with `BP0092`.
 
 **Legacy names.** Firmware before 4.0.7 called the 5v and external supplies eFuse 1 and 2. The
 request key `efuse` (`1` or `2`) is still accepted: `1` is `"5v"` and `2` is `"external"`. Send
@@ -2853,7 +2853,7 @@ come on at boot, as on older boards).
 | `supply` and `efuse` together | `BP0091` (`power_supply_and_efuse`) |
 | `supply` not one of the four | `"supply must be one of 5v, external, 3v3, 1v8"` |
 | `efuse` not 1 or 2 | `"invalid efuse: use 1 or 2, or supply 5v, external, 3v3, 1v8"` |
-| `"3v3"` or `"1v8"` on a pod that cannot switch them | `BP0089` (`wiring_bad_supply`, arg `supply`) |
+| `"3v3"` or `"1v8"` on a pod that cannot switch them | `BP0092` (`power_supply_not_on_pod`, arg `supply`) |
 | `enabled` missing or not `true`/`false` | `"enabled must be true or false"` |
 
 > **Scheduled power-on + UART capture.** `uart_proxy_start` turns the connection
