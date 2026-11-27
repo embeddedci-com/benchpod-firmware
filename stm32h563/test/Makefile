@@ -605,7 +605,7 @@ build/test_can_timing: $(CANTIM_SRCS) ../src/can_timing.h ../src/can_ring.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(CANTIM_SRCS) -o $@
 
-build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h
+build/test_blob_store: $(BLOB_SRCS) mocks/mock_w25q.h ../src/emi_log.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) -I$(MBEDTLS)/include $(BLOB_SRCS) -lm -o $@
 

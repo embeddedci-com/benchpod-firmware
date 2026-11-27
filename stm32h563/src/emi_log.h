@@ -2,10 +2,13 @@
  * emi_log.h — the EMI test build's run log (emi_test.h): what every run did, kept in the W25Q
  * (the iCE40 config flash) so a lab run that nobody watched can still be read afterwards.
  *
- * Where: the free range between slot PROXY and slot ESP (blob_store.h), 0x192000-0x200000,
- * 440 KB = 110 sectors. Only the EMI test build writes there and nothing reserves it: a blob slot
- * added there later would erase the log (and this log would corrupt it), so moving a slot into
- * this range means moving the log first.
+ * Where: 0x300000-0x36E000, 440 KB = 110 sectors, in the retired ESP slot after slot XIP_PROG
+ * (blob_store.h: 0x280000-0x5FF000 is unused; the C3 image goes straight into the C3, never into
+ * that slot). Up to firmware 4.0.6 it sat at 0x192000-0x200000, where slot GW2 (0x1A0000) and the
+ * wiring slots (0x1E0000) had moved in since: every boot's erase ahead wiped gw2 (sensor
+ * emulation, so ci mode ran without NMEA). Only the EMI test build writes here and no blob slot
+ * reserves it; test_blob_store.c checks that no slot overlaps it, so a slot added here later
+ * fails the host tests until the log moves.
  *
  * A run is one power-on (or reset). The log is a ring of 64-byte records (EMI_LOG_REC):
  *
@@ -47,8 +50,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#define EMI_LOG_BASE        0x192000u
-#define EMI_LOG_END         0x200000u
+#define EMI_LOG_BASE        0x300000u
+#define EMI_LOG_END         0x36E000u
 #define EMI_LOG_SECTOR      4096u
 #define EMI_LOG_REC         64u
 #define EMI_LOG_PER_SECTOR  (EMI_LOG_SECTOR / EMI_LOG_REC)
