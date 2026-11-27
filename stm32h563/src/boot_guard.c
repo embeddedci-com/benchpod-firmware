@@ -120,7 +120,7 @@ void boot_guard_healthy(void) {
 }
 
 void boot_guard_planned_reset(bool planned) {
-    /* A reset somebody asked for (reboot, dfu, an OTA commit, psram_recover) says nothing
+    /* A reset somebody asked for (reboot, dfu, an OTA commit, the reboot command) says nothing
        about this boot: give back the count it took, so two quick reboots in a row do not put
        the third boot in safe mode.  A crash before this boot is still counted.  Safe mode
        keeps counting (see boot_guard_healthy): it ends with a power-on or the reset button. */

@@ -110,7 +110,7 @@
     "can_stop": "T1",
     "speedtest": "T1",
     "fpga_image": "T1",
-    "psram_recover": "T1",
+    "reboot": "T1",
     "usb_reattach": "T1",
     "cloud_set": "T2",
     "cloud_clear": "T2",
@@ -512,7 +512,7 @@
       "tier": "T1"
     },
     {
-      "line": "{\"cmd\":\"psram_recover\"}",
+      "line": "{\"cmd\":\"reboot\"}",
       "tier": "T1"
     },
     {
