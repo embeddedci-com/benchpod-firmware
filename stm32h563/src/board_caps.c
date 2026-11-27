@@ -25,7 +25,7 @@ board_caps_t board_caps_for_rev(int rev)
         c.la_clamps      = true;
         c.pull_expanders = true;
         c.usb_sel        = true;
-        c.dut_rails      = true;
+        c.supply_3v3_1v8      = true;
         c.cn1_dac_swap   = true;
         c.qspi_cs_ncs_pins = true;
     }

@@ -1,10 +1,10 @@
 /*
  * command_handler_power.c — the `power_profile` command and its chunked reply.
  *
- *   {"cmd":"power_profile","action":"start","efuse":1,"sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":0}
+ *   {"cmd":"power_profile","action":"start","supply":"5v","sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":0}
  *   {"cmd":"power_profile","action":"stop"}     -> chunked result (same framing as la_capture)
  *   {"cmd":"power_profile","action":"status"}
- *   {"cmd":"power_profile","efuse":1,"duration_ms":N,...}   one-shot: start, wait, stop reply
+ *   {"cmd":"power_profile","supply":"external","duration_ms":N,...}   one-shot: start, wait, stop reply
  *
  * The sampler lives in power_profile.c; this file parses, validates and delivers.  The reply is
  * paced against the connection's send ring like bulk_pump.  Runs on the hw worker task.
@@ -22,7 +22,6 @@
 #include <string.h>
 #include "bp_errors.h"
 #include "bp_json.h"
-#include "wiring_doc.h"
 
 /* Samples per frame.  25 B/sample worst case ("600000000," "-5460000," "21800,") + the frame
    header and the final frame's stats (~330 B) stay under the 1600 B frame buffer. */
@@ -167,12 +166,13 @@ void handle_power_profile(int conn_id, const char *json) {
     if (strcmp(action, "status") == 0) {
         pp_status_t st;
         power_profile_status(&st);
-        char payload[128];
+        char payload[160];
         if (st.any)
-            snprintf(payload, sizeof(payload), "{\"running\":%s,\"efuse\":%d,\"elapsed_ms\":%lu,\"n\":%lu}",
-                     st.running ? "true" : "false", st.efuse, (unsigned long)st.elapsed_ms, (unsigned long)st.n);
+            snprintf(payload, sizeof(payload), "{\"running\":%s,\"supply\":\"%s\",\"efuse\":%d,\"elapsed_ms\":%lu,\"n\":%lu}",
+                     st.running ? "true" : "false", supply_name(supply_from_efuse(st.efuse)), st.efuse,
+                     (unsigned long)st.elapsed_ms, (unsigned long)st.n);
         else
-            snprintf(payload, sizeof(payload), "{\"running\":false,\"efuse\":null,\"elapsed_ms\":0,\"n\":0}");
+            snprintf(payload, sizeof(payload), "{\"running\":false,\"supply\":null,\"efuse\":null,\"elapsed_ms\":0,\"n\":0}");
         send_ok_str(conn_id, payload);
         return;
     }
@@ -207,15 +207,16 @@ void handle_power_profile(int conn_id, const char *json) {
         send_error(conn_id, "action must be start, stop or status");
         return;
     }
-    uint32_t efuse, rate, dur, keep, oneshot_ms = 0;
-    {   /* "rail":"j1_3v3"|"j1_1v8": the J1 supplies have no current monitor */
-        char rail[16];
-        if (bp_json_get_fit(json, "rail", rail, sizeof(rail)) == 1 && wiring_rail_is_j1(rail)) {
-            bp_err_power_no_meter(conn_id, rail);
-            return;
-        }
+    uint32_t rate, dur, keep, oneshot_ms = 0;
+    /* "supply":"5v"|"external" (or the older "efuse":1|2; both is BP0091); 5v when neither.  The
+       switched 3v3 and 1v8 supplies have no current monitor. */
+    supply_t sup = SUPPLY_5V;
+    if (request_supply(conn_id, json, &sup) < 0) return;
+    if (supply_is_j1(sup)) {
+        bp_err_power_no_meter(conn_id, supply_name(sup));
+        return;
     }
-    if (!get_u32(conn_id, json, "efuse", 1u, 2u, &efuse)) return;
+    uint32_t efuse = (uint32_t)supply_efuse(sup);
     if (!get_u32(conn_id, json, "sample_rate_hz", PP_RATE_DEFAULT_HZ, 1000000u, &rate)) return;
     if (!get_u32(conn_id, json, "max_duration_ms", PP_DURATION_DEFAULT_MS, 0x7FFFFFFFu, &dur)) return;
     if (!get_u32(conn_id, json, "keep_samples", 0u, 0x7FFFFFFFu, &keep)) return;
@@ -254,8 +255,8 @@ void handle_power_profile(int conn_id, const char *json) {
     }
     pp_status_t st;
     power_profile_status(&st);
-    char payload[64];
-    snprintf(payload, sizeof(payload), "{\"started\":true,\"efuse\":%d,\"sample_rate_hz\":%lu}",
-             st.efuse, (unsigned long)st.rate_hz);
+    char payload[96];
+    snprintf(payload, sizeof(payload), "{\"started\":true,\"supply\":\"%s\",\"efuse\":%d,\"sample_rate_hz\":%lu}",
+             supply_name(supply_from_efuse(st.efuse)), st.efuse, (unsigned long)st.rate_hz);
     send_ok_str(conn_id, payload);
 }

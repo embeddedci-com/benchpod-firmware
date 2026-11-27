@@ -270,7 +270,7 @@
 #define USB_SEL_PIN                  GPIO_PIN_9
 
 /* ---------------------------------------------------------------------------
- * J1 pins 17 and 18, the switched DUT supplies (digital v4 only: board_caps()->dut_rails)
+ * J1 pins 17 and 18, the switched DUT supplies (digital v4 only: board_caps()->supply_3v3_1v8)
  *   PD3 DUT_3V3_EN -> U69 SY6280AAC EN (pin 17 +3V3_DUT, ~1.45 A limit, reverse blocking),
  *                     100 k to GND: off until firmware drives it high.
  *   PD4 DUT_1V8_EN -> U70 AP2112K-1.8 EN (pin 18 +1V8_DUT, its own regulator), 100 k to GND.

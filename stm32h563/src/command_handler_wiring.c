@@ -232,13 +232,19 @@ static void put_piece(int conn_id, const char *json, const char *name, long offs
         return;
     }
     if (!storage_free(conn_id)) { upload_drop(); return; }
-    /* The profile's rail: 1, 2, or a J1 supply on a board that has them. */
-    char rail[16];
-    if (wiring_doc_json_rail(s_upp->buf, s_upp->total, rail, sizeof(rail)) &&
-        (!wiring_rail_known(rail) || (wiring_rail_is_j1(rail) && !board_caps()->dut_rails))) {
-        upload_drop();
-        bp_err_wiring_bad_rail(conn_id, rail);
-        return;
+    /* The profile's supply: one of the four, "3v3" and "1v8" only on a board that has them; the older
+       efuse key may be there too when it names the same supply. */
+    {
+        supply_t sup;
+        char bad[40];
+        wiring_supply_result_t r = wiring_doc_json_supply(s_upp->buf, s_upp->total, &sup, bad, sizeof(bad));
+        if (r == WIRING_SUPPLY_BAD || r == WIRING_SUPPLY_CONFLICT ||
+            (r == WIRING_SUPPLY_OK && !supply_on_board(sup, board_caps()->supply_3v3_1v8))) {
+            if (r == WIRING_SUPPLY_OK) snprintf(bad, sizeof(bad), "%s", supply_name(sup));
+            upload_drop();
+            bp_err_wiring_bad_supply(conn_id, bad);
+            return;
+        }
     }
     wiring_op_t op = { WIRING_OP_PUT, name, s_upp->buf, (uint16_t)s_upp->total };
     bool ok = apply(conn_id, &op, s_upp->total);

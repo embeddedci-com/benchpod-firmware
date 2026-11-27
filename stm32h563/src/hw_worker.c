@@ -7,7 +7,7 @@
 #include "dac_quad.h"        /* dac_quad_boot: park the outputs after a reload */
 #include "dac_limits.h"
 #include "target_power.h"
-#include "dut_rails.h"
+#include "dut_supply.h"
 #include "console.h"
 #include "watchdog.h"
 #include "bp_limits.h"
@@ -481,7 +481,7 @@ static void worker_task(void *arg) {
         command_handler_poll();   /* async captures + paced bulk sends -> conn_tx rings */
         signal_engine_poll();     /* stop timed waveforms when their duration expires  */
         target_power_poll();      /* deferred eFuse enable + fault/EN change events     */
-        dut_rails_poll();         /* deferred J1 supply switches (digital v4)           */
+        dut_supply_poll();         /* deferred J1 supply switches (digital v4)           */
         vref_out_poll(HAL_GetTick()); /* J1 pin 21 sense (digital v4 only)            */
         la_pull_poll();           /* pull-ups follow the pod's target power (v4 only) */
         status_led_service();     /* the RGB status LED follows the pod's state         */

@@ -106,11 +106,12 @@ typedef enum {
     BP_E_USB_SERIAL_BUSY = 86,
     BP_E_USB_CHECK_REFUSED = 87,
     BP_E_USB_CHECK_NO_EFUSE_POWER = 88,
-    BP_E_WIRING_BAD_RAIL = 89,
+    BP_E_WIRING_BAD_SUPPLY = 89,
     BP_E_POWER_NO_METER = 90,
+    BP_E_POWER_SUPPLY_AND_EFUSE = 91,
 } bp_errcode_t;
 
-#define BP_E_LAST 90
+#define BP_E_LAST 91
 #define BP_ERR_ARGS_MAX 4   /* the most args one code has */
 
 /* One value sent with a code: key, and either a string (is_str) or an integer. */
@@ -466,7 +467,7 @@ static inline const char *bp_tag_lease_not_held(const char *text, const char *id
     const bp_err_arg_t a[] = { {"id", id, 0, 1} };
     return bp_err_tag(text, BP_E_LEASE_NOT_HELD, a, 1);
 }
-/* BP0028: 5 V did not come up on pin 21 ({mv} mV) */
+/* BP0028: 5 V did not come up on the I/O reference (VREF OUT, {mv} mV) */
 static inline void bp_err_vref_5v_missing(int conn_id, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_VREF_5V_MISSING, a, 1);
@@ -479,7 +480,7 @@ static inline const char *bp_tag_vref_5v_missing(const char *text, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     return bp_err_tag(text, BP_E_VREF_5V_MISSING, a, 1);
 }
-/* BP0029: pin 21 is down ({mv} mV): the pull resistors are off until it is back */
+/* BP0029: The I/O reference (VREF OUT) is down ({mv} mV): the pull resistors are off until it is back */
 static inline void bp_err_pull_rail_down(int conn_id, int32_t mv) {
     const bp_err_arg_t a[] = { {"mv", 0, mv, 0} };
     bp_error_send(conn_id, BP_E_PULL_RAIL_DOWN, a, 1);
@@ -1201,31 +1202,41 @@ static inline const char *bp_note_usb_check_no_efuse_power(char *buf, size_t cap
 static inline const char *bp_tag_usb_check_no_efuse_power(const char *text) {
     return bp_err_tag(text, BP_E_USB_CHECK_NO_EFUSE_POWER, 0, 0);
 }
-/* BP0089: {rail} is not a target-power rail this pod has */
-static inline void bp_err_wiring_bad_rail(int conn_id, const char *rail) {
-    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
-    bp_error_send(conn_id, BP_E_WIRING_BAD_RAIL, a, 1);
+/* BP0089: The target-power supply is not valid on this pod: {supply} */
+static inline void bp_err_wiring_bad_supply(int conn_id, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
+    bp_error_send(conn_id, BP_E_WIRING_BAD_SUPPLY, a, 1);
 }
-static inline const char *bp_note_wiring_bad_rail(char *buf, size_t cap, const char *rail) {
-    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
-    return bp_err_note(buf, cap, BP_E_WIRING_BAD_RAIL, a, 1);
+static inline const char *bp_note_wiring_bad_supply(char *buf, size_t cap, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
+    return bp_err_note(buf, cap, BP_E_WIRING_BAD_SUPPLY, a, 1);
 }
-static inline const char *bp_tag_wiring_bad_rail(const char *text, const char *rail) {
-    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
-    return bp_err_tag(text, BP_E_WIRING_BAD_RAIL, a, 1);
+static inline const char *bp_tag_wiring_bad_supply(const char *text, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
+    return bp_err_tag(text, BP_E_WIRING_BAD_SUPPLY, a, 1);
 }
-/* BP0090: {rail} has no current monitor */
-static inline void bp_err_power_no_meter(int conn_id, const char *rail) {
-    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+/* BP0090: The {supply} supply has no current monitor */
+static inline void bp_err_power_no_meter(int conn_id, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
     bp_error_send(conn_id, BP_E_POWER_NO_METER, a, 1);
 }
-static inline const char *bp_note_power_no_meter(char *buf, size_t cap, const char *rail) {
-    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+static inline const char *bp_note_power_no_meter(char *buf, size_t cap, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
     return bp_err_note(buf, cap, BP_E_POWER_NO_METER, a, 1);
 }
-static inline const char *bp_tag_power_no_meter(const char *text, const char *rail) {
-    const bp_err_arg_t a[] = { {"rail", rail, 0, 1} };
+static inline const char *bp_tag_power_no_meter(const char *text, const char *supply) {
+    const bp_err_arg_t a[] = { {"supply", supply, 0, 1} };
     return bp_err_tag(text, BP_E_POWER_NO_METER, a, 1);
+}
+/* BP0091: Give either supply or efuse, not both */
+static inline void bp_err_power_supply_and_efuse(int conn_id) {
+    bp_error_send(conn_id, BP_E_POWER_SUPPLY_AND_EFUSE, 0, 0);
+}
+static inline const char *bp_note_power_supply_and_efuse(char *buf, size_t cap) {
+    return bp_err_note(buf, cap, BP_E_POWER_SUPPLY_AND_EFUSE, 0, 0);
+}
+static inline const char *bp_tag_power_supply_and_efuse(const char *text) {
+    return bp_err_tag(text, BP_E_POWER_SUPPLY_AND_EFUSE, 0, 0);
 }
 
 #endif /* BP_ERRORS_H */

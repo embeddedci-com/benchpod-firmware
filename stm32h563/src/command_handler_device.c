@@ -44,7 +44,8 @@
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "module_link.h"   /* digital v3r3: the module object */
 #include "la_pins.h"
-#include "dut_rails.h"
+#include "dut_supply.h"
+#include "supply.h"
 #include "psram.h"       /* psram_selftest_str */
 
 #include <stdio.h>
@@ -77,16 +78,30 @@ void device_poll(void) {
    RAM only: a reboot turns the DUT off, and the next power-on names its profile again. */
 static char s_rail_profile[2][WIRING_NAME_MAX + 1];   /* [efuse - 1] */
 
+/* The supply a request names: "supply" ("5v", "external", "3v3", "1v8") or the older "efuse" (1 or 2),
+   never both (BP0091).  1: *out is set.  0: neither key.  -1: the error is sent. */
+int request_supply(int conn_id, const char *json, supply_t *out) {
+    char sv[16] = {0}, ef[16] = {0};
+    bool has_s = json_get_value(json, "supply", sv, sizeof(sv));
+    bool has_e = json_get_value(json, "efuse", ef, sizeof(ef));
+    switch (supply_resolve(has_s ? sv : NULL, has_e ? ef : NULL, false, out)) {
+    case SUPPLY_REQ_OK:         return 1;
+    case SUPPLY_REQ_ABSENT:     return 0;
+    case SUPPLY_REQ_BOTH:       bp_err_power_supply_and_efuse(conn_id); return -1;
+    case SUPPLY_REQ_BAD_SUPPLY: send_error(conn_id, "supply must be one of " SUPPLY_LIST); return -1;
+    default:                    send_error(conn_id, "invalid efuse: use 1 or 2, or supply " SUPPLY_LIST); return -1;
+    }
+}
+
 void handle_target_power(int conn_id, const char *json) {
-    char efuse_s[8]  = {0};
     char profile[WIRING_NAME_MAX + 1] = {0};
     char delay_s[12] = {0};
-    char rail_s[16] = {0};
 
-    /* "rail":"j1_3v3"|"j1_1v8" (digital v4): J1 pin 17 or 18 instead of an eFuse. */
-    bool has_rail = json_get_value(json, "rail", rail_s, sizeof(rail_s));
-    if (!has_rail && !json_get_value(json, "efuse", efuse_s, sizeof(efuse_s))) {
-        send_error(conn_id, "missing efuse");
+    supply_t sup;
+    int rq = request_supply(conn_id, json, &sup);
+    if (rq < 0) return;
+    if (rq == 0) {
+        send_error(conn_id, "missing supply (" SUPPLY_LIST ")");
         return;
     }
     char en_s[8] = {0};   /* "enabled":true|false (firmware up to 3.10.13: "state":0|1) */
@@ -97,26 +112,21 @@ void handle_target_power(int conn_id, const char *json) {
     }
 
     bool     on       = strcmp(en_s, "true") == 0;
-    if (has_rail) {
-        int r = dut_rail_from_name(rail_s);
-        if (r < 0) {
-            send_error(conn_id, "rail must be j1_3v3 or j1_1v8");
-            return;
-        }
+    if (supply_is_j1(sup)) {   /* "3v3" / "1v8" (BenchPod v4): J1 pin 17 or 18 */
         uint32_t rd = 0;
         if (json_get_value(json, "delay_ms", delay_s, sizeof(delay_s)))
             rd = (uint32_t)strtoul(delay_s, NULL, 0);
-        if (dut_rails_schedule((dut_rail_t)r, on, rd) != 0) {
-            send_error(conn_id, "this board has no switchable J1 supplies (digital v4 only)");
+        if (dut_supply_schedule(sup == SUPPLY_3V3 ? DUT_SUPPLY_3V3 : DUT_SUPPLY_1V8, on, rd) != 0) {
+            bp_err_wiring_bad_supply(conn_id, supply_name(sup));
             return;
         }
         char rp[72];
-        snprintf(rp, sizeof(rp), "{\"rail\":\"%s\",\"enabled\":%s,\"delay_ms\":%u}", dut_rail_name((dut_rail_t)r),
+        snprintf(rp, sizeof(rp), "{\"supply\":\"%s\",\"enabled\":%s,\"delay_ms\":%u}", supply_name(sup),
                  on ? "true" : "false", (unsigned)rd);
         send_ok_str(conn_id, rp);
         return;
     }
-    int      efuse    = atoi(efuse_s);
+    int      efuse    = supply_efuse(sup);
     int pr = bp_json_get_fit(json, "profile", profile, sizeof(profile));
     if (pr != 0 && (pr < 0 || !wiring_name_ok(profile))) {
         bp_err_wiring_bad_name(conn_id, profile);
@@ -129,17 +139,17 @@ void handle_target_power(int conn_id, const char *json) {
     /* delay_ms == 0 applies immediately; > 0 schedules and fires from the main
        poll loop, so the connection can switch to e.g. UART proxy meanwhile. */
     if (target_power_schedule(efuse, on, delay_ms) != 0) {
-        send_error(conn_id, "invalid efuse");
+        send_error(conn_id, "invalid supply");
         return;
     }
-    if (efuse >= 1 && efuse <= 2) strcpy(s_rail_profile[efuse - 1], on ? profile : "");
+    strcpy(s_rail_profile[efuse - 1], on ? profile : "");
 
     /* "enabled" echoes the requested state; with delay_ms > 0 it is the state
-       the eFuse will reach once the delay elapses. */
-    char payload[56];
+       the eFuse will reach once the delay elapses.  "efuse" stays for hosts from before "supply". */
+    char payload[96];
     snprintf(payload, sizeof(payload),
-             "{\"efuse\":%d,\"enabled\":%s,\"delay_ms\":%u}",
-             efuse, on ? "true" : "false", (unsigned)delay_ms);
+             "{\"supply\":\"%s\",\"efuse\":%d,\"enabled\":%s,\"delay_ms\":%u}",
+             supply_name(sup), efuse, on ? "true" : "false", (unsigned)delay_ms);
     send_ok_str(conn_id, payload);
 }
 
@@ -180,43 +190,55 @@ bool la_voltage_from_profile(void) {
 
 #define TF(b) ((b) ? "true" : "false")
 
+/* One eFuse's state as the object target_status reports it ("efuse1"/"efuse2" and "supplies"). */
+static void emit_efuse_state(bp_emit_t *e, const target_power_status_t *st, const char *profile) {
+    bp_emit(e, "{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s}",
+            TF(st->enabled), TF(st->fault), TF(st->valid), st->flt_pin, (unsigned long)st->reverse_blocks, profile);
+}
+
 void handle_target_status(int conn_id, const char *json) {
     (void)json;
     target_power_status_t e1, e2;
     target_power_get_status(1, &e1);
     target_power_get_status(2, &e2);
 
-    /* Payload (~112 chars) + wrapper exceeds send_ok_str's 128-byte buffer,
-       so build and send the response directly like handle_status. */
-    /* "profile": the wiring profile the rail was switched on with (target_power "profile"),
+    /* "profile": the wiring profile the supply was switched on with (target_power "profile"),
        null when it is off or none was named. */
     char p1[WIRING_NAME_MAX + 3] = "null", p2[WIRING_NAME_MAX + 3] = "null";
     if (e1.enabled && s_rail_profile[0][0]) snprintf(p1, sizeof(p1), "\"%s\"", s_rail_profile[0]);
     if (e2.enabled && s_rail_profile[1][0]) snprintf(p2, sizeof(p2), "\"%s\"", s_rail_profile[1]);
-    /* digital v4: "j1_rails" (J1 pins 17 and 18); left out on boards where both are always on. */
-    char j1[56] = "";
-    if (dut_rails_present())
-        snprintf(j1, sizeof(j1), ",\"j1_rails\":{\"v3v3\":%s,\"v1v8\":%s}",
-                 TF(dut_rails_get(DUT_RAIL_3V3)), TF(dut_rails_get(DUT_RAIL_1V8)));
-    char resp[512];
-    snprintf(resp, sizeof(resp),
-             "{\"status\":\"ok\",\"data\":{"
-             "\"efuse1\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
-             "\"efuse2\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
-             "\"status_supported\":%s%s}}\n",
-             TF(e1.enabled), TF(e1.fault), TF(e1.valid), e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
-             TF(e2.enabled), TF(e2.fault), TF(e2.valid), e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
-             e1.status_supported ? "true" : "false", j1);
-    if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
+    /* Built and sent directly like handle_status (the reply outgrows send_ok_str's buffer).
+       "efuse1"/"efuse2"/"status_supported" are the released keys; "supplies" is the same by name,
+       plus "3v3" and "1v8" (J1 pins 17 and 18) on boards that switch them. */
+    char resp[1024];
+    bp_emit_t e;
+    bp_emit_init(&e, resp, sizeof(resp));
+    bp_emit_raw(&e, "{\"status\":\"ok\",\"data\":{\"efuse1\":");
+    emit_efuse_state(&e, &e1, p1);
+    bp_emit_raw(&e, ",\"efuse2\":");
+    emit_efuse_state(&e, &e2, p2);
+    bp_emit(&e, ",\"status_supported\":%s,\"supplies\":{\"5v\":", TF(e1.status_supported));
+    emit_efuse_state(&e, &e1, p1);
+    bp_emit_raw(&e, ",\"external\":");
+    emit_efuse_state(&e, &e2, p2);
+    if (dut_supply_present())
+        bp_emit(&e, ",\"3v3\":{\"enabled\":%s},\"1v8\":{\"enabled\":%s}",
+                TF(dut_supply_get(DUT_SUPPLY_3V3)), TF(dut_supply_get(DUT_SUPPLY_1V8)));
+    bp_emit_raw(&e, "}}}\n");
+    if (!bp_emit_ok(&e)) {   /* cannot happen with the sizes above; never send a torn reply */
+        send_error(conn_id, "target_status reply overflow");
+        return;
+    }
+    if (at_send_data(conn_id, (const uint8_t *)resp, bp_emit_len(&e)) != 0) {
         at_close_connection(conn_id);
     }
 }
 
-/* `power_status` — read the on-board INA238 current monitors (0x40 = internal,
-   0x44 = external supply). Reports bus voltage (mV) + current (µA) per rail;
-   `ok:false` when a rail can't be read. Single-reply (cloud command channel).
+/* `power_status` — read the on-board INA238 current monitors (0x40 = the 5v supply,
+   0x44 = external supply). Reports bus voltage (mV) + current (µA) per supply;
+   `ok:false` when a supply can't be read. Single-reply (cloud command channel).
    Boards with the pod's own monitor (0x41) add "pod": the pod's 5 V current (the DUT's
-   internal rail bypasses that shunt) and total_ua, pod + internal rail = what the USB input
+   5v supply bypasses that shunt) and total_ua, pod + 5v supply = what the USB input
    delivers. Older boards leave "pod" out. */
 void handle_power_status(int conn_id, const char *json) {
     (void)json;
@@ -230,12 +252,17 @@ void handle_power_status(int conn_id, const char *json) {
         pod_ok = (ina238_read(I2C_ADDR_INA_POD, &pbus, &psh, &pcur) == 0);
     }
 
-    char resp[352];
+    char resp[640];
     bp_emit_t e;
     bp_emit_init(&e, resp, sizeof(resp));
+    /* "internal"/"external" are the released keys; "supplies" is the same by supply name. */
     bp_emit(&e, "{\"status\":\"ok\",\"data\":{"
                 "\"internal\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d},"
-                "\"external\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d}",
+                "\"external\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d},"
+                "\"supplies\":{\"5v\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d},"
+                "\"external\":{\"ok\":%s,\"bus_mv\":%d,\"current_ua\":%d}}",
+            int_ok ? "true" : "false", ibus, icur,
+            ext_ok ? "true" : "false", ebus, ecur,
             int_ok ? "true" : "false", ibus, icur,
             ext_ok ? "true" : "false", ebus, ecur);
     if (pod) {

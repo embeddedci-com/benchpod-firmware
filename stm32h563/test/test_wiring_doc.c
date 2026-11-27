@@ -150,28 +150,48 @@ static void test_la_mv(void) {
     CHECK(wiring_doc_json_la_mv((const uint8_t *)cut, 10) == 0);
 }
 
-static const char *rail_of(const char *s) {
-    static char out[16];
-    return wiring_doc_json_rail((const uint8_t *)s, strlen(s), out, sizeof(out)) ? out : NULL;
+/* The profile's supply: result code, and the supply or the error text. */
+static wiring_supply_result_t supply_of(const char *s, supply_t *v, char *bad) {
+    return wiring_doc_json_supply((const uint8_t *)s, strlen(s), v, bad, 40);
 }
 
-static void test_rail(void) {
-    CHECK(!strcmp(rail_of("{\"efuse\":1}"), "1"));
-    CHECK(!strcmp(rail_of("{\"la_mv\": 3300, \"efuse\" : 2 }"), "2"));
-    CHECK(!strcmp(rail_of("{\"efuse\":\"j1_3v3\"}"), "j1_3v3"));
-    CHECK(!strcmp(rail_of("{\"efuse\":\"j1_1v8\",\"x\":1}"), "j1_1v8"));
-    CHECK(rail_of("{\"efuse\":null}") == NULL);
-    CHECK(rail_of("{\"la_mv\":3300}") == NULL);
-    CHECK(rail_of("{\"pins\":{\"efuse\":2}}") == NULL);     /* only the top level */
-    CHECK(rail_of("{\"efuse\":\"a\\\"b\"}") == NULL);       /* an escape: not a rail */
-    CHECK(rail_of("{\"efuse\":{\"a\":1}}") == NULL);
-    CHECK(wiring_rail_known("1") && wiring_rail_known("2") && wiring_rail_known("j1_3v3") && wiring_rail_known("j1_1v8"));
-    CHECK(!wiring_rail_known("3") && !wiring_rail_known("j1_5v") && !wiring_rail_known("internal") && !wiring_rail_known(NULL));
-    CHECK(wiring_rail_is_j1("j1_3v3") && wiring_rail_is_j1("j1_1v8") && !wiring_rail_is_j1("1") && !wiring_rail_is_j1(NULL));
+static void test_supply(void) {
+    supply_t v = SUPPLY_5V;
+    char bad[40] = {0};
+    /* supply key. */
+    CHECK(supply_of("{\"supply\":\"5v\"}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_5V);
+    CHECK(supply_of("{\"la_mv\": 3300, \"supply\" : \"external\" }", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_EXTERNAL);
+    CHECK(supply_of("{\"supply\":\"3v3\"}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_3V3);
+    CHECK(supply_of("{\"supply\":\"1v8\",\"x\":1}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_1V8);
+    /* The legacy efuse key. */
+    CHECK(supply_of("{\"efuse\":1}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_5V);
+    CHECK(supply_of("{\"efuse\" : 2 }", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_EXTERNAL);
+    /* Both: they must agree. */
+    CHECK(supply_of("{\"supply\":\"5v\",\"efuse\":1}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_5V);
+    CHECK(supply_of("{\"efuse\":2,\"supply\":\"external\"}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_EXTERNAL);
+    CHECK(supply_of("{\"supply\":\"external\",\"efuse\":1}", &v, bad) == WIRING_SUPPLY_CONFLICT);
+    CHECK(!strcmp(bad, "supply external with efuse 1"));
+    CHECK(supply_of("{\"supply\":\"3v3\",\"efuse\":2}", &v, bad) == WIRING_SUPPLY_CONFLICT);
+    /* Neither, or null. */
+    CHECK(supply_of("{\"la_mv\":3300}", &v, bad) == WIRING_SUPPLY_NONE);
+    CHECK(supply_of("{\"efuse\":null}", &v, bad) == WIRING_SUPPLY_NONE);
+    CHECK(supply_of("{\"supply\":null,\"efuse\":null}", &v, bad) == WIRING_SUPPLY_NONE);
+    CHECK(supply_of("{\"supply\":null,\"efuse\":2}", &v, bad) == WIRING_SUPPLY_OK && v == SUPPLY_EXTERNAL);
+    CHECK(supply_of("{\"pins\":{\"efuse\":2,\"supply\":\"zz\"}}", &v, bad) == WIRING_SUPPLY_NONE);   /* top level only */
+    /* Not a supply. */
+    CHECK(supply_of("{\"supply\":\"12v\"}", &v, bad) == WIRING_SUPPLY_BAD && !strcmp(bad, "12v"));
+    CHECK(supply_of("{\"supply\":\"internal\"}", &v, bad) == WIRING_SUPPLY_BAD);
+    CHECK(supply_of("{\"efuse\":\"j1_3v3\"}", &v, bad) == WIRING_SUPPLY_BAD && !strcmp(bad, "efuse j1_3v3"));
+    CHECK(supply_of("{\"efuse\":3}", &v, bad) == WIRING_SUPPLY_BAD && !strcmp(bad, "efuse 3"));
+    CHECK(supply_of("{\"supply\":1}", &v, bad) == WIRING_SUPPLY_BAD);
+    CHECK(supply_of("{\"supply\":\"a\\\"b\"}", &v, bad) == WIRING_SUPPLY_BAD);   /* an escape */
+    CHECK(supply_of("{\"supply\":{\"a\":1}}", &v, bad) == WIRING_SUPPLY_BAD);
+    CHECK(supply_of("{\"efuse\":true}", &v, bad) == WIRING_SUPPLY_BAD);
+    CHECK(supply_of("{\"supply\":\"3v3\"}", NULL, bad) == WIRING_SUPPLY_OK);            /* out may be NULL */
 }
 
 int main(void) {
-    test_rail();
+    test_supply();
     test_la_mv();
     test_names();
     test_json_object();

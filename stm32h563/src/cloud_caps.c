@@ -64,7 +64,7 @@ void cloud_caps_emit_facts(bp_emit_t *e, const cloud_caps_t *c) {
     if (c->pod_current)   { bp_emit(e, "%s\"pod_current\"", sep); sep = ","; }
     if (c->adc_low_range) { bp_emit(e, "%s\"adc_low_range\"", sep); sep = ","; }
     if (c->vref_out)      { bp_emit(e, "%s\"vref_out\"", sep); sep = ","; }
-    if (c->dut_rails)     { bp_emit(e, "%s\"dut_rails\"", sep); sep = ","; }
+    if (c->supply_3v3_1v8)     { bp_emit(e, "%s\"supply_3v3_1v8\"", sep); sep = ","; }
     bp_emit_raw(e, "]");
 }
 

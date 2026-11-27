@@ -5,7 +5,7 @@
  * Pure: no I/O, host-tested (test/test_wiring_doc.c).
  *
  * The pod stores each profile as opaque JSON text with a name and a revision. It does not validate a
- * profile: the hosts (SDK, CLI, MCP, server, apps) do, except the target-power rail ("efuse": wiring_doc_json_rail,
+ * profile: the hosts (SDK, CLI, MCP, server, apps) do, except the target-power supply ("supply" or the older "efuse": wiring_doc_json_supply,
  * checked on save). The key it reads is la_mv, the I/O voltage
  * (wiring_doc_json_la_mv), so an LA operation can take it from the profile when none is set. The pod only checks that the
  * text is one JSON object (wiring_doc_json_object_ok), so a reply that carries it stays valid.
@@ -18,6 +18,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "supply.h"
 
 #define WIRING_MAX_PROFILES   16u
 #define WIRING_NAME_MAX       40u        /* characters, [a-z0-9-], first a letter or digit */
@@ -49,14 +51,14 @@ typedef struct {
     uint16_t         json_len;   /* PUT */
 } wiring_op_t;
 
-/* The profile's target-power rail ("efuse" key of the profile's top level): 1 or 2 (a number), or a
-   name ("j1_3v3", "j1_1v8", digital v4).  Copies it as text ("1", "2" or the name) into out and
-   returns true; false when the key is absent, null or not a number or a short string. */
-bool wiring_doc_json_rail(const uint8_t *json, size_t len, char *out, size_t cap);
-/* Whether a rail text names a known output: 1, 2, j1_3v3 or j1_1v8. */
-bool wiring_rail_known(const char *rail);
-/* Whether it is one of the J1 supplies (only boards with board_caps()->dut_rails have them). */
-bool wiring_rail_is_j1(const char *rail);
+/* The profile's target-power supply (supply.h): the "supply" key ("5v", "external", "3v3", "1v8") and/or
+   the older "efuse" key (1 or 2), top level only.  Both may be there when they name the same supply.
+   The one place a profile's supply is read.  WIRING_SUPPLY_NONE: neither key (or null); _OK: *out set;
+   _BAD: a value that is not a supply; _CONFLICT: supply and efuse disagree.  For _BAD and _CONFLICT
+   bad gets the text for the error (BP0089).  A 3v3 or 1v8 still needs board_caps()->supply_3v3_1v8:
+   the caller checks (supply_is_j1). */
+typedef enum { WIRING_SUPPLY_NONE = 0, WIRING_SUPPLY_OK, WIRING_SUPPLY_BAD, WIRING_SUPPLY_CONFLICT } wiring_supply_result_t;
+wiring_supply_result_t wiring_doc_json_supply(const uint8_t *json, size_t len, supply_t *out, char *bad, size_t cap);
 
 /* Outcome of a change, before anything is written. */
 typedef enum {
