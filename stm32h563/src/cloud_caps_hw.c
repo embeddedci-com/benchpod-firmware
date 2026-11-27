@@ -5,6 +5,7 @@
  */
 #include "cloud_caps.h"
 #include "vref_out.h"
+#include "board_caps.h"
 #include "dut_supply.h"
 
 #include "board_info.h"
@@ -101,6 +102,7 @@ void cloud_caps_collect(cloud_caps_t *c) {
     c->usb_cc = usb_cc_supported();
     c->pod_current = ina_pod_present();      /* the pod's own current monitor (0x41) */
     c->supply_3v3_1v8 = dut_supply_present();      /* J1 pins 17 and 18 switched (digital v4) */
+    c->power_cycle = board_caps()->power_cycle;   /* reboot "hard" (no board has the circuit yet) */
     c->vref_out = vref_out_present();        /* pin 21 switched + sensed, 5 V I/O (digital v4) */
     /* The 4-20 mA output's range, so the server can turn a waveform in mA into DAC codes with the
        pod's own numbers (current_out.h). */

@@ -120,7 +120,7 @@ static void test_edges(void)
 
 static int caps_none(board_caps_t c)
 {
-    return !c.vref_out && !c.la_5v && !c.la_clamps && !c.pull_expanders && !c.usb_sel && !c.supply_3v3_1v8 && !c.cn1_dac_swap && !c.qspi_cs_ncs_pins;
+    return !c.vref_out && !c.la_5v && !c.la_clamps && !c.pull_expanders && !c.usb_sel && !c.supply_3v3_1v8 && !c.cn1_dac_swap && !c.qspi_cs_ncs_pins && !c.power_cycle;
 }
 
 static int caps_v3(board_caps_t c) { return c.la_1v8 && c.nrst_pin && c.usb_cc; }

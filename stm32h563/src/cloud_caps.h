@@ -67,6 +67,9 @@ typedef struct {
     bool          vref_out;
     /* J1 pins 17 and 18 are switched (digital v3r4, board_caps.h): the hw fact supply_3v3_1v8. */
     bool          supply_3v3_1v8;
+    /* The pod can power-cycle itself (board_caps()->power_cycle): the hw fact power_cycle,
+       and `reboot` mode "hard" is accepted. */
+    bool          power_cycle;
     /* No Wi-Fi to scan: no ESP32-C3 (digital v3r3) and no Wi-Fi bridge build. Drops wifi_scan. */
     bool          no_wifi_scan;
     long          current_out_min_ua, current_out_max_ua;

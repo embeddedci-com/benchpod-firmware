@@ -249,6 +249,13 @@ static void test_status_facts(void) {
     cloud_caps_emit_facts(&e, &c);
     CHECK(strcmp(buf, ",\"features_rev\":1,\"api\":1,\"min_client_api\":0,\"fpga_image\":\"unknown\",\"hw\":[]") == 0);
 
+    /* power_cycle is listed only on a pod that has the circuit (no board does yet). */
+    c.power_cycle = true;
+    bp_emit_init(&e, buf, sizeof(buf));
+    cloud_caps_emit_facts(&e, &c);
+    CHECK(strstr(buf, "\"hw\":[\"power_cycle\"]") != NULL);
+    c.power_cycle = false;
+
     CHECK(strcmp(cloud_caps_image_name(0, 0x07), "unknown") == 0);   /* no gateware read yet */
     CHECK(strcmp(cloud_caps_image_name(56, 0x01), "loop") == 0);
     CHECK(strcmp(cloud_caps_image_name(56, 0x02), "deep") == 0);

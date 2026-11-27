@@ -99,6 +99,11 @@ typedef struct {
     /* The quad bus chip-selects are on PB6 (/ICE_SS, the config flash) and PC11 (/ICE_SS_PSRAM),
        pins that can also carry OCTOSPI1_NCS; false: PE3 and PE4.  qspi_cs.h. */
     bool qspi_cs_ncs_pins;
+    /* PC10 PWR_CYCLE drives a FET on the input eFuse's enable pin, so the pod can switch its own
+       power off and on (reboot mode "hard").  False on EVERY revision for now: the circuit is
+       designed for digital v4 but the board is not built, so digital v4 gets it here once it
+       exists and is tested.  PC10 is not driven anywhere yet. */
+    bool power_cycle;
 
     /* ---- the analog front end (not from the revision: board_caps_set_analog) ---- */
     board_analog_caps_t analog;
