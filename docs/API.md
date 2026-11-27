@@ -253,10 +253,10 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `nrst` | T1 | Drive the dedicated target-reset line (v3 pods) | object | no |
 | `usb_cc` | T0 | Read the USB-C CC lines: orientation + source current advertisement (v3 pods) | object | no |
 | `usb_host` | T0/T2 | USB host mode: the pod hosts a board's USB port for a while and reads what enumerates (read: T0; `enabled`: T2) | object | no |
-| `target_power` | T1 | Enable/disable a target-power eFuse | object | no |
-| `target_status` | T0 | Read target-power eFuse state (enabled/fault/valid) | object | no |
-| `power_status` | T0 | One-shot INA238 reading of both supply rails | object | no |
-| `power_profile` | T1 | Record a current/voltage profile of one eFuse rail | object | on `stop` |
+| `target_power` | T1 | Switch a target-power supply on or off | object | no |
+| `target_status` | T0 | Read target-power supply state (enabled/fault/valid) | object | no |
+| `power_status` | T0 | One-shot current reading of the 5v and external supplies | object | no |
+| `power_profile` | T1 | Record a current/voltage profile of one supply | object | on `stop` |
 | `module` | T0/T2 | Digital v3r3: the analog module's state, and its ID and calibration EEPROM | object | no |
 | `module_power` | T1 | Digital v3r3: switch the analog module's 5 V and the USB-A bridge port | object | no |
 | `dap_start` | T1 | Turn the connection into a CMSIS-DAP probe; `"op":"id"` reads the chip's IDs instead (see [dap-over-tunnel.md](dap-over-tunnel.md#target-id-read)) | `"dap ready"` (string), object for `op` `id` | no |
@@ -1854,7 +1854,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `api` | integer | Firmware 4.0.0+: the [client API level](#client-compatibility) this firmware speaks. |
 | `min_client_api` | integer | Firmware 4.0.0+: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
 | `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+), `dut_rails` (digital v4: J1 pins 17 and 18 switched; firmware 4.0.7+). |
+| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+), `supply_3v3_1v8` (BenchPod v4: the 3.3 V and 1.8 V supplies on J1 pins 17 and 18 switched; firmware 4.0.7+). |
 
 #### Removed in firmware 4.0.0
 
@@ -2762,84 +2762,107 @@ The web UI renders exactly this on its Power tab (`UsbBudgetPanel`).
 
 ---
 
-### `target_power` — enable/disable a target-power eFuse
+### Target power supplies
 
-Switches one of the two target-power eFuses on or off. This is how a host powers
-the DUT before flashing/debugging it (the CLI's `flash --target-power`, for
-example, enables an eFuse, lets the target boot, then connects over SWD).
+What the DUT gets from the pod has one name, `supply`, in every command, reply and wiring profile
+(firmware 4.0.7 and later, feature `supply_3v3_1v8`):
 
-| eFuse | Rail |
-|---|---|
-| `1` | internal 5 V |
-| `2` | external 5 V..20 V |
+| `supply` | The DUT gets | Switch | Current monitor |
+|---|---|---|---|
+| `"5v"` | the pod's 5 V, through eFuse 1 (DUT INT terminal) | eFuse 1 | yes (INA238 `0x40`) |
+| `"external"` | your own supply, 5 V to 20 V, through eFuse 2 (DUT EXT terminal) | eFuse 2 | yes (INA238 `0x44`) |
+| `"3v3"` | switched 3.3 V on J1 pin 17, BenchPod v4 only | load switch, limit about 1.45 A, reverse blocking | no |
+| `"1v8"` | switched 1.8 V on J1 pin 18, BenchPod v4 only | its own regulator | no |
 
-State is **not** persisted: after a reset both eFuses return to off.
+`"3v3"` and `"1v8"` come on at boot, so a DUT powered from J1 works as on older boards. They are
+independent of the eFuses and of every reset, so a target power cycle does not touch them. Older
+boards have both pins always on: the hw fact `supply_3v3_1v8` (`status` `hw`) says which pods can
+switch them, and `target_power` for `"3v3"` or `"1v8"` on any other pod is refused with `BP0089`.
 
-On digital v4 the same command also switches the two
-supply pins on the J1 header: pin 17 (`+3V3_DUT`, a switch with a current limit of about 1.45 A and
-reverse blocking) and pin 18 (`+1V8_DUT`, its own regulator). Send `rail` instead of `efuse`. Both
-pins come on at boot, so a DUT powered from J1 works as on older boards; they are independent of
-the eFuses and of every reset, so a target power cycle does not touch them. Older boards have
-both pins always on and answer `rail` with an error; the hw fact `dut_rails` (status `hw`) says
-which boards can switch them.
+**Legacy names.** Firmware before 4.0.7 called the 5v and external supplies eFuse 1 and 2. The
+request key `efuse` (`1` or `2`) is still accepted: `1` is `"5v"` and `2` is `"external"`. Send
+`supply` or `efuse`, not both: a request with both is refused with `BP0091`. Replies and status
+objects keep their `efuse` keys next to the new ones for hosts written before `supply`, but new
+code uses `supply`. A value that is not one of the four names is refused with an error that lists
+them.
+
+Where it appears:
+
+| Command | Request | Reply |
+|---|---|---|
+| [`target_power`](#target_power--enabledisable-a-target-power-efuse) | `supply` (or `efuse`) | `supply`, plus `efuse` for 5v and external |
+| [`target_status`](#target_status--read-target-power-efuse-state) | none | `supplies` map, plus `efuse1` and `efuse2` |
+| [`power_status`](#power_status--one-shot-rail-measurement) | none | `supplies` map, plus `internal` and `external` |
+| [`power_profile`](#power_profile--record-a-rail-current-profile) | `supply` (or `efuse`) | `supply`, plus `efuse` |
+| [wiring profile](#wiring-profiles-wiring_list-wiring_get-wiring_put-wiring_delete-wiring_default) | `supply` key (or `efuse`) | as saved |
 
 ```json
-{"cmd":"target_power","rail":"j1_3v3","enabled":false}
+{"cmd":"target_power","supply":"external","enabled":true}
+{"cmd":"target_power","supply":"3v3","enabled":false,"delay_ms":500}
+{"cmd":"target_power","efuse":1,"enabled":true}
+{"cmd":"power_profile","action":"start","supply":"5v","sample_rate_hz":500}
 ```
 
-| `rail` | Pin |
-|---|---|
-| `j1_3v3` | J1 pin 17, +3V3_DUT |
-| `j1_1v8` | J1 pin 18, +1V8_DUT |
+`"3v3"` and `"1v8"` have no current monitor: `power_status` reads 5v and external only, and
+`power_profile` for either is refused with `BP0090` (measure them with an external current monitor).
 
-The reply is `{"rail":"j1_3v3","enabled":false,"delay_ms":0}`. `delay_ms` works as for an eFuse (the
-command acks at once and the pin switches later), so a power cycle with a delayed power-on works on
-a J1 supply too; `profile` does not apply to a rail.
-The J1 supplies have no current monitor: `power_status` reads the two eFuse rails only, and
-`power_profile` with `"rail":"j1_3v3"` or `"j1_1v8"` is refused with `BP0090`. A profile can name a J1
-rail as its target-power rail (`efuse` key, [wiring profiles](#wiring-profiles-wiring_list-wiring_get-wiring_put-wiring_delete-wiring_default)):
-tools that switch power without naming a rail then switch that pin.
+---
+
+### `target_power` — enable/disable a target-power eFuse
+
+Switches one target-power supply on or off (see [Target power supplies](#target-power-supplies)).
+This is how a host powers the DUT before flashing/debugging it (the CLI's `flash --target-power`,
+for example, enables a supply, lets the target boot, then connects over SWD).
+
+State is **not** persisted: after a reset the 5v and external supplies return to off (3v3 and 1v8
+come on at boot, as on older boards).
 
 #### Request
 
 ```json
-{"cmd":"target_power","efuse":<1|2>,"enabled":<true|false>,"delay_ms":<ms>}
+{"cmd":"target_power","supply":"<5v|external|3v3|1v8>","enabled":<true|false>,"delay_ms":<ms>}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `efuse` | integer | yes | — | Which eFuse to switch: `1` (internal 5 V) or `2` (external). |
-| `enabled` | boolean | yes | — | `true` switches the eFuse on, `false` off. Firmware up to 3.10.13 took `"state":1\|0`. |
-| `delay_ms` | integer | no | `0` | Apply the change after this many milliseconds. `0` = immediately. The command **acks right away** and the eFuse switches later from the pod's poll loop — so the connection is free to do something else meanwhile (e.g. enter `uart_proxy_start` to capture the target's boot output as it powers up). A new `target_power` for the same eFuse replaces a still-pending delayed change. |
-| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the rail is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `enabled` `false`. A bad name is refused with `BP0008`. |
+| `supply` | string | yes (or `efuse`) | — | Which supply to switch: `"5v"`, `"external"`, `"3v3"` or `"1v8"`. |
+| `efuse` | integer | legacy | — | `1` (5v) or `2` (external), the name before `supply`. Not together with `supply` (`BP0091`). |
+| `enabled` | boolean | yes | — | `true` switches the supply on, `false` off. Firmware up to 3.10.13 took `"state":1\|0`. |
+| `delay_ms` | integer | no | `0` | Apply the change after this many milliseconds. `0` = immediately. The command **acks right away** and the supply switches later from the pod's poll loop — so the connection is free to do something else meanwhile (e.g. enter `uart_proxy_start` to capture the target's boot output as it powers up). A new `target_power` for the same supply replaces a still-pending delayed change. |
+| `profile` | string | no | — | The wiring profile the board is powered on with (a name from `wiring_list`). The pod keeps it while the supply is on and `target_status` reports it, so every tool shows which wiring the DUT runs with, whoever turned it on. The tools set the profile's I/O voltage first; the pod does not. Ignored with `enabled` `false`, and for `"3v3"` and `"1v8"`. A bad name is refused with `BP0008`. |
 
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse":1,"enabled":true,"delay_ms":0}}
+{"status":"ok","data":{"supply":"5v","efuse":1,"enabled":true,"delay_ms":0}}
+{"status":"ok","data":{"supply":"3v3","enabled":false,"delay_ms":0}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `efuse` | integer | The eFuse that was switched (echoes the request). |
-| `enabled` | boolean | The **requested** state (firmware up to 3.10.13: `1`/`0`). With `delay_ms` > 0 this is the state the eFuse will reach once the delay elapses. |
+| `supply` | string | The supply that was switched (echoes the request, also when it was sent as `efuse`). |
+| `efuse` | integer | `1` or `2`, for `"5v"` and `"external"` only: the legacy name, kept for older hosts. |
+| `enabled` | boolean | The **requested** state (firmware up to 3.10.13: `1`/`0`). With `delay_ms` > 0 this is the state the supply will reach once the delay elapses. |
 | `delay_ms` | integer | The delay applied (echoes the request; `0` when immediate). |
 
 #### Error cases
 
 | Condition | Message |
 |---|---|
-| `efuse` field missing | `"missing efuse"` |
+| neither `supply` nor `efuse` | `"missing supply (5v, external, 3v3, 1v8)"` |
+| `supply` and `efuse` together | `BP0091` (`power_supply_and_efuse`) |
+| `supply` not one of the four | `"supply must be one of 5v, external, 3v3, 1v8"` |
+| `efuse` not 1 or 2 | `"invalid efuse: use 1 or 2, or supply 5v, external, 3v3, 1v8"` |
+| `"3v3"` or `"1v8"` on a pod that cannot switch them | `BP0089` (`wiring_bad_supply`, arg `supply`) |
 | `enabled` missing or not `true`/`false` | `"enabled must be true or false"` |
-| `efuse` not 1 or 2 | `"invalid efuse"` |
 
 > **Scheduled power-on + UART capture.** `uart_proxy_start` turns the connection
 > into a raw byte stream, so that connection cannot send a power-on *while*
 > capturing. Schedule it instead (or send it from a second connection):
-> `target_power` with `delay_ms` → `uart_proxy_start` → the eFuse switches mid-
+> `target_power` with `delay_ms` → `uart_proxy_start` → the supply switches mid-
 > capture and you catch the boot banner.
 
-> Read the eFuses' fault/valid status with `target_status`. (Firmware before 3.9.0 also had
+> Read the supplies' fault/valid status with `target_status`. (Firmware before 3.9.0 also had
 > `power` and `pstat` on the USB console; a computer on the USB cable now uses these JSON
 > commands over the [USB network adapter](usb-serial-interface.md#usb-network-adapter).)
 
@@ -2847,8 +2870,9 @@ tools that switch power without naming a rail then switch that pin.
 
 ### `target_status` — read target-power eFuse state
 
-Reports the live enable/fault/valid state of both eFuses. On the STM32H563 pod both
-eFuses' `V` (power-good) and `FLT` (fault) lines are wired to the TCA9554 power expander
+Reports the live enable/fault/valid state of every target-power supply (see
+[Target power supplies](#target-power-supplies)). On the STM32H563 pod the 5v and external
+supplies' `V` (power-good) and `FLT` (fault) lines are wired to the TCA9554 power expander
 at I2C `0x22`, so `status_supported` is always `true`.
 
 #### Request
@@ -2862,11 +2886,12 @@ No parameters.
 #### Response
 
 ```json
-{"status":"ok","data":{"efuse1":{"enabled":true,"fault":false,"valid":true,"flt_pin":0,"reverse_blocks":0,"profile":null},"efuse2":{"enabled":false,"fault":false,"valid":false,"flt_pin":0,"reverse_blocks":0,"profile":null},"status_supported":true}}
+{"status":"ok","data":{"efuse1":{"enabled":true,"fault":false,"valid":true,"flt_pin":0,"reverse_blocks":0,"profile":null},"efuse2":{"enabled":false,"fault":false,"valid":false,"flt_pin":0,"reverse_blocks":0,"profile":null},"status_supported":true,"supplies":{"5v":{"enabled":true,"fault":false,"valid":true,"flt_pin":0,"reverse_blocks":0,"profile":null},"external":{"enabled":false,"fault":false,"valid":false,"flt_pin":0,"reverse_blocks":0,"profile":null},"3v3":{"enabled":true},"1v8":{"enabled":true}}}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
+| `supplies` | object | Each supply by name (firmware 4.0.7+): `"5v"` and `"external"` with the fields below, and on a pod that switches them (hw fact `supply_3v3_1v8`) `"3v3"` and `"1v8"` with `enabled` only. Other pods leave those two out. `efuse1` and `efuse2` carry the same objects for `"5v"` and `"external"` under their older names. |
 | `efuseN.enabled` | boolean | `true` if the eFuse EN output is currently driven on (firmware up to 3.10.13: `1`/`0`, as `fault` and `valid`). |
 | `efuseN.fault` | boolean | `true` while the eFuse has a confirmed fault: `FLT` held for 30 ms and not reverse-current blocking (below). Firmware before 3.10.1: the `FLT` pin as read. |
 | `efuseN.flt_pin` | integer | `1` if the `FLT` pin is asserted right now (firmware 3.10.1+). |
@@ -2890,16 +2915,13 @@ interval never misses a trip.
 ---
 
 From firmware 3.10.8 each eFuse object also has `"profile"`: the wiring profile named
-when that rail was switched on (`target_power` `profile`), or `null` when it is off or none was
+when that supply was switched on (`target_power` `profile`), or `null` when it is off or none was
 named.
-
-On digital v4 the reply also has `"j1_rails":{"v3v3":true,"v1v8":true}`: whether J1 pin 17 and
-pin 18 are on (boards where both are always on leave it out).
 
 ### `power_status` — one-shot rail measurement
 
-Reads both on-board INA238 current monitors (`0x40` = internal 5 V rail, `0x44` = external
-rail) and reports each rail's bus voltage and current. Boards with the pod's own current monitor
+Reads both on-board INA238 current monitors (`0x40` = the `"5v"` supply, `0x44` = `"external"`)
+and reports each supply's bus voltage and current. `"3v3"` and `"1v8"` have no monitor. Boards with the pod's own current monitor
 (`0x41`, capability `pod_current`) add `pod`: what the pod itself draws from its 5 V input. This is the cheap "what is the DUT
 drawing right now" call; for a waveform over time use
 [`power_profile`](#power_profile--record-a-rail-current-profile).
@@ -2915,17 +2937,20 @@ No parameters. (Treated as a high-frequency poll: it is not traced on the consol
 #### Response
 
 ```json
-{"status":"ok","data":{"internal":{"ok":true,"bus_mv":5008,"current_ua":142300},
+{"status":"ok","data":{"supplies":{"5v":{"ok":true,"bus_mv":5008,"current_ua":142300},
+                                   "external":{"ok":false,"bus_mv":0,"current_ua":0}},
+                       "internal":{"ok":true,"bus_mv":5008,"current_ua":142300},
                        "external":{"ok":false,"bus_mv":0,"current_ua":0},
                        "pod":{"ok":true,"bus_mv":5012,"current_ua":231000,"total_ua":373300}}}
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `<rail>.ok` | boolean | `false` when that INA238 did not answer (an unpopulated / unpowered rail). |
-| `<rail>.bus_mv` | integer | Bus (DUT-side) voltage in mV. |
-| `<rail>.current_ua` | integer | Current in µA, computed from the measured shunt voltage and the known shunt resistance — signed, so a back-feeding DUT reads negative. |
-| `pod` | object | Only on boards with the pod's own monitor (`0x41`): `ok`, `bus_mv` and `current_ua` of the pod's own 5 V draw (the DUT's internal rail bypasses that shunt), and `total_ua` = pod + internal rail, which is what the USB-C input delivers (compare it with `status.usb.source_ma`). `total_ua` is left out when either read failed. The console `ina` line `pod(0x41)` (development builds) shows the same reading. |
+| `supplies` | object | `"5v"` and `"external"`, each with the three fields below (firmware 4.0.7+). `internal` and `external` at the top level carry the same readings under the older names (`internal` is `"5v"`). |
+| `<supply>.ok` | boolean | `false` when that INA238 did not answer (an unpopulated / unpowered supply). |
+| `<supply>.bus_mv` | integer | Bus (DUT-side) voltage in mV. |
+| `<supply>.current_ua` | integer | Current in µA, computed from the measured shunt voltage and the known shunt resistance — signed, so a back-feeding DUT reads negative. |
+| `pod` | object | Only on boards with the pod's own monitor (`0x41`): `ok`, `bus_mv` and `current_ua` of the pod's own 5 V draw (the DUT's 5v supply bypasses that shunt), and `total_ua` = pod + 5v supply, which is what the USB-C input delivers (compare it with `status.usb.source_ma`). `total_ua` is left out when either read failed. The console `ina` line `pod(0x41)` (development builds) shows the same reading. |
 
 Both reads are taken under the hardware lock that serialises this I2C bus against the console
 `ina` command, the eFuse expander and the profile sampler.
@@ -2935,13 +2960,13 @@ Both reads are taken under the hardware lock that serialises this I2C bus agains
 <a id="power-profile"></a>
 ### `power_profile` — record a rail current profile
 
-Samples one eFuse rail's INA238 continuously and returns the statistics (and optionally the
+Samples one supply's ("5v" or "external") INA238 continuously and returns the statistics (and optionally the
 waveform) of the window. This is what turns "the board browns out sometimes" into a number:
 inrush at power-on, sleep-current floors, the energy of one duty cycle.
 
-#### Rail limits (rev3 hardware)
+#### Supply limits (rev3 hardware)
 
-| | eFuse 1 — internal | eFuse 2 — external |
+| | `5v` (eFuse 1) | `external` (eFuse 2) |
 |---|---|---|
 | Source | 5 V from USB-C | J4 terminal, 5–20 V |
 | INA238 | `0x40`, 50 mΩ shunt | `0x44`, 30 mΩ shunt |
@@ -2958,18 +2983,19 @@ happened. `VBUS` is measured on the **DUT side** of the eFuse. (The ADC `current
 #### Start
 
 ```json
-{"cmd":"power_profile","action":"start","efuse":1,"sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":2048}
+{"cmd":"power_profile","action":"start","supply":"5v","sample_rate_hz":1000,"max_duration_ms":60000,"keep_samples":2048}
 ```
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `efuse` | `1` or `2` | no | `1` | Which rail to sample. |
+| `supply` | `"5v"` or `"external"` | no | `"5v"` | Which supply to sample. `"3v3"` and `"1v8"` have no current monitor: `BP0090`. |
+| `efuse` | `1` or `2` | legacy | — | The name before `supply`. Not together with `supply` (`BP0091`). |
 | `sample_rate_hz` | integer | no | `500` | 100..500, whole numbers only. Accurate to ~200 Hz; above that the sampler (one register read per worker pass) beats against the pass interval and flattens near 365 Hz. `stats.sample_rate_hz` reports what was delivered, `stats.adc_sample_rate_hz` what the sensor was configured for. |
 | `max_duration_ms` | integer | no | `60000` | 1..600000. The sampler stops by itself at the limit and marks the result `truncated`. |
 | `keep_samples` | integer | no | `0` | 0..4096 samples to keep for the reply. `0` = statistics only. |
 
 ```json
-{"status":"ok","data":{"started":true,"efuse":1,"sample_rate_hz":907}}
+{"status":"ok","data":{"started":true,"supply":"5v","efuse":1,"sample_rate_hz":907}}
 ```
 
 The INA238 is put into continuous shunt+bus mode with a conversion time × averaging that makes
@@ -2982,7 +3008,7 @@ down to `keep_samples`: when the store fills, neighbouring entries are averaged 
 the bin size doubles, so every entry averages the same number of raw samples.
 
 A `target_power` with `delay_ms` may fire while a profile is running — that is how you capture
-inrush: start the profile, then schedule the eFuse on.
+inrush: start the profile, then schedule the supply on.
 
 #### Stop and read the result
 
@@ -2996,7 +3022,7 @@ Stops the sampler (if running) and returns the result using the same chunked fra
 ```json
 {"status":"ok","t_us":[0,1102,2204],"current_ua":[830,142300,141900],"bus_mv":[5008,4990,4992],"more":true}
 {"status":"chunk","t_us":[…],"current_ua":[…],"bus_mv":[…],
- "stats":{"efuse":1,"sample_rate_hz":364,"adc_sample_rate_hz":907,"n":3640,"duration_ms":10000,
+ "stats":{"supply":"5v","efuse":1,"sample_rate_hz":364,"adc_sample_rate_hz":907,"n":3640,"duration_ms":10000,
           "avg_ua":141200,"min_ua":830,"peak_ua":612400,
           "avg_mv":4995,"min_mv":4870,"max_mv":5012,
           "energy_uj":7052000,"charge_uc":1412000,
@@ -3011,6 +3037,7 @@ Stops the sampler (if running) and returns the result using the same chunked fra
 | `stats.adc_sample_rate_hz` | Conversion rate the current monitor was configured for — the ceiling `sample_rate_hz` works towards, not what arrived. |
 | `stats.n` | Raw samples taken (not the number returned). |
 | `stats.energy_uj` / `charge_uc` | ∫I·V·dt in µJ and ∫I·dt in µC over every raw sample. |
+| `stats.supply` / `stats.efuse` | The supply that was sampled and its legacy number. |
 | `stats.fault` | An eFuse fault was seen at any point in the window. |
 | `stats.truncated` | The sampler stopped itself at `max_duration_ms`. |
 
@@ -3021,7 +3048,7 @@ when none ran.
 
 ```json
 {"cmd":"power_profile","action":"status"}
-{"status":"ok","data":{"running":true,"efuse":1,"elapsed_ms":4213,"n":3821}}
+{"status":"ok","data":{"running":true,"supply":"5v","efuse":1,"elapsed_ms":4213,"n":3821}}
 ```
 
 #### One-shot
@@ -3030,19 +3057,22 @@ Omit `action` and give `duration_ms`: the pod starts, waits (without blocking th
 then sends the same reply `stop` would. Needs a streaming connection.
 
 ```json
-{"cmd":"power_profile","efuse":1,"duration_ms":2000,"sample_rate_hz":500,"keep_samples":1024}
+{"cmd":"power_profile","supply":"5v","duration_ms":2000,"sample_rate_hz":500,"keep_samples":1024}
 ```
 
 #### Error cases
 
 | Condition | Message |
 |---|---|
-| a profile is already running | `"power profile already running on efuse 1"` |
-| `efuse` not 1 or 2 | `"efuse must be 1 or 2"` |
+| a profile is already running | `"power profile already running on the 5v supply"` |
+| `supply` and `efuse` together | `BP0091` (`power_supply_and_efuse`) |
+| `supply` `"3v3"` or `"1v8"` | `BP0090` (`power_no_meter`, arg `supply`) |
+| `supply` not one of the four | `"supply must be one of 5v, external, 3v3, 1v8"` |
+| `efuse` not 1 or 2 | `"invalid efuse: use 1 or 2, or supply 5v, external, 3v3, 1v8"` |
 | `sample_rate_hz` out of range | `"sample_rate_hz must be 100..500"` |
 | `max_duration_ms` / `duration_ms` out of range | `"max_duration_ms must be 1..600000"` / `"duration_ms must be 1..600000"` |
 | `keep_samples` > 4096 | `"keep_samples must be 0..4096"` |
-| the rail's INA238 does not answer | `"power profile: the INA238 for efuse 1 (I2C 0x40) is not responding"` |
+| the supply's INA238 does not answer | `"power profile: the current monitor for the 5v supply (I2C 0x40) is not responding"` |
 | not enough heap for `keep_samples` | `"not enough memory to keep N samples (M bytes); ask for fewer keep_samples"` |
 | `action` not recognised | `"action must be start, stop or status"` |
 | no `action` and no `duration_ms` | `"power_profile needs an action (start, stop, status) or duration_ms for a one-shot"` |
@@ -5137,14 +5167,15 @@ write them for you (`bp.load_wiring`, `bp.save_wiring`, `benchpod wiring`); this
 underneath.
 
 The pod treats a profile as opaque JSON: it checks that it is one JSON object and, with firmware
-4.0.7 and later, the profile's target-power rail; the tools validate the rest. Every save gives the
-profile the next revision number.
+4.0.7 and later, the profile's target-power supply; the tools validate the rest. Every save gives
+the profile the next revision number.
 
-The rail is the profile's `efuse` key: `1` (internal 5 V), `2` (external), and on digital v4 the
-strings `"j1_3v3"` and `"j1_1v8"` (the switched J1 pins 17 and 18, see
-[`target_power`](#target_power--enabledisable-a-target-power-efuse)). Tools that switch power
-without naming a rail use the profile's. Any other value, and a J1 rail on a board without them
-(hw fact `dut_rails`), is refused at save time with `BP0089`.
+The supply is the profile's `supply` key: `"5v"`, `"external"`, and on a pod that switches them
+(hw fact `supply_3v3_1v8`) `"3v3"` and `"1v8"` (see [Target power supplies](#target-power-supplies)).
+Tools that switch power without naming a supply use the profile's. Profiles saved before 4.0.7
+have the older `efuse` key (`1` or `2`): it is still read, and a profile may have both keys as long
+as they name the same supply. Any other value, a `"3v3"` or `"1v8"` on a pod without them, and
+`supply` and `efuse` that disagree, are refused at save time with `BP0089`.
 
 ```json
 {"cmd":"wiring_list"}
@@ -5183,7 +5214,7 @@ touches the pod's flash bus. Saving, deleting and changing the default do, so th
 `BP0016` while the DAC runs or a capture holds the bus; stop the DAC first. A save survives a power
 loss: the pod keeps two copies and writes the older one. Refusals: `BP0006` (a missing value),
 `BP0007` (no such profile), `BP0008` (bad name), `BP0009` (revision conflict), `BP0010` (full),
-`BP0011` (too large), `BP0012` (not a JSON object), `BP0089` (a rail this pod does not have), `BP0014` (piece out of order), `BP0015`
+`BP0011` (too large), `BP0012` (not a JSON object), `BP0089` (a supply this pod does not have), `BP0014` (piece out of order), `BP0015`
 (storage failed), see [error codes](https://embeddedci.com/docs/errors).
 
 ### `emi_log` — the EMI test build's run log
@@ -5572,8 +5603,8 @@ $ nc 192.168.1.220 8080
 {"cmd":"la_voltage","mv":3300}
 {"status":"ok","data":{"mv":3300,"st":1,"readback_mv":3297}}
 
-{"cmd":"target_power","efuse":1,"enabled":true}
-{"status":"ok","data":{"efuse":1,"enabled":true,"delay_ms":0}}
+{"cmd":"target_power","supply":"5v","enabled":true}
+{"status":"ok","data":{"supply":"5v","efuse":1,"enabled":true,"delay_ms":0}}
 
 {"cmd":"generate","waveform":"sine","freq_hz":1000,"path":"3v3","amplitude_v":1.2,"offset_v":1.65}
 {"status":"ok","data":null}
