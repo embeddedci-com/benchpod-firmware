@@ -120,7 +120,7 @@ static void test_edges(void)
 
 static int caps_none(board_caps_t c)
 {
-    return !c.vref_out && !c.la_5v && !c.la_clamps && !c.pull_expanders && !c.usb_sel && !c.dut_rails && !c.cn1_dac_swap && !c.qspi_cs_ncs_pins;
+    return !c.vref_out && !c.la_5v && !c.la_clamps && !c.pull_expanders && !c.usb_sel && !c.supply_3v3_1v8 && !c.cn1_dac_swap && !c.qspi_cs_ncs_pins;
 }
 
 static int caps_v3(board_caps_t c) { return c.la_1v8 && c.nrst_pin && c.usb_cc; }
@@ -153,7 +153,7 @@ static void test_caps(void)
     for (unsigned i = 0; i < sizeof(old) / sizeof(old[0]); i++)
         CHECK(caps_none(board_caps_for_rev(old[i])), "rev %d has no v4 caps", old[i]);
     board_caps_t c = board_caps_for_rev(BOARD_REV_V4);
-    CHECK(c.vref_out && c.la_5v && c.la_clamps && c.pull_expanders && c.usb_sel && c.dut_rails && c.cn1_dac_swap && c.qspi_cs_ncs_pins, "v4 caps");
+    CHECK(c.vref_out && c.la_5v && c.la_clamps && c.pull_expanders && c.usb_sel && c.supply_3v3_1v8 && c.cn1_dac_swap && c.qspi_cs_ncs_pins, "v4 caps");
 }
 
 static void test_init(void)

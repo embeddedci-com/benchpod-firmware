@@ -1,4 +1,4 @@
-/* Host stand-in for the STM32 HAL header: what dut_rails.c uses (test_dut_rails.c). */
+/* Host stand-in for the STM32 HAL header: what dut_supply.c uses (test_dut_supply.c). */
 #ifndef STM32H5XX_HAL_SHIM_DUT_H
 #define STM32H5XX_HAL_SHIM_DUT_H
 #include <stdint.h>

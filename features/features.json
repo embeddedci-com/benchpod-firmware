@@ -4,7 +4,7 @@
   "revision": 22,
   "api": 2,
   "min_client_api": 2,
-  "table_sha256": "c222862c9c3e472231881f0d3f7ede827f872612dddab6d1937331b2e72b8235",
+  "table_sha256": "7dbbc131f90885a2736ee7d7f85ade3128958eaee9daf1bada2777f0bc36284b",
   "floor": "3.9.2",
   "docs_base": "https://github.com/embeddedci-com/benchpod-firmware/blob/main/docs/",
   "facts": {
@@ -48,8 +48,8 @@
     "vref_out": {
       "hw": "vref_out"
     },
-    "dut_rails": {
-      "hw": "dut_rails"
+    "supply_3v3_1v8": {
+      "hw": "supply_3v3_1v8"
     }
   },
   "releases": [
@@ -896,14 +896,14 @@
       "board": "any",
       "docs": "API.md#prog_flash--flash-a-chip-over-its-programming-pins"
     },
-    "dut_rails": {
+    "supply_3v3_1v8": {
       "rev": 22,
       "firmware": "4.0.7",
       "board": "any",
       "requires": [
-        "dut_rails"
+        "supply_3v3_1v8"
       ],
-      "docs": "API.md#target_power--enabledisable-a-target-power-efuse"
+      "docs": "API.md#target-power-supplies"
     }
   }
 }

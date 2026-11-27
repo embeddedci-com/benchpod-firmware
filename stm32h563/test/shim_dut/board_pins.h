@@ -1,4 +1,4 @@
-/* Host stand-in for bsp/board_pins.h: the J1 DUT supply enables only (test_dut_rails.c). */
+/* Host stand-in for bsp/board_pins.h: the J1 DUT supply enables only (test_dut_supply.c). */
 #ifndef BOARD_PINS_SHIM_DUT_H
 #define BOARD_PINS_SHIM_DUT_H
 #include "stm32h5xx_hal.h"
