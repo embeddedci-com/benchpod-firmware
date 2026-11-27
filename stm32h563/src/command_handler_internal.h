@@ -1,6 +1,7 @@
 #ifndef COMMAND_HANDLER_INTERNAL_H
 #define COMMAND_HANDLER_INTERNAL_H
 
+#include "supply.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -166,6 +167,9 @@ void   speedtest_conn_closed(int conn_id);
 /* The pod itself: power, identity, the iCE40 (command_handler_device.c); status
    (command_handler_status.c). */
 void handle_target_power(int conn_id, const char *json);
+/* The supply a request names ("supply", or the older "efuse" 1|2; both is BP0091).  1: *out set;
+   0: neither key; -1: the error was sent.  command_handler_device.c. */
+int  request_supply(int conn_id, const char *json, supply_t *out);
 void handle_target_status(int conn_id, const char *json);
 void handle_power_status(int conn_id, const char *json);
 void handle_status(int conn_id, const char *json);

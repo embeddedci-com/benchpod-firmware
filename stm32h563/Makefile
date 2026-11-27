@@ -83,7 +83,8 @@ C_SOURCES := \
   src/qspi_cs.c \
   src/vref_logic.c \
   src/vref_out.c \
-  src/dut_rails.c \
+  src/dut_supply.c \
+  src/supply.c \
   src/pull_exp_logic.c \
   src/pull_exp.c \
   src/board_variant.c \

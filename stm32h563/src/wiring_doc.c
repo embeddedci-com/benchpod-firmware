@@ -1,6 +1,7 @@
 /* wiring_doc.c: see wiring_doc.h. Pure, host-tested in test/test_wiring_doc.c. */
 #include "wiring_doc.h"
 
+#include <stdio.h>
 #include <string.h>
 
 static const uint8_t k_magic[4] = { 'B', 'P', 'W', 'R' };
@@ -226,17 +227,10 @@ uint16_t wiring_doc_json_la_mv(const uint8_t *json, size_t len) {
     return 0;
 }
 
-bool wiring_rail_known(const char *rail) {
-    return rail && (strcmp(rail, "1") == 0 || strcmp(rail, "2") == 0 || wiring_rail_is_j1(rail));
-}
-
-bool wiring_rail_is_j1(const char *rail) {
-    return rail && (strcmp(rail, "j1_3v3") == 0 || strcmp(rail, "j1_1v8") == 0);
-}
-
-bool wiring_doc_json_rail(const uint8_t *json, size_t len, char *out, size_t cap) {
-    static const char key[] = "efuse";
-    const size_t klen = sizeof(key) - 1u;
+/* A top-level key as text: a number's digits or a short string.  1: copied into out; 0: the key is
+   absent or null; -1: present but not a number or a short plain string (an object, an escape ...). */
+static int json_top_text(const uint8_t *json, size_t len, const char *key, char *out, size_t cap) {
+    const size_t klen = strlen(key);
     int depth = 0;
     bool want_key = false;
     for (size_t i = 0; i < len;) {
@@ -248,28 +242,28 @@ bool wiring_doc_json_rail(const uint8_t *json, size_t len, char *out, size_t cap
                 if (end - i == klen + 2u && memcmp(json + i + 1, key, klen) == 0) {
                     size_t j = end;
                     while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\n' || json[j] == '\r')) j++;
-                    if (j >= len || json[j] != ':') return false;
+                    if (j >= len || json[j] != ':') return -1;
                     j++;
                     while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\n' || json[j] == '\r')) j++;
-                    if (j >= len) return false;
+                    if (j >= len) return -1;
                     size_t n = 0;
                     if (json[j] == '"') {
                         size_t e2 = skip_str(json, len, j);
-                        if (e2 <= j + 1u || json[e2 - 1u] != '"') return false;
+                        if (e2 <= j + 1u || json[e2 - 1u] != '"') return -1;
                         for (size_t k = j + 1u; k + 1u < e2; k++) {
-                            if (json[k] == '\\' || n + 1u >= cap) return false;
+                            if (json[k] == '\\' || n + 1u >= cap) return -1;
                             out[n++] = (char)json[k];
                         }
                     } else {
                         while (j < len && ((json[j] >= '0' && json[j] <= '9') || json[j] == '.' || json[j] == '-' ||
                                            json[j] == 'e' || json[j] == 'E' || json[j] == '+')) {
-                            if (n + 1u >= cap) return false;
+                            if (n + 1u >= cap) return -1;
                             out[n++] = (char)json[j++];
                         }
-                        if (n == 0) return false;   /* null, true, an object ... */
+                        if (n == 0) return (j + 4u <= len && memcmp(json + j, "null", 4) == 0) ? 0 : -1;   /* null: absent; true, an object ... */
                     }
                     out[n] = 0;
-                    return true;
+                    return 1;
                 }
             }
             i = end;
@@ -280,5 +274,22 @@ bool wiring_doc_json_rail(const uint8_t *json, size_t len, char *out, size_t cap
         else if (c == ',' && depth == 1) want_key = true;
         i++;
     }
-    return false;
+    return 0;
+}
+
+wiring_supply_result_t wiring_doc_json_supply(const uint8_t *json, size_t len, supply_t *out,
+                                              char *bad, size_t cap) {
+    char sv[24] = {0}, ef[24] = {0};
+    int rs = json_top_text(json, len, "supply", sv, sizeof(sv));
+    int re = json_top_text(json, len, "efuse", ef, sizeof(ef));
+    if (rs < 0) { snprintf(bad, cap, "supply"); return WIRING_SUPPLY_BAD; }
+    if (re < 0) { snprintf(bad, cap, "efuse"); return WIRING_SUPPLY_BAD; }
+    supply_t v = SUPPLY_5V;
+    switch (supply_resolve(rs > 0 ? sv : NULL, re > 0 ? ef : NULL, true, &v)) {
+    case SUPPLY_REQ_OK:         if (out) *out = v; return WIRING_SUPPLY_OK;
+    case SUPPLY_REQ_ABSENT:     return WIRING_SUPPLY_NONE;
+    case SUPPLY_REQ_BAD_SUPPLY: snprintf(bad, cap, "%s", sv); return WIRING_SUPPLY_BAD;
+    case SUPPLY_REQ_BAD_EFUSE:  snprintf(bad, cap, "efuse %s", ef); return WIRING_SUPPLY_BAD;
+    default:                    snprintf(bad, cap, "supply %s with efuse %s", sv, ef); return WIRING_SUPPLY_CONFLICT;
+    }
 }

@@ -33,8 +33,8 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0025 | `lease_busy` | lease | 3.10.13 | {holder} holds this pod ({purpose}, {left_s} s left) |
 | BP0026 | `lease_lost` | lease | 3.10.13 | The pod's lease was stopped by {by} |
 | BP0027 | `lease_not_held` | lease | 3.10.13 | The pod holds no lease with id {id} |
-| BP0028 | `vref_5v_missing` | io | 3.10.13 | 5 V did not come up on pin 21 ({mv} mV) |
-| BP0029 | `pull_rail_down` | io | 3.10.13 | pin 21 is down ({mv} mV): the pull resistors are off until it is back |
+| BP0028 | `vref_5v_missing` | io | 3.10.13 | 5 V did not come up on the I/O reference (VREF OUT, {mv} mV) |
+| BP0029 | `pull_rail_down` | io | 3.10.13 | The I/O reference (VREF OUT) is down ({mv} mV): the pull resistors are off until it is back |
 | BP0030 | `client_too_old` | protocol | 4.0.0 | Update the BenchPod SDK, MCP or CLI: this firmware needs client API {min_client_api} or newer (this client sent {client_api}) |
 | BP0031 | `la_pin_in_use` | io | 4.0.0 | LA{la} is in use by {owner} |
 | BP0032 | `la_pull_down_engaged` | io | 4.0.0 | LA{la} has its {ohms} pull-down on, which {function} cannot work with ({reason}) |
@@ -94,5 +94,6 @@ The public page is https://embeddedci.com/docs/errors (one anchor per code). Rul
 | BP0086 | `usb_serial_busy` | usb | 4.0.3 | The board's USB serial port is not free: {why} |
 | BP0087 | `usb_check_refused` | usb | 4.0.3 | The pod cannot run the USB check: {why} |
 | BP0088 | `usb_check_no_efuse_power` | usb | 4.0.3 | The board is not powered from target-power eFuse 1 |
-| BP0089 | `wiring_bad_rail` | wiring | next | {rail} is not a target-power rail this pod has |
-| BP0090 | `power_no_meter` | power | next | {rail} has no current monitor |
+| BP0089 | `wiring_bad_supply` | wiring | next | The target-power supply is not valid on this pod: {supply} |
+| BP0090 | `power_no_meter` | power | next | The {supply} supply has no current monitor |
+| BP0091 | `power_supply_and_efuse` | power | next | Give either supply or efuse, not both |

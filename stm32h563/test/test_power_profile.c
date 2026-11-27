@@ -249,7 +249,7 @@ static void test_sampler_start_errors(void) {
     power_profile_discard();
 
     CHECK(power_profile_start(3, 1000, 1000, 0, err, sizeof(err)) != 0);
-    CHECK(strcmp(err, "efuse must be 1 or 2") == 0);
+    CHECK(strcmp(err, "supply must be 5v or external (efuse 1 or 2)") == 0);
     CHECK(power_profile_start(1, 10, 1000, 0, err, sizeof(err)) != 0);
     CHECK(power_profile_start(1, PP_RATE_MAX_HZ, 0, 0, err, sizeof(err)) != 0);
     CHECK(power_profile_start(1, PP_RATE_MAX_HZ, 1000, PP_KEEP_MAX + 1u, err, sizeof(err)) != 0);
@@ -304,6 +304,7 @@ static void test_sampler_run(void) {
     power_profile_emit_stats(&e);
     CHECK(bp_emit_ok(&e));
     CHECK(strstr(buf, "\"efuse\":1") != NULL);
+    CHECK(strstr(buf, "\"supply\":\"5v\"") != NULL);
     /* adc_sample_rate_hz is the configured conversion rate; sample_rate_hz is what was actually delivered
        (n over duration), which on real hardware is well below it. */
     CHECK(strstr(buf, "\"adc_sample_rate_hz\":471") != NULL);
@@ -399,9 +400,9 @@ static void test_sampler_busy_truncate_and_fault(void) {
     CHECK(power_profile_start(2, PP_RATE_MAX_HZ, 50, 0, err, sizeof(err)) == 0);
     CHECK(ina.addr == I2C_ADDR_INA238_EXTERNAL);
 
-    /* A second start while one runs is refused, naming the rail that is busy. */
+    /* A second start while one runs is refused, naming the supply that is busy. */
     CHECK(power_profile_start(1, PP_RATE_MAX_HZ, 1000, 0, err, sizeof(err)) != 0);
-    CHECK(strcmp(err, "power profile already running on efuse 2") == 0);
+    CHECK(strcmp(err, "power profile already running on the external supply") == 0);
 
     /* An eFuse trip during the window is latched into the result. */
     g_fault = true;
@@ -418,6 +419,7 @@ static void test_sampler_busy_truncate_and_fault(void) {
     bp_emit_init(&e, buf, sizeof(buf));
     power_profile_emit_stats(&e);
     CHECK(strstr(buf, "\"efuse\":2") != NULL);
+    CHECK(strstr(buf, "\"supply\":\"external\"") != NULL);
     CHECK(strstr(buf, "\"fault\":true") != NULL);
     CHECK(strstr(buf, "\"truncated\":true") != NULL);
     /* keep_samples 0 keeps the statistics but no sample arrays. */

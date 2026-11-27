@@ -181,10 +181,10 @@ static void free_store(void) {
 int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
                         uint32_t keep_samples, char *err, size_t cap) {
     if (s.running) {
-        snprintf(err, cap, "power profile already running on efuse %d", s.efuse);
+        snprintf(err, cap, "power profile already running on the %s supply", s.efuse == 2 ? "external" : "5v");
         return -1;
     }
-    if (efuse != 1 && efuse != 2) { snprintf(err, cap, "efuse must be 1 or 2"); return -1; }
+    if (efuse != 1 && efuse != 2) { snprintf(err, cap, "supply must be 5v or external (efuse 1 or 2)"); return -1; }
     if (rate_hz < PP_RATE_MIN_HZ || rate_hz > PP_RATE_MAX_HZ) {
         snprintf(err, cap, "sample_rate_hz must be %u..%u", (unsigned)PP_RATE_MIN_HZ, (unsigned)PP_RATE_MAX_HZ);
         return -1;
@@ -224,7 +224,7 @@ int power_profile_start(int efuse, uint32_t rate_hz, uint32_t max_duration_ms,
     if (rc == 0) rc = ina238_read_bus_mv(addr, &mv);
     if (rc != 0) {
         free_store();
-        snprintf(err, cap, "power profile: the current monitor for efuse %d (I2C 0x%02X) is not responding", efuse, addr);
+        snprintf(err, cap, "power profile: the current monitor for the %s supply (I2C 0x%02X) is not responding", efuse == 2 ? "external" : "5v", addr);
         return -1;
     }
 
@@ -364,10 +364,10 @@ void power_profile_emit_stats(bp_emit_t *e) {
        conversion rate visible; the per-sample t_us timestamps are exact either way. */
     uint32_t rate_hz = (duration_ms && st->n)
         ? (uint32_t)(((uint64_t)st->n * 1000u + duration_ms / 2u) / duration_ms) : 0u;
-    bp_emit(e, "\"stats\":{\"efuse\":%d,\"sample_rate_hz\":%lu,\"adc_sample_rate_hz\":%lu,\"n\":%lu,\"duration_ms\":%lu,"
+    bp_emit(e, "\"stats\":{\"supply\":\"%s\",\"efuse\":%d,\"sample_rate_hz\":%lu,\"adc_sample_rate_hz\":%lu,\"n\":%lu,\"duration_ms\":%lu,"
                "\"avg_ua\":%ld,\"min_ua\":%ld,\"peak_ua\":%ld,"
                "\"avg_mv\":%u,\"min_mv\":%u,\"max_mv\":%u,\"energy_uj\":",
-            s.efuse, (unsigned long)rate_hz, (unsigned long)s.cfg.rate_hz,
+            s.efuse == 2 ? "external" : "5v", s.efuse, (unsigned long)rate_hz, (unsigned long)s.cfg.rate_hz,
             (unsigned long)st->n, (unsigned long)duration_ms,
             avg_ua, (long)st->min_ua, (long)st->peak_ua,
             avg_mv, (unsigned)st->min_mv, (unsigned)st->max_mv);
