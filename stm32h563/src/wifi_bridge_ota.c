@@ -36,6 +36,37 @@ void wbo_version_str(uint32_t v, char out[16])
     snprintf(out, 16, "%u.%u.%u", (unsigned)(v >> 16) & 0xff, (unsigned)(v >> 8) & 0xff, (unsigned)v & 0xff);
 }
 
+bool wbo_image_name(const uint8_t *head, size_t len, char out[WBO_NAME_LEN])
+{
+    /* esp_image_header_t (24 bytes, magic 0xE9) + the first segment's header (8), then
+       esp_app_desc_t: magic 0xABCD5432, secure_version, 2 reserved words, version[32]. */
+    out[0] = 0;
+    if (!head || len < WBO_NAME_HEAD || head[0] != 0xE9 ||
+        !(head[32] == 0x32 && head[33] == 0x54 && head[34] == 0xCD && head[35] == 0xAB)) {
+        return false;
+    }
+    size_t n = 0;
+    while (n < 32 && head[48 + n] != 0) {
+        if (head[48 + n] < 0x21 || head[48 + n] > 0x7e) return false;  /* not a version string */
+        n++;
+    }
+    if (n == 0) return false;
+    if (n > WBO_NAME_LEN - 1) n = WBO_NAME_LEN - 1;
+    memcpy(out, head + 48, n);
+    out[n] = 0;
+    return true;
+}
+
+/* The version being installed, for the status: the image's own name, else the manifest's. */
+static void want_str(const wbo_t *o, char out[WBO_NAME_LEN])
+{
+    if (o->want_name[0]) {
+        memcpy(out, o->want_name, WBO_NAME_LEN);
+    } else {
+        wbo_version_str(o->want, out);
+    }
+}
+
 void wbo_init(wbo_t *o, const wbo_io_t *io, wb_reply_t *reply)
 {
     memset(o, 0, sizeof(*o));
@@ -72,8 +103,8 @@ static void stop(wbo_t *o)
 
 static void fail(wbo_t *o, const char *why, const char *detail)
 {
-    char v[16];
-    wbo_version_str(o->want, v);
+    char v[WBO_NAME_LEN];
+    want_str(o, v);
     snprintf(o->status, sizeof(o->status), "update to %s failed: %s%s%s", v, why, detail && detail[0] ? ": " : "",
              detail ? detail : "");
     o->failed = o->want;  /* not again until the pod reboots or `bridge update` */
@@ -88,8 +119,8 @@ static void fail_transient(wbo_t *o, const char *why, const char *detail)
         fail(o, why, detail);
         return;
     }
-    char v[16];
-    wbo_version_str(o->want, v);
+    char v[WBO_NAME_LEN];
+    want_str(o, v);
     snprintf(o->status, sizeof(o->status), "update to %s failed (will retry): %s%s%s", v, why,
              detail && detail[0] ? ": " : "", detail ? detail : "");
     stop(o);
@@ -124,8 +155,8 @@ static void send_chunk(wbo_t *o)
         fail(o, "the bridge cannot take a request", NULL);
         return;
     }
-    char v[16];
-    wbo_version_str(o->want, v);
+    char v[WBO_NAME_LEN];
+    want_str(o, v);
     snprintf(o->status, sizeof(o->status), "updating to %s: %u%%", v, (unsigned)((uint64_t)o->off * 100 / o->size));
 }
 
@@ -175,6 +206,8 @@ static void try_start(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, boo
         return;
     }
     o->want = img->version;
+    memcpy(o->want_name, img->name, WBO_NAME_LEN);
+    o->want_name[WBO_NAME_LEN - 1] = 0;
     if (o->tries_for != o->want || forced) {
         o->tries_for = o->want;
         o->tries = 0;
@@ -194,10 +227,10 @@ static void try_start(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, boo
         return;  /* busy: try on the next check */
     }
     o->state = WBO_BEGIN;
-    char v[16], h[16];
-    wbo_version_str(o->want, v);
-    wbo_version_str(have, h);
-    snprintf(o->status, sizeof(o->status), "updating %s to %s: starting", have ? h : "?", v);
+    char v[WBO_NAME_LEN];
+    want_str(o, v);
+    snprintf(o->status, sizeof(o->status), "updating %s to %s: starting",
+             br->fw_version[0] ? br->fw_version : "?", v);
 }
 
 void wbo_poll(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, bool bus_free, uint32_t now)
@@ -209,9 +242,12 @@ void wbo_poll(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, bool bus_fr
         return;
     }
     if (o->state == WBO_WAIT_BACK) {
-        char v[16];
-        wbo_version_str(o->want, v);
-        bool running = br->present && wbo_pack_version(br->fw_version) == o->want;
+        char v[WBO_NAME_LEN];
+        want_str(o, v);
+        /* By name when the image has one: an EMC build ("0.1.3-emc", manifest version 0) packs to
+           0 like any string that is not X.Y.Z. */
+        bool running = br->present && (o->want_name[0] ? strcmp(br->fw_version, o->want_name) == 0
+                                                       : wbo_pack_version(br->fw_version) == o->want);
         /* hello_flags, not flags: right after a rollback the bridge's first unsolicited STATUS
            (confirmed, no version) arrives before the HELLO with its old version. */
         if (running && (br->hello_flags & BWP_F_PENDING_VERIFY)) {
@@ -253,8 +289,8 @@ void wbo_poll(wbo_t *o, const wb_info_t *br, const wbo_image_t *img, bool bus_fr
         stop(o);
         o->state = WBO_WAIT_BACK;
         o->deadline = now + WBO_COME_BACK_MS;
-        char v[16];
-        wbo_version_str(o->want, v);
+        char v[WBO_NAME_LEN];
+        want_str(o, v);
         snprintf(o->status, sizeof(o->status), "updating to %s: waiting for the bridge to restart", v);
         return;
     }

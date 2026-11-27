@@ -109,11 +109,13 @@ static bool bridge_wifi_status(int conn_id) {
     } else {
         bp_emit_raw(&e, ",\"identity\":null");
     }
-    uint32_t iv;
-    if (wifi_bridge_image(&iv))
-        bp_emit(&e, ",\"image\":\"%u.%u.%u\"", (unsigned)(iv >> 16) & 0xff, (unsigned)(iv >> 8) & 0xff, (unsigned)iv & 0xff);
-    else
+    char iv[16];
+    if (wifi_bridge_image(iv)) {
+        bp_emit_raw(&e, ",\"image\":");
+        bp_emit_jstr(&e, iv);
+    } else {
         bp_emit_raw(&e, ",\"image\":null");
+    }
     if (i.have_status) {
         bp_emit(&e, ",\"boot\":\"%s\",\"reboots\":%lu,\"emc\":", wb_reset_str(i.reset), (unsigned long)i.reboots);
         if (i.emc) bp_emit(&e, "\"%s\"", wb_emc_str(i.emc)); else bp_emit_raw(&e, "null");

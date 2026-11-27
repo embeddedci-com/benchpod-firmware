@@ -4714,7 +4714,9 @@ alone), `wifi_clear` clears them there (reply `"cleared"`), and `wifi_status` de
 ```
 
 `identity` is the bridge's identity key (`null` before bridge firmware 0.1.3), `image` the bridge
-firmware the pod holds for it (`null` when slot `bridge` is empty), `boot` the bridge's last reset
+firmware the pod holds for it, as the image names itself (`"0.1.3-emc"` for an EMC test build;
+up to firmware 4.0.6 the signed version number, so an EMC build showed `"0.0.0"`; `null` when slot
+`bridge` is empty), `boot` the bridge's last reset
 reason, `reboots` the bridge restarts the pod saw and `emc` the EMC test radio state (`null`
 normally); `boot`, `reboots` and `emc` come once the bridge has sent a status (firmware 4.0.0; the
 console's `bridge` showed them before).
@@ -4729,7 +4731,8 @@ Wi-Fi bridge's identity check failed ...`). The pod pairs again by itself after 
 or with a replacement bridge. See [USB serial interface, Wi-Fi bridge](usb-serial-interface.md#wi-fi-bridge)
 for provisioning a certificate. Errors from the bridge come back as `"Wi-Fi bridge: <code>: <detail>"`.
 `bridge.update` says what the pod's automatic bridge firmware update is doing (`"idle"`,
-`"updating 0.1.0 to 0.2.0: 45%"`, `"updated to 0.2.0"`, `"update to 0.2.0 failed: ..."`); the
+`"updating 0.1.0 to 0.2.0: 45%"`, `"updated to 0.2.0"`, `"update to 0.2.0 failed: ..."`, with the
+versions the bridge and the image report, so `"updating 0.1.3 to 0.1.3-emc: starting"`); the
 image comes from W25Q blob slot `bridge` (OTA target `bridge`, listed by `blob_status` in
 development builds).
 

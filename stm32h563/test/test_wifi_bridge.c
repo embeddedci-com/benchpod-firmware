@@ -45,6 +45,7 @@ typedef struct {
     bool ota_active, ota_done, refuse_begin, rollback;
     bool pending;           /* running a new image on trial: PENDING_VERIFY in HELLO */
     char prev_fw[16];       /* what a rollback returns to */
+    char next_fw[16];       /* the version the installed image reports, when not the manifest's (EMC) */
     uint32_t trial_until;   /* with rollback: when the trial ends without a confirmation */
     int data_frames;
     uint8_t reset, emc;     /* STATUS: BWP_T_RESET, BWP_T_EMC (0: not sent) */
@@ -257,7 +258,8 @@ static void sim_rx(const uint8_t *f, size_t len)
         sim_emit(n);
         if (sim.ota_done) {  /* boots the new image on trial; a rollback build never confirms it */
             strcpy(sim.prev_fw, sim.fw);
-            wbo_version_str(sim.ota_version, sim.fw);
+            if (sim.next_fw[0]) strcpy(sim.fw, sim.next_fw);
+            else wbo_version_str(sim.ota_version, sim.fw);
             sim.pending = true;
             sim.trial_until = now_ms + 8000;
         }
@@ -628,6 +630,57 @@ static void test_relay(void)
     CHECK(relay.state == WBO_IDLE && sim.data_frames == frames && strcmp(sim.fw, "0.3.2-emc") == 0);
     CHECK(strstr(wbo_status(&relay), "no automatic update: the bridge runs an EMC test build") != NULL);
     wbo_force(&relay);
+    for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.5.0") != 0; t++) {
+        run(10);
+    }
+    CHECK(strcmp(sim.fw, "0.5.0") == 0);
+
+    /* The image's own version (ESP-IDF app descriptor) names it. */
+    {
+        uint8_t h[WBO_NAME_HEAD] = {0};
+        char nm[WBO_NAME_LEN];
+        h[0] = 0xE9;
+        h[32] = 0x32, h[33] = 0x54, h[34] = 0xCD, h[35] = 0xAB;
+        memcpy(h + 48, "0.1.3-emc", 9);
+        CHECK(wbo_image_name(h, sizeof(h), nm) && strcmp(nm, "0.1.3-emc") == 0);
+        CHECK(!wbo_image_name(h, sizeof(h) - 1, nm) && nm[0] == 0);       /* too short */
+        memcpy(h + 48, "0.1.3-emc-with-a-long-tail", 26);
+        CHECK(wbo_image_name(h, sizeof(h), nm) && strcmp(nm, "0.1.3-emc-with-") == 0);  /* cut like HELLO's */
+        h[50] = '\n';
+        CHECK(!wbo_image_name(h, sizeof(h), nm));                           /* not a version string */
+        memset(h + 48, 0, 32);
+        CHECK(!wbo_image_name(h, sizeof(h), nm));                           /* empty */
+        memcpy(h + 48, "0.1.3", 5);
+        h[33] = 0;
+        CHECK(!wbo_image_name(h, sizeof(h), nm));                           /* no app descriptor */
+        h[33] = 0x54, h[0] = 0;
+        CHECK(!wbo_image_name(h, sizeof(h), nm));                           /* no ESP image */
+    }
+
+    /* An EMC image is signed with manifest version 0 and runs as "<version>-emc": never installed
+       on its own, and when forced the status names it and the update ends once HELLO shows it. */
+    slot.version = 0;
+    slot.manifest[44] = slot.manifest[45] = slot.manifest[46] = 0;
+    strcpy(slot.name, "0.5.0-emc");
+    strcpy(sim.next_fw, "0.5.0-emc");
+    frames = sim.data_frames;
+    run(12000);
+    CHECK(relay.state == WBO_IDLE && sim.data_frames == frames && strcmp(sim.fw, "0.5.0") == 0);
+    wbo_force(&relay);
+    relay_tick();
+    CHECK(strcmp(wbo_status(&relay), "updating 0.5.0 to 0.5.0-emc: starting") == 0);
+    for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.5.0-emc") != 0; t++) {
+        run(10);
+    }
+    CHECK(strcmp(sim.fw, "0.5.0-emc") == 0 && strcmp(wbo_status(&relay), "updated to 0.5.0-emc") == 0);
+    /* and back to the release image, named by the manifest when the image has no name */
+    slot.version = wbo_pack_version("0.5.0");
+    slot.manifest[44] = (uint8_t)slot.version, slot.manifest[45] = (uint8_t)(slot.version >> 8);
+    slot.name[0] = 0;
+    sim.next_fw[0] = 0;
+    wbo_force(&relay);
+    relay_tick();
+    CHECK(strcmp(wbo_status(&relay), "updating 0.5.0-emc to 0.5.0: starting") == 0);
     for (int t = 0; t < 8000 && strcmp(wbo_status(&relay), "updated to 0.5.0") != 0; t++) {
         run(10);
     }

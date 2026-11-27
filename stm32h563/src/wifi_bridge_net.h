@@ -63,7 +63,8 @@ void wifi_bridge_ota_poll(void);
 bool wifi_bridge_ota_busy(void);          /* an update holds the image bus (bus_busy_reason) */
 const char *wifi_bridge_ota_status(void);
 void wifi_bridge_ota_force(void);         /* `bridge update`: now, whatever the versions */
-/* Slot "bridge" holds an image with its manifest; *version = the manifest's. */
-bool wifi_bridge_image(uint32_t *version);
+/* Slot "bridge" holds an image with its manifest; `version` = the version the image reports
+   itself ("0.1.3-emc"), else the manifest's ("0.1.3"). */
+bool wifi_bridge_image(char version[16]);
 
 #endif /* WIFI_BRIDGE_NET_H */
