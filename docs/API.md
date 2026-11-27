@@ -240,7 +240,7 @@ Commands that send several packets or switch the connection to raw bytes need a 
 | `dac_loop_probe` | T0 | One live operating point of the control loop | object | no |
 | `fpga_image` | T1 | Switch the running iCE40 image (0 = loop, 1 = deep replay, 2 = sensor emulation) | object | no |
 | `psram_ping` | T0 | iCE40 to PSRAM write-path check | object | no |
-| `psram_recover` | T1 | Reboot the pod to recover an inoperable PSRAM datapath | object | no |
+| `reboot` | T1 | Restart the pod (`mode` `soft` or `hard`) | object | no |
 | `la_step` | T1 | Start a step pulse train on an LA pin (`la` with `steps` up to 3.10.13) | object | no |
 | `la_pull` | T1 | Switch or read the LA pull resistors (up/down/off) (`la` up to 3.10.13) | object | no |
 | `la_pins` | T0 | Report all 14 LA pins: function, gpio mode/level, pull, live levels | object | no |
@@ -1843,7 +1843,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `uart_rx_overflow` | boolean | The UART proxy's receive FIFO overflowed. |
 | `uart_rx_parity_error` | boolean | A frame of the current (or last) UART proxy session arrived with a wrong parity bit (gateware v56+). Full form only. |
 | `fpga_switch` | object | Gateware image switches since the pod started (firmware 4.0.6+), full form only; [`fpga_image`](#fpga_image--switch-the-running-gateware-image) replies carry it too. `switches`: images loaded, `skipped`: requests for the image already running (nothing done), `failed`: loads that did not end on the requested image, `slave_loads` / `slave_fails`: loads straight from a slot that worked / did not (each failure retries, then falls back to a flash write), `reflashes`: writes of the image the iCE40 boots from (gateware updates and fallbacks), `erases`: 4 KB sector erases of the config flash those writes cost, `last_ms`: how long the last load took in the pod. |
-| `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`psram_recover`](#psram_recover--reboot-to-recover-the-psram). |
+| `psram`, `psram_ok` | string, boolean | The boot PSRAM self-test: `"ok"`, `"inoperable (...)"` or `"not run"`. When `psram_ok` is `false`, run [`reboot`](#reboot--restart-the-pod). |
 | `heap_free`, `heap_min`, `stack_min` | integer | Heap and the lowest task's stack headroom in bytes. Per-task stacks and the other diagnostics are in [`diag`](#diag--heap-stack-and-network-diagnostics) (firmware 3.10.9+; up to 3.10.8 the full form had `stacks`, `lwip_mem_max`, `lwip_mem_size`, `pbuf_pool_max`, `pbuf_pool_size`, `malloc_failures`, `rx_dropped`, `tx_dropped` and `board_rev_mv`). |
 | `reset`, `last_crash` | string | Why the pod last reset, and the last crash report (`""` when none). The short form cuts `last_crash` to 48 characters. |
 | `analog` | boolean | `false` on the digital-only board (no DAC or ADC). `true` on digital v3r3 when the analog module was found at boot. |
@@ -1854,7 +1854,7 @@ adapter up and a lease held), so connecting to it over the cloud failed with
 | `api` | integer | Firmware 4.0.0+: the [client API level](#client-compatibility) this firmware speaks. |
 | `min_client_api` | integer | Firmware 4.0.0+: the lowest `client_api` this firmware takes; a command from a client below it gets `BP0030`. |
 | `fpga_image` | string | The running gateware image, `"loop"`, `"deep"`, `"emu"` or `"unknown"`. |
-| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+), `supply_3v3_1v8` (BenchPod v4: the 3.3 V and 1.8 V supplies on J1 pins 17 and 18 switched; firmware 4.0.7+). |
+| `hw` | array of string | The hardware facts the features table needs: `wifi` (a built-in Wi-Fi or a Wi-Fi bridge), `usb_cc`, `pod_current`, `adc_low_range`, `vref_out` (digital v4: pin 21 switched and measured, 5 V I/O; firmware 3.10.13+), `supply_3v3_1v8` (BenchPod v4: the 3.3 V and 1.8 V supplies on J1 pins 17 and 18 switched; firmware 4.0.7+), `power_cycle` (the pod can switch its own power off and on, so `reboot` accepts `mode` `hard`; no board has it yet). |
 
 #### Removed in firmware 4.0.0
 
@@ -4247,7 +4247,7 @@ Errors: `"image must be 0 (loop), 1 (deep) or 2 (emulation)"`, `BP0017` (the emu
 gateware v54), `"image 2 is not installed on the pod (W25Q slot gw2 is empty): install the
 gateware blobs"`, `BP0057` (`image_switch_sensors_running`, args `sensors`: `"env, imu"`), `"image
 switch: reflash failed (CDONE never rose)"`, `"image switch: iCE40->PSRAM write inoperable after
-retries (run psram_recover: the pod restarts and reloads the iCE40)"`, `"image switch failed"` and
+retries (reboot the pod: it restarts and reloads the iCE40)"`, `"image switch failed"` and
 `BP0047` (`pod_busy`).
 
 ### `psram_ping` — check the iCE40 to PSRAM write path
@@ -4261,13 +4261,33 @@ back. A failure points at the iCE40 to PSRAM write path, not at the analog ADC.
 
 `count` is 4..128 (default 16); larger values are capped at 128. Reply: `{"pass":true,"count":16,"first_bad":-1}`.
 
-<a id="psram_recover--reboot-to-recover-the-psram"></a>
-### `psram_recover` — reboot to recover the PSRAM
+<a id="reboot--restart-the-pod"></a>
+### `reboot` — restart the pod
 
-When `status.psram_ok` is `false`, this acks with `{"recover":"rebooting"}` and reboots the pod
-about 0.4 s later; the boot self-test reloads the iCE40 from its config flash and brings the
-datapath back without a power cycle. The config flash is rewritten only when the image in it no
-longer matches a gateware slot, so reboots do not wear it.
+```json
+{"cmd":"reboot"}
+{"cmd":"reboot","mode":"soft"}
+{"cmd":"reboot","mode":"hard"}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `mode` | string | Optional. `"soft"` (default): the processor restarts. `"hard"`: the pod switches its own power off and on. Any other value is refused with `"mode must be soft or hard"`. |
+
+**soft.** Replies `{"reboot":"soft"}` at once, then about 0.4 s later stops the DAC and the control
+loop, switches the DUT supplies off and restarts. The connection drops after the reply: that is
+success. Reconnect and read `status` again. The boot self-test reloads the iCE40 from its config
+flash and brings the PSRAM datapath back without a power cycle (the config flash is rewritten only
+when the image in it no longer matches a gateware slot, so reboots do not wear it). Over the cloud
+the reply may not arrive before the reboot: treat "no reply, the pod reconnects" as success and
+check `status.psram_ok` again. `reboot` replaces `psram_recover`, which firmware before this
+release has instead.
+
+**hard.** Needs a pod that lists `power_cycle` in `status` `hw`. Every pod refuses it today with
+`BP0093` (`reboot_hard_not_on_pod`) and keeps running; unplug the pod's power instead. A pod with
+the circuit will also drop the connection after its reply.
+
+The USB console command `reboot` is the soft reboot.
 
 **The iCE40 recovers by itself.** When the pod is idle the firmware pings the iCE40 every 30 s.
 One that answered since boot and stops answering (an ESD hit can hang or unconfigure it) is reloaded

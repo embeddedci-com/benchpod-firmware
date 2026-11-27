@@ -298,7 +298,7 @@ void cloud_send_json_line(int conn_id, const char *json) {
 
 void command_handler_poll(void) {
     uart_rearm_poll();   /* before the UART drain below touches the new fabric */
-    /* ---- deferred reboot for `psram_recover`: fire once the ack has had time to flush ---- */
+    /* ---- deferred reboot for `reboot`: fire once the ack has had time to flush ---- */
     device_poll();
 
     /* The pod's own lease: its deadline, and a lease.break posted by the cloud link. */

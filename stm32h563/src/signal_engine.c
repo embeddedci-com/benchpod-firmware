@@ -914,7 +914,7 @@ void signal_engine_psram_report_wedge(void) {
 /* Boot-time PSRAM selftest WITH automatic recovery: if the iCE40->PSRAM layer is faulted,
    reflash the iCE40 from its flash bitstream (the proven fix — a full CRESET reconfigure)
    and re-test.  A plain reboot therefore self-heals the iCE40 side, so the cloud
-   `psram_recover` command (which just reboots) restores a wedged pod without a physical
+   `reboot` command (soft: it just restarts the processor) restores a wedged pod without a physical
    power-cycle.  STM32-side / pad-open faults aren't reflash-fixable, so those stay reported.
    An iCE40 that never configured (a new board's blank config flash) is the gateware update's
    job, below: it also runs when the gw0 blob arrives after boot. */
@@ -1652,7 +1652,7 @@ static void capture_regions_dirty(uint32_t adc_n, uint32_t la_n) {
  * stamped its no-write sentinel at the packed base and read back from the packed base, while the
  * iCE40 dutifully wrote at 0x400000 — the sentinel survived, and the sentinel check reports
  * exactly one thing: "iCE40 did NOT write the capture to PSRAM".  That surfaced as
- * `psram: "inoperable (iCE40 write)"` and an image swap refusing with "run psram_recover".
+ * `psram: "inoperable (iCE40 write)"` and an image swap refusing with "reboot the pod".
  *
  * So the recurring "PSRAM wedge after an image swap" was NEVER a wedge: the bus, the writer and
  * the chip were all healthy the whole time (STM32-side pattern + full 8 MB address tests pass

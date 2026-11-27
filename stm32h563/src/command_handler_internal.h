@@ -200,9 +200,9 @@ void handle_module_power(int conn_id, const char *json);
 void module_emit_state(bp_emit_t *e, bool id);
 void handle_nrst(int conn_id, const char *json);
 void handle_fpga_image(int conn_id, const char *json);
-void handle_psram_recover(int conn_id, const char *json);
+void handle_reboot(int conn_id, const char *json);
 void handle_psram_ping(int conn_id, const char *json);
-void device_poll(void);                       /* the deferred psram_recover reboot */
+void device_poll(void);                       /* the deferred `reboot` */
 
 /* Analog front end (command_handler_analog.c). */
 void handle_dac_mux(int conn_id, const char *json);

@@ -78,7 +78,7 @@ can expose pre-release customer firmware), (5) availability of the bench.
 | Actor | Plausible action | Impact |
 |---|---|---|
 | Careless colleague | Runs a script against the wrong IP; clears `dac_limits`; sets `la_voltage` 3.3 V on a 1.8 V DUT; powers a rail mid-test | Damaged DUT or output stage, broken CI run |
-| Careless colleague | `fpga_image`, `psram_recover`, `eth speed 10` | Bench unavailable until someone notices |
+| Careless colleague | `fpga_image`, `reboot`, `eth speed 10` | Bench unavailable until someone notices |
 | Compromised PC | `ota_*` with a malicious image (F1) | Persistent implant; key theft; pivot to cloud |
 | Compromised PC | `cloud_set` to own host (F2), `wifi_set` to a rogue AP | Pod impersonation, traffic capture |
 | Compromised PC | `spi_flash read`, `dap_start`, `uart_proxy_start` | DUT firmware exfiltration |
@@ -100,7 +100,7 @@ code or gateware). Every verb in `dispatch_line` (`command_handler.c:3766-3843`)
 |---|---|
 | T0 | `ping`, `status`, `cloud_status`, `wifi_status`, `la_pins`, `usb_cc`, `target_status`, `power_status`, `identity_public`, `identity_pop`, `spi_status`, `sensor_status`, `can_status`, `ota_status`, `blob_status`, `dac_loop_probe`; read forms of mixed verbs: `dac_limits` (no `path`/`enabled`), `calibrate` (no `source`/`clear`), `eth action=stats|refclk` |
 | T0 (observational, leaks DUT data) | `capture`, `capture_dual`, `capture_read`, `stream`, `la_capture`, `sensor_regs`, `sensor_la`, `can_read`, `psram_ping`, `test` |
-| T1 | `generate`, `measure`, `load`, `load_bin`, `replay`, `dac_stop`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read` (flips relays), `dac_control_loop`, `dac_loop_input`, `la_step`, `la_pull`, `gpio`, `la_voltage`, `nrst`, `target_power`, `power_profile`, `dap_start`, `uart_proxy_start`, `spi_start`, `spi_stop`, `spi_xfer`, `spi_stream`, `spi_flash` (DUT flash, all ops), `sensor_start`, `sensor_set`, `sensor_stop`, `can_start`, `can_write`, `can_term`, `can_respond`, `can_stop`, `speedtest`, `fpga_image` (selects one of the two installed images), `psram_recover` (reboot only) |
+| T1 | `generate`, `measure`, `load`, `load_bin`, `replay`, `dac_stop`, `dac_set`, `dac_mux`, `cal_switch`, `analog_path`, `dac_out`, `current_out`, `adc_read` (flips relays), `dac_control_loop`, `dac_loop_input`, `la_step`, `la_pull`, `gpio`, `la_voltage`, `nrst`, `target_power`, `power_profile`, `dap_start`, `uart_proxy_start`, `spi_start`, `spi_stop`, `spi_xfer`, `spi_stream`, `spi_flash` (DUT flash, all ops), `sensor_start`, `sensor_set`, `sensor_stop`, `can_start`, `can_write`, `can_term`, `can_respond`, `can_stop`, `speedtest`, `fpga_image` (selects one of the two installed images), `reboot` (reboot only) |
 | T2 | `cloud_set`, `cloud_clear`, `wifi_set`, `wifi_clear`, `eth action=stop|start|restart|speed|loopback`, `dac_limits` set/clear, `calibrate` run/clear (persists, changes everyone's readings) |
 | T3 | `ota_begin`, `ota_data`, `ota_end`, `ota_commit`, `ota_abort`, `ota_selftest` (erases a scratch flash sector) |
 

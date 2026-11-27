@@ -28,6 +28,7 @@ board_caps_t board_caps_for_rev(int rev)
         c.supply_3v3_1v8      = true;
         c.cn1_dac_swap   = true;
         c.qspi_cs_ncs_pins = true;
+        /* c.power_cycle stays false: the PWR_CYCLE circuit (PC10) is not built or tested yet. */
     }
     return c;
 }

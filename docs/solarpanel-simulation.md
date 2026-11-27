@@ -242,7 +242,7 @@ while the output *fell*. A new part fixed it immediately.
 
 Recovery note for fault 3: **only an `fpga_image` reflash recovers a lost iCE40
 configuration.** It drives CRESET and reconfigures from flash. A software reboot — including
-`psram_recover` — leaves the corrupt configuration in place, so it cannot fix this.
+`reboot` — leaves the corrupt configuration in place, so it cannot fix this.
 
 ---
 

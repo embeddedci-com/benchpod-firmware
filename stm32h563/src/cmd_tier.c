@@ -195,7 +195,7 @@ static const cmd_desc_t k_tiers[] = {
     { { "can_stop", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_can_stop), NULL },
     { { "speedtest", CMD_TIER_T1 }, CMD_F_NO_HW | CMD_F_STREAM, CMD_FN(handle_speedtest), NULL },
     { { "fpga_image", CMD_TIER_T1 }, 0, CMD_FN(handle_fpga_image), NULL },
-    { { "psram_recover", CMD_TIER_T1 }, 0, CMD_FN(handle_psram_recover), NULL },
+    { { "reboot", CMD_TIER_T1 }, 0, CMD_FN(handle_reboot), NULL },
     { { "usb_reattach", CMD_TIER_T1 }, CMD_F_NO_HW, CMD_FN(handle_usb_reattach), NULL },
     /* T2: persisted config */
     { { "cloud_set", CMD_TIER_T2 }, CMD_F_NO_HW, CMD_FN(handle_cloud_set), NULL },

@@ -5,7 +5,7 @@
  *   power_status, target_power, target_status
  *   identity_public, identity_pop, identity_wipe (USB console only)
  *   usb_cc, nrst
- *   fpga_image, psram_recover, psram_ping
+ *   fpga_image, reboot, psram_ping
  *
  * Runs on the hw worker task, like the rest of command_handler.
  */
@@ -19,8 +19,8 @@
 #include "bp_json.h"     /* shared flat-JSON parser + bounds-tracked emitter */
 #include "signal_engine.h"
 #include "la_io.h"
-#include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the psram_recover command, HAL_GetTick */
-#include "boot_guard.h"       /* boot_guard_planned_reset before the psram_recover reboot */
+#include "stm32h5xx_hal.h"   /* NVIC_SystemReset for the reboot command, HAL_GetTick */
+#include "boot_guard.h"       /* boot_guard_planned_reset before the reboot */
 #include "wifi_manager.h"
 #include "target_power.h"
 #include "board_caps.h"
@@ -60,15 +60,23 @@
 #define json_get_value      bp_json_get
 #define json_flag           bp_json_flag
 
-/* Deferred reboot for the `psram_recover` command: send the ack first, then reset a beat
-   later (command_handler_poll) so the reply flushes to the client before the pod reboots. */
-static bool             s_recover_pending;
-static absolute_time_t  s_recover_at;
+/* Deferred reboot for the `reboot` command: send the reply first, then reset a beat later
+   (command_handler_poll) so it flushes to the client before the pod restarts. */
+static bool             s_reboot_pending;
+static absolute_time_t  s_reboot_at;
 
-/* command_handler_poll's device pass: the deferred `psram_recover` reboot. */
+/* command_handler_poll's device pass: the deferred `reboot`.  Quiet the outputs first (the
+   reset would drop them anyway, but a DAC or DUT supply never keeps running into the restart),
+   then reset. */
 void device_poll(void) {
-    if (s_recover_pending && time_reached(s_recover_at)) {
-        LOG_W("[recover] rebooting to clear the PSRAM datapath (boot auto-reflashes the iCE40)\n");
+    if (s_reboot_pending && time_reached(s_reboot_at)) {
+        LOG_W("[reboot] restarting the pod (boot reloads the iCE40)\n");
+        dac_stop();
+        sm_on_dac_stop();
+        (void)target_power_enable(1, false);
+        (void)target_power_enable(2, false);
+        (void)dut_supply_set(DUT_SUPPLY_3V3, false);   /* no-ops without the J1 supplies */
+        (void)dut_supply_set(DUT_SUPPLY_1V8, false);
         boot_guard_planned_reset(true);
         NVIC_SystemReset();   /* does not return */
     }
@@ -463,7 +471,7 @@ bool fpga_image_swap_ex(int conn_id, int img, bool force, bool *skipped_out,
         return false;
     }
     if (rc == -3) { send_error(conn_id, "image switch: reflash failed (CDONE never rose)"); return false; }
-    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (run psram_recover: the pod restarts and reloads the iCE40)"); return false; }
+    if (rc == -5) { signal_engine_psram_report_wedge(); send_error(conn_id, "image switch: iCE40->PSRAM write inoperable after retries (reboot the pod: it restarts and reloads the iCE40)"); return false; }
     if (rc != 0)  { send_error(conn_id, "image switch failed"); return false; }
     if (skipped) {   /* nothing changed: no caps resend, no DAC re-park */
         if (ver_out) *ver_out = ver;
@@ -498,18 +506,32 @@ bool require_bus_masters(int conn_id, const char *feature) {
     return fpga_image_swap(conn_id, 0, NULL, NULL);
 }
 
-/* {"cmd":"psram_recover"} — one-click remote recovery for an inoperable PSRAM datapath: ack,
-   then reboot.  The reboot resets every firmware-side mirror and peripheral, and the boot
-   self-test auto-reflashes the iCE40 side (psram_boot_selftest_with_recovery), so the pod
-   returns healthy WITHOUT a physical power-cycle.  (The July "only a reboot clears it" case was
-   a stale firmware mirror of the capture base, since fixed: see fpga_warmboot.)  The client will not receive a
-   command.response (the pod reboots first) — treat "no reply, device reconnects" as success
-   and re-poll status.psram_ok. */
-void handle_psram_recover(int conn_id, const char *json) {
-    (void)json;
-    send_ok_str(conn_id, "{\"recover\":\"rebooting\"}");
-    s_recover_at = make_timeout_time_ms(400);   /* let the ack flush, then reset in the poll loop */
-    s_recover_pending = true;
+/* {"cmd":"reboot"[,"mode":"soft"|"hard"]} — restart the pod.  The reboot resets every
+   firmware-side mirror and peripheral, and the boot self-test auto-reflashes the iCE40 side
+   (psram_boot_selftest_with_recovery), so the pod returns healthy without a physical
+   power-cycle: it is also the remote recovery for an inoperable PSRAM datapath.
+   "soft" (default): reply {"reboot":"soft"}, then stop the DAC and the DUT supplies and restart
+   the processor.  The client gets the reply and then the connection drops: that is success.
+   "hard": switch the pod's own power off and on.  Only a pod with board_caps()->power_cycle can
+   (none today): every other pod refuses with BP0093 and keeps running.
+   Any other mode is refused. */
+void handle_reboot(int conn_id, const char *json) {
+    char mode[12] = {0};
+    if (!json_get_value(json, "mode", mode, sizeof(mode))) strcpy(mode, "soft");
+    bool hard = strcmp(mode, "hard") == 0;
+    if (!hard && strcmp(mode, "soft") != 0) {
+        send_error(conn_id, "mode must be soft or hard");
+        return;
+    }
+    if (hard && !board_caps()->power_cycle) {
+        bp_err_reboot_hard_not_on_pod(conn_id);
+        return;
+    }
+    /* A hard reboot would be driven from here (PC10 PWR_CYCLE) once a board has it: a pod with
+       power_cycle set has no other way to reach this point, so it restarts like a soft one. */
+    send_ok_str(conn_id, "{\"reboot\":\"soft\"}");
+    s_reboot_at = make_timeout_time_ms(400);   /* let the reply flush, then reset in the poll loop */
+    s_reboot_pending = true;
 }
 
 /* {"cmd":"psram_ping"[,"count":N]} → {"pass":bool,"count":N,"first_bad":i}
