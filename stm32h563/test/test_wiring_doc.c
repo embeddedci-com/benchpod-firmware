@@ -150,7 +150,28 @@ static void test_la_mv(void) {
     CHECK(wiring_doc_json_la_mv((const uint8_t *)cut, 10) == 0);
 }
 
+static const char *rail_of(const char *s) {
+    static char out[16];
+    return wiring_doc_json_rail((const uint8_t *)s, strlen(s), out, sizeof(out)) ? out : NULL;
+}
+
+static void test_rail(void) {
+    CHECK(!strcmp(rail_of("{\"efuse\":1}"), "1"));
+    CHECK(!strcmp(rail_of("{\"la_mv\": 3300, \"efuse\" : 2 }"), "2"));
+    CHECK(!strcmp(rail_of("{\"efuse\":\"j1_3v3\"}"), "j1_3v3"));
+    CHECK(!strcmp(rail_of("{\"efuse\":\"j1_1v8\",\"x\":1}"), "j1_1v8"));
+    CHECK(rail_of("{\"efuse\":null}") == NULL);
+    CHECK(rail_of("{\"la_mv\":3300}") == NULL);
+    CHECK(rail_of("{\"pins\":{\"efuse\":2}}") == NULL);     /* only the top level */
+    CHECK(rail_of("{\"efuse\":\"a\\\"b\"}") == NULL);       /* an escape: not a rail */
+    CHECK(rail_of("{\"efuse\":{\"a\":1}}") == NULL);
+    CHECK(wiring_rail_known("1") && wiring_rail_known("2") && wiring_rail_known("j1_3v3") && wiring_rail_known("j1_1v8"));
+    CHECK(!wiring_rail_known("3") && !wiring_rail_known("j1_5v") && !wiring_rail_known("internal") && !wiring_rail_known(NULL));
+    CHECK(wiring_rail_is_j1("j1_3v3") && wiring_rail_is_j1("j1_1v8") && !wiring_rail_is_j1("1") && !wiring_rail_is_j1(NULL));
+}
+
 int main(void) {
+    test_rail();
     test_la_mv();
     test_names();
     test_json_object();

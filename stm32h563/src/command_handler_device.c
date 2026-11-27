@@ -44,6 +44,7 @@
 #include "cloud_caps.h"     /* the capabilities, shared with the cloud announcement */
 #include "module_link.h"   /* digital v3r3: the module object */
 #include "la_pins.h"
+#include "dut_rails.h"
 #include "psram.h"       /* psram_selftest_str */
 
 #include <stdio.h>
@@ -80,8 +81,11 @@ void handle_target_power(int conn_id, const char *json) {
     char efuse_s[8]  = {0};
     char profile[WIRING_NAME_MAX + 1] = {0};
     char delay_s[12] = {0};
+    char rail_s[16] = {0};
 
-    if (!json_get_value(json, "efuse", efuse_s, sizeof(efuse_s))) {
+    /* "rail":"j1_3v3"|"j1_1v8" (digital v4): J1 pin 17 or 18 instead of an eFuse. */
+    bool has_rail = json_get_value(json, "rail", rail_s, sizeof(rail_s));
+    if (!has_rail && !json_get_value(json, "efuse", efuse_s, sizeof(efuse_s))) {
         send_error(conn_id, "missing efuse");
         return;
     }
@@ -92,8 +96,27 @@ void handle_target_power(int conn_id, const char *json) {
         return;
     }
 
-    int      efuse    = atoi(efuse_s);
     bool     on       = strcmp(en_s, "true") == 0;
+    if (has_rail) {
+        int r = dut_rail_from_name(rail_s);
+        if (r < 0) {
+            send_error(conn_id, "rail must be j1_3v3 or j1_1v8");
+            return;
+        }
+        uint32_t rd = 0;
+        if (json_get_value(json, "delay_ms", delay_s, sizeof(delay_s)))
+            rd = (uint32_t)strtoul(delay_s, NULL, 0);
+        if (dut_rails_schedule((dut_rail_t)r, on, rd) != 0) {
+            send_error(conn_id, "this board has no switchable J1 supplies (digital v4 only)");
+            return;
+        }
+        char rp[72];
+        snprintf(rp, sizeof(rp), "{\"rail\":\"%s\",\"enabled\":%s,\"delay_ms\":%u}", dut_rail_name((dut_rail_t)r),
+                 on ? "true" : "false", (unsigned)rd);
+        send_ok_str(conn_id, rp);
+        return;
+    }
+    int      efuse    = atoi(efuse_s);
     int pr = bp_json_get_fit(json, "profile", profile, sizeof(profile));
     if (pr != 0 && (pr < 0 || !wiring_name_ok(profile))) {
         bp_err_wiring_bad_name(conn_id, profile);
@@ -170,15 +193,20 @@ void handle_target_status(int conn_id, const char *json) {
     char p1[WIRING_NAME_MAX + 3] = "null", p2[WIRING_NAME_MAX + 3] = "null";
     if (e1.enabled && s_rail_profile[0][0]) snprintf(p1, sizeof(p1), "\"%s\"", s_rail_profile[0]);
     if (e2.enabled && s_rail_profile[1][0]) snprintf(p2, sizeof(p2), "\"%s\"", s_rail_profile[1]);
-    char resp[432];
+    /* digital v4: "j1_rails" (J1 pins 17 and 18); left out on boards where both are always on. */
+    char j1[56] = "";
+    if (dut_rails_present())
+        snprintf(j1, sizeof(j1), ",\"j1_rails\":{\"v3v3\":%s,\"v1v8\":%s}",
+                 TF(dut_rails_get(DUT_RAIL_3V3)), TF(dut_rails_get(DUT_RAIL_1V8)));
+    char resp[512];
     snprintf(resp, sizeof(resp),
              "{\"status\":\"ok\",\"data\":{"
              "\"efuse1\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
              "\"efuse2\":{\"enabled\":%s,\"fault\":%s,\"valid\":%s,\"flt_pin\":%d,\"reverse_blocks\":%lu,\"profile\":%s},"
-             "\"status_supported\":%s}}\n",
+             "\"status_supported\":%s%s}}\n",
              TF(e1.enabled), TF(e1.fault), TF(e1.valid), e1.flt_pin, (unsigned long)e1.reverse_blocks, p1,
              TF(e2.enabled), TF(e2.fault), TF(e2.valid), e2.flt_pin, (unsigned long)e2.reverse_blocks, p2,
-             e1.status_supported ? "true" : "false");
+             e1.status_supported ? "true" : "false", j1);
     if (at_send_data(conn_id, (const uint8_t *)resp, strlen(resp)) != 0) {
         at_close_connection(conn_id);
     }

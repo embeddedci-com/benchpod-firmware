@@ -225,3 +225,60 @@ uint16_t wiring_doc_json_la_mv(const uint8_t *json, size_t len) {
     }
     return 0;
 }
+
+bool wiring_rail_known(const char *rail) {
+    return rail && (strcmp(rail, "1") == 0 || strcmp(rail, "2") == 0 || wiring_rail_is_j1(rail));
+}
+
+bool wiring_rail_is_j1(const char *rail) {
+    return rail && (strcmp(rail, "j1_3v3") == 0 || strcmp(rail, "j1_1v8") == 0);
+}
+
+bool wiring_doc_json_rail(const uint8_t *json, size_t len, char *out, size_t cap) {
+    static const char key[] = "efuse";
+    const size_t klen = sizeof(key) - 1u;
+    int depth = 0;
+    bool want_key = false;
+    for (size_t i = 0; i < len;) {
+        uint8_t c = json[i];
+        if (c == '"') {
+            size_t end = skip_str(json, len, i);
+            if (depth == 1 && want_key) {
+                want_key = false;
+                if (end - i == klen + 2u && memcmp(json + i + 1, key, klen) == 0) {
+                    size_t j = end;
+                    while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\n' || json[j] == '\r')) j++;
+                    if (j >= len || json[j] != ':') return false;
+                    j++;
+                    while (j < len && (json[j] == ' ' || json[j] == '\t' || json[j] == '\n' || json[j] == '\r')) j++;
+                    if (j >= len) return false;
+                    size_t n = 0;
+                    if (json[j] == '"') {
+                        size_t e2 = skip_str(json, len, j);
+                        if (e2 <= j + 1u || json[e2 - 1u] != '"') return false;
+                        for (size_t k = j + 1u; k + 1u < e2; k++) {
+                            if (json[k] == '\\' || n + 1u >= cap) return false;
+                            out[n++] = (char)json[k];
+                        }
+                    } else {
+                        while (j < len && ((json[j] >= '0' && json[j] <= '9') || json[j] == '.' || json[j] == '-' ||
+                                           json[j] == 'e' || json[j] == 'E' || json[j] == '+')) {
+                            if (n + 1u >= cap) return false;
+                            out[n++] = (char)json[j++];
+                        }
+                        if (n == 0) return false;   /* null, true, an object ... */
+                    }
+                    out[n] = 0;
+                    return true;
+                }
+            }
+            i = end;
+            continue;
+        }
+        if (c == '{' || c == '[') { depth++; want_key = (c == '{' && depth == 1); }
+        else if (c == '}' || c == ']') depth--;
+        else if (c == ',' && depth == 1) want_key = true;
+        i++;
+    }
+    return false;
+}

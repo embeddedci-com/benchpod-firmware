@@ -29,6 +29,7 @@
 #include "bp_errors.h"
 #include "bp_json.h"
 #include "command_handler_internal.h"
+#include "board_caps.h"
 #include "sensor_port.h"
 #include "wiring_store.h"
 
@@ -231,6 +232,14 @@ static void put_piece(int conn_id, const char *json, const char *name, long offs
         return;
     }
     if (!storage_free(conn_id)) { upload_drop(); return; }
+    /* The profile's rail: 1, 2, or a J1 supply on a board that has them. */
+    char rail[16];
+    if (wiring_doc_json_rail(s_upp->buf, s_upp->total, rail, sizeof(rail)) &&
+        (!wiring_rail_known(rail) || (wiring_rail_is_j1(rail) && !board_caps()->dut_rails))) {
+        upload_drop();
+        bp_err_wiring_bad_rail(conn_id, rail);
+        return;
+    }
     wiring_op_t op = { WIRING_OP_PUT, name, s_upp->buf, (uint16_t)s_upp->total };
     bool ok = apply(conn_id, &op, s_upp->total);
     upload_drop();
