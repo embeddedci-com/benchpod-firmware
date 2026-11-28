@@ -20,16 +20,23 @@ static void drive(dut_supply_t r, bool on)
 void dut_supply_init(void)
 {
     if (!board_caps()->supply_3v3_1v8) return;
-    __HAL_RCC_GPIOD_CLK_ENABLE();
+    DUT_EN_CLK_EN();
     /* Level first (the pull-downs hold the rails off until here), then the output mode. */
     drive(DUT_SUPPLY_3V3, true);
     drive(DUT_SUPPLY_1V8, true);
     GPIO_InitTypeDef gp = {0};
-    gp.Pin   = DUT_3V3_EN_PIN | DUT_1V8_EN_PIN;
     gp.Mode  = GPIO_MODE_OUTPUT_PP;
     gp.Pull  = GPIO_NOPULL;
     gp.Speed = GPIO_SPEED_FREQ_LOW;
-    HAL_GPIO_Init(GPIOD, &gp);
+    if (DUT_3V3_EN_PORT == DUT_1V8_EN_PORT) {
+        gp.Pin = DUT_3V3_EN_PIN | DUT_1V8_EN_PIN;
+        HAL_GPIO_Init(DUT_3V3_EN_PORT, &gp);
+    } else {   /* two ports: DUT_EN_CLK_EN() must then enable both clocks */
+        gp.Pin = DUT_3V3_EN_PIN;
+        HAL_GPIO_Init(DUT_3V3_EN_PORT, &gp);
+        gp.Pin = DUT_1V8_EN_PIN;
+        HAL_GPIO_Init(DUT_1V8_EN_PORT, &gp);
+    }
     s_present = true;
     log_printf("[dut] J1 pin 17 (3.3 V) and pin 18 (1.8 V) on\n");
 }

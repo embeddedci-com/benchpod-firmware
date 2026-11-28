@@ -10,9 +10,9 @@ typedef struct { uint32_t Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
 #define GPIO_SPEED_FREQ_LOW   0u
 #define GPIO_PIN_3            (1u << 3)
 #define GPIO_PIN_4            (1u << 4)
-#define __HAL_RCC_GPIOD_CLK_ENABLE() ((void)0)
-extern GPIO_TypeDef shim_gpiod;
-#define GPIOD (&shim_gpiod)
+#define __HAL_RCC_GPIOE_CLK_ENABLE() ((void)0)
+extern GPIO_TypeDef shim_gpioe;
+#define GPIOE (&shim_gpioe)
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pin, GPIO_PinState s);
 uint32_t HAL_GetTick(void);
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init);

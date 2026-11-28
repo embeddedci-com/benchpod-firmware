@@ -90,7 +90,7 @@ typedef struct {
        development builds with USB_HOST=1): high while the host role is on USB-A. */
     bool usb_sel;
     /* J1 pin 17 (+3V3_DUT, U69 SY6280) and pin 18 (+1V8_DUT, U70 AP2112K-1.8) are switched:
-       PD3 DUT_3V3_EN and PD4 DUT_1V8_EN, each with a 100k pull-down (off until firmware drives
+       PE4 DUT_3V3_EN and PE3 DUT_1V8_EN, each with a 100k pull-down (off until firmware drives
        them).  False: both pins are always on.  dut_supply.h. */
     bool supply_3v3_1v8;
     /* The DAC clock is on the module flat cable's pin 7 and its data on pin 8 (dac_link.h); older

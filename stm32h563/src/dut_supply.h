@@ -11,7 +11,7 @@
  * Independent of the target-power eFuses and of resets: nothing else moves them.
  *
  * Does nothing (and reports "not present") unless board_caps()->supply_3v3_1v8: on every older board
- * PD3 and PD4 are never touched.  Hw worker and boot only.
+ * PE3 and PE4 (the quad bus chip-selects there) are never touched here.  Hw worker and boot only.
  * ==========================================================================*/
 
 typedef enum { DUT_SUPPLY_3V3 = 0, DUT_SUPPLY_1V8 = 1 } dut_supply_t;
