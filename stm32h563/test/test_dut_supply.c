@@ -1,10 +1,14 @@
 /* test_dut_supply.c — host test for dut_supply.c: gated on board_caps()->supply_3v3_1v8, both rails on
-   at boot (level before mode), switchable. */
+   at boot (level before mode), switchable.  Also the PE3/PE4 split with qspi_cs.c: on digital v4
+   (both revision straps agree) they are the DUT supply enables and the quad bus chip-selects are
+   on PB6/PC11; on every other revision (v3r3 and older, unknown, a misread) they stay the
+   chip-selects and the DUT supply code never touches a pin. */
 #include "dut_supply.h"
 #include "board_caps.h"
 #include "board_rev.h"
 #include "stm32h5xx_hal.h"
 #include "board_pins.h"
+#include "qspi_cs.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -12,7 +16,7 @@
 static int failures;
 #define CHECK(c) do { if(!(c)){printf("FAIL %s:%d  %s\n",__FILE__,__LINE__,#c);failures++;} } while(0)
 
-GPIO_TypeDef shim_gpioe;
+GPIO_TypeDef shim_gpiob, shim_gpioc, shim_gpioe;
 static GPIO_TypeDef *s_init_port;
 static uint32_t s_level;      /* output level bits */
 static int      s_init_at;    /* HAL_GPIO_Init call order: how many writes had happened */
@@ -36,19 +40,44 @@ void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init)
     s_init_pins = init->Pin;
 }
 
+static void reset_qspi_cs(void)
+{
+    qspi_cs = (qspi_cs_pins_t){ GPIOE, GPIO_PIN_3, GPIOE, GPIO_PIN_4 };   /* the power-on state */
+}
+
 int main(void)
 {
-    /* An older board: nothing touched, nothing present. */
-    board_caps_init(BOARD_REV_V3);
-    dut_supply_init();
-    CHECK(!dut_supply_present());
-    CHECK(s_writes == 0 && s_inits == 0);
-    CHECK(dut_supply_set(DUT_SUPPLY_3V3, false) == -1);
-    CHECK(dut_supply_schedule(DUT_SUPPLY_3V3, true, 0) == -1);   /* target_power answers BP0092 */
-    CHECK(!dut_supply_get(DUT_SUPPLY_3V3));
+    /* Every revision but v4 (BOARD_REV_UNKNOWN is also what a failed strap read latches; 1, 6
+       and 99 stand for a misread): PE3/PE4 stay the chip-selects, nothing touched, nothing present. */
+    static const int old[] = { BOARD_REV_UNKNOWN, BOARD_REV_V2, BOARD_REV_V3, BOARD_REV_V3R2, 1, 6, 99, -1 };
+    for (unsigned i = 0; i < sizeof old / sizeof old[0]; i++) {
+        reset_qspi_cs();
+        board_caps_init(old[i]);
+        qspi_cs_init();
+        CHECK(qspi_cs.flash_port == GPIOE && qspi_cs.flash_pin == GPIO_PIN_3);
+        CHECK(qspi_cs.psram_port == GPIOE && qspi_cs.psram_pin == GPIO_PIN_4);
+        dut_supply_init();
+        CHECK(!dut_supply_present());
+        CHECK(s_writes == 0 && s_inits == 0);
+        CHECK(dut_supply_set(DUT_SUPPLY_3V3, false) == -1 && dut_supply_set(DUT_SUPPLY_1V8, false) == -1);
+        CHECK(dut_supply_schedule(DUT_SUPPLY_3V3, true, 0) == -1);   /* target_power answers BP0092 */
+        dut_supply_poll();
+        CHECK(s_writes == 0 && s_inits == 0);
+        CHECK(!dut_supply_get(DUT_SUPPLY_3V3) && !dut_supply_get(DUT_SUPPLY_1V8));
+    }
+
+    /* v4: the chip-selects leave PE3/PE4 (before dut_supply_init, as in main.c), so the DUT
+       enables there share no pin with them. */
+    reset_qspi_cs();
+    board_caps_init(BOARD_REV_V4);
+    qspi_cs_init();
+    CHECK(qspi_cs.flash_port == GPIOB && qspi_cs.flash_pin == GPIO_PIN_6);
+    CHECK(qspi_cs.psram_port == GPIOC && qspi_cs.psram_pin == GPIO_PIN_11);
+    CHECK(DUT_3V3_EN_PORT == GPIOE && DUT_1V8_EN_PORT == GPIOE);
+    CHECK(DUT_3V3_EN_PIN != DUT_1V8_EN_PIN);
+    CHECK(qspi_cs.flash_port != GPIOE && qspi_cs.psram_port != GPIOE);
 
     /* v4: both on, levels written before the pins become outputs. */
-    board_caps_init(BOARD_REV_V4);
     dut_supply_init();
     CHECK(dut_supply_present());
     CHECK(s_inits == 1 && s_init_at == 2);

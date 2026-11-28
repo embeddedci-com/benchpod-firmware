@@ -277,7 +277,8 @@
  *                     [MCU pin 2]
  *   Up to digital v3r3 PE3/PE4 are the quad bus chip-selects; digital v4 moves those to PB6/PC11
  *   (qspi_cs.h), which frees PE3/PE4 for these enables.  On every older board pins 17 and 18 are
- *   always on and dut_supply.c never touches PE3/PE4.
+ *   always on and dut_supply.c never touches PE3/PE4.  v4 means both revision straps agree
+ *   (board_rev.c); any doubt runs as v3, which keeps PE3/PE4 as the chip-selects.
  * ------------------------------------------------------------------------- */
 #define DUT_3V3_EN_PORT              GPIOE
 #define DUT_3V3_EN_PIN               GPIO_PIN_4
