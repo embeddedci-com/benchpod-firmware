@@ -501,9 +501,9 @@ build/test_vref: $(VREF_SRCS)
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(VREF_SRCS) -lm -o $@
 
-build/test_dut_supply: test_dut_supply.c ../src/dut_supply.c ../src/board_caps.c $(wildcard shim_dut/*.h)
+build/test_dut_supply: test_dut_supply.c ../src/dut_supply.c ../src/qspi_cs.c ../src/board_caps.c $(wildcard shim_dut/*.h)
 	@mkdir -p build
-	$(CC) $(CFLAGS) -Ishim_dut test_dut_supply.c ../src/dut_supply.c ../src/board_caps.c -lm -o $@
+	$(CC) $(CFLAGS) -Ishim_dut test_dut_supply.c ../src/dut_supply.c ../src/qspi_cs.c ../src/board_caps.c -lm -o $@
 
 build/test_pull_exp: $(PULLEXP_SRCS)
 	@mkdir -p build

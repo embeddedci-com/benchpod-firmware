@@ -1,4 +1,4 @@
-/* Host stand-in for the STM32 HAL header: what dut_supply.c uses (test_dut_supply.c). */
+/* Host stand-in for the STM32 HAL header: what dut_supply.c and qspi_cs.c use (test_dut_supply.c). */
 #ifndef STM32H5XX_HAL_SHIM_DUT_H
 #define STM32H5XX_HAL_SHIM_DUT_H
 #include <stdint.h>
@@ -10,9 +10,15 @@ typedef struct { uint32_t Pin, Mode, Pull, Speed, Alternate; } GPIO_InitTypeDef;
 #define GPIO_SPEED_FREQ_LOW   0u
 #define GPIO_PIN_3            (1u << 3)
 #define GPIO_PIN_4            (1u << 4)
-#define __HAL_RCC_GPIOD_CLK_ENABLE() ((void)0)
-extern GPIO_TypeDef shim_gpiod;
-#define GPIOD (&shim_gpiod)
+#define GPIO_PIN_6            (1u << 6)
+#define GPIO_PIN_11           (1u << 11)
+#define __HAL_RCC_GPIOB_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_GPIOC_CLK_ENABLE() ((void)0)
+#define __HAL_RCC_GPIOE_CLK_ENABLE() ((void)0)
+extern GPIO_TypeDef shim_gpiob, shim_gpioc, shim_gpioe;
+#define GPIOB (&shim_gpiob)
+#define GPIOC (&shim_gpioc)
+#define GPIOE (&shim_gpioe)
 void HAL_GPIO_WritePin(GPIO_TypeDef *port, uint32_t pin, GPIO_PinState s);
 uint32_t HAL_GetTick(void);
 void HAL_GPIO_Init(GPIO_TypeDef *port, GPIO_InitTypeDef *init);

@@ -271,15 +271,20 @@
 
 /* ---------------------------------------------------------------------------
  * J1 pins 17 and 18, the switched DUT supplies (digital v4 only: board_caps()->supply_3v3_1v8)
- *   PD3 DUT_3V3_EN -> U69 SY6280AAC EN (pin 17 +3V3_DUT, ~1.45 A limit, reverse blocking),
- *                     100 k to GND: off until firmware drives it high.
- *   PD4 DUT_1V8_EN -> U70 AP2112K-1.8 EN (pin 18 +1V8_DUT, its own regulator), 100 k to GND.
- *   On every older board pins 17 and 18 are always on and PD3/PD4 are never touched.
+ *   PE4 DUT_3V3_EN -> U69 SY6280AAC EN (pin 17 +3V3_DUT, ~1.45 A limit, reverse blocking),
+ *                     100 k to GND: off until firmware drives it high.  [MCU pin 3]
+ *   PE3 DUT_1V8_EN -> U70 AP2112K-1.8 EN (pin 18 +1V8_DUT, its own regulator), 100 k to GND.
+ *                     [MCU pin 2]
+ *   Up to digital v3r3 PE3/PE4 are the quad bus chip-selects; digital v4 moves those to PB6/PC11
+ *   (qspi_cs.h), which frees PE3/PE4 for these enables.  On every older board pins 17 and 18 are
+ *   always on and dut_supply.c never touches PE3/PE4.  v4 means both revision straps agree
+ *   (board_rev.c); any doubt runs as v3, which keeps PE3/PE4 as the chip-selects.
  * ------------------------------------------------------------------------- */
-#define DUT_3V3_EN_PORT              GPIOD
-#define DUT_3V3_EN_PIN               GPIO_PIN_3
-#define DUT_1V8_EN_PORT              GPIOD
-#define DUT_1V8_EN_PIN               GPIO_PIN_4
+#define DUT_3V3_EN_PORT              GPIOE
+#define DUT_3V3_EN_PIN               GPIO_PIN_4
+#define DUT_1V8_EN_PORT              GPIOE
+#define DUT_1V8_EN_PIN               GPIO_PIN_3
+#define DUT_EN_CLK_EN()              __HAL_RCC_GPIOE_CLK_ENABLE()
 
 /* ---------------------------------------------------------------------------
  * USB-C CC monitoring (rev3+)   [/CC_SENSE1 PC0, /CC_SENSE2 PC2]
